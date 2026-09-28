@@ -1,4 +1,14 @@
-import sharp from 'sharp';
+let sharpModule: any = null;
+async function getSharp() {
+  if (sharpModule !== null) return sharpModule;
+  try {
+    const mod = await import('sharp');
+    sharpModule = mod.default || mod;
+  } catch {
+    sharpModule = false;
+  }
+  return sharpModule;
+}
 import fs from 'fs';
 import path from 'path';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -217,6 +227,10 @@ function compute2DDCT(matrix: Float32Array, N: number, outSize: number = 8): num
  * - Contrast, Border-to-Center luminance ratio, and Aspect Profile (8 dims)
  */
 export async function computeVisualEmbedding(imageBuffer: Buffer): Promise<number[]> {
+  const sharp = await getSharp();
+  if (!sharp) {
+    return [];
+  }
   const W = 64;
   const H = 64;
 

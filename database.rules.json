@@ -1,7 +1,103 @@
 {
   "rules": {
-    ".read": "auth != null",
-    ".write": "auth != null",
+    "products": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "categories": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "stores": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "vendors": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "vendor_profiles": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "vendor_themes": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "vendor_reviews": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "deleted_vendors": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "brands": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "banners": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "sliders": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "coupons": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "flashSales": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "notices": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "reviews": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "settings": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "config": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "ranks": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "commission_rules": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "bonus_rules": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "resellers": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "users": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin')",
+        ".write": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin')"
+      }
+    },
+    "orders": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "payments": {
+      ".read": true,
+      ".write": true
+    },
     "reseller_wallet": {
       "$resellerId": {
         ".read": "auth != null && (auth.uid === $resellerId || root.child('users/' + auth.uid + '/role').val() === 'admin')",
@@ -14,7 +110,15 @@
         ".write": "auth != null && root.child('users/' + auth.uid + '/role').val() === 'admin'"
       }
     },
+    "wallets": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin')",
+        ".write": "auth != null && root.child('users/' + auth.uid + '/role').val() === 'admin'"
+      }
+    },
     "reseller_orders": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["resellerId", "vendorId", "orderId", "profitStatus", "orderStatus", "createdAt"]
     },
     "reseller_profit_locks": {

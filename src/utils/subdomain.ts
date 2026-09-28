@@ -261,11 +261,16 @@ export function extractVendorSubdomain(
     return { type: 'main', slugOrDomain: null };
   }
 
-  // 6. Preview / dev hosting environments (without subdomain parameters)
+  // 6. Preview / dev / platform hosting environments (without subdomain parameters)
   const isDevHost = 
     host === 'localhost' ||
     host === '127.0.0.1' ||
     host === '0.0.0.0' ||
+    host.includes('vercel.app') ||
+    host.includes('vercel.com') ||
+    host.includes('now.sh') ||
+    host.includes('web.app') ||
+    host.includes('firebaseapp.com') ||
     host.includes('run.app') ||
     host.includes('pages.dev') ||
     host.includes('workers.dev') ||

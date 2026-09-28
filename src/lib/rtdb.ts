@@ -73,14 +73,29 @@ async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<F
     clearTimeout(timer);
     if (res.ok) {
       const data = await res.json();
-      if (data && typeof data === 'object' && 'error' in data) {
-        return { ok: false, data: null };
+      if (!data || typeof data !== 'object' || !('error' in data)) {
+        return { ok: true, data: (data !== null && data !== undefined) ? (data as T) : null };
       }
-      return { ok: true, data: (data !== null && data !== undefined) ? (data as T) : null };
     }
   } catch (_) {
     // Network abort or offline
   }
+
+  // Same-origin fallback proxy (guarantees data delivery on custom domains like rjworldbd.com)
+  if (typeof window !== 'undefined') {
+    try {
+      const fallbackRes = await fetch(`/api/${cleanPath}`, {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (fallbackRes.ok) {
+        const fData = await fallbackRes.json();
+        if (fData && typeof fData === 'object' && !('error' in fData)) {
+          return { ok: true, data: (fData !== null && fData !== undefined) ? (fData as T) : null };
+        }
+      }
+    } catch (_) {}
+  }
+
   return { ok: false, data: null };
 }
 

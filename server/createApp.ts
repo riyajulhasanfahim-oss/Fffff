@@ -211,6 +211,90 @@ app.use((req, res, next) => {
     res.status(200).json({ status: 'ok', timestamp: Date.now() });
   });
 
+  // Helper to fetch RTDB node directly
+  const fetchRtdbNode = async (node: string) => {
+    try {
+      const res = await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/${node}.json`);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn(`[RTDB node ${node} fetch warning]:`, e);
+    }
+    return null;
+  };
+
+  // Public Marketplace Data API Endpoints (ensures 100% data delivery on custom domains)
+  app.get('/api/products', async (req, res) => {
+    const data = await fetchRtdbNode('products');
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(data || {});
+  });
+
+  app.get(['/api/stores', '/api/vendors'], async (req, res) => {
+    const [stores, vendors] = await Promise.all([
+      fetchRtdbNode('stores'),
+      fetchRtdbNode('vendors')
+    ]);
+    const merged = { ...(stores || {}), ...(vendors || {}) };
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(merged);
+  });
+
+  app.get('/api/vendor_profiles', async (req, res) => {
+    const data = await fetchRtdbNode('vendor_profiles');
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(data || {});
+  });
+
+  app.get('/api/categories', async (req, res) => {
+    const data = await fetchRtdbNode('categories');
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
+    res.json(data || {});
+  });
+
+  app.get('/api/banners', async (req, res) => {
+    const data = await fetchRtdbNode('banners');
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
+    res.json(data || {});
+  });
+
+  app.get('/api/sliders', async (req, res) => {
+    const data = await fetchRtdbNode('sliders');
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
+    res.json(data || {});
+  });
+
+  app.get('/api/brands', async (req, res) => {
+    const data = await fetchRtdbNode('brands');
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
+    res.json(data || {});
+  });
+
+  app.get('/api/coupons', async (req, res) => {
+    const data = await fetchRtdbNode('coupons');
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
+    res.json(data || {});
+  });
+
+  app.get('/api/flashSales', async (req, res) => {
+    const data = await fetchRtdbNode('flashSales');
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(data || {});
+  });
+
+  app.get('/api/notices', async (req, res) => {
+    const data = await fetchRtdbNode('notices');
+    res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');
+    res.json(data || {});
+  });
+
+  app.get('/api/settings', async (req, res) => {
+    const data = await fetchRtdbNode('settings');
+    res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');
+    res.json(data || {});
+  });
+
   // AI Live Support Assistant Route
   // Only replies to live chat ('customer', 'vendor', 'reseller'); NEVER replies to 'physical' support
   app.post('/api/support/ai-reply', async (req, res) => {
