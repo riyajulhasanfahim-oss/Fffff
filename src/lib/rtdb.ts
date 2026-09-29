@@ -95,13 +95,14 @@ interface FetchResult<T> {
  */
 async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<FetchResult<T>> {
   try {
+    const token = await getAuthToken();
+    const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}.json`, {
+    const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}.json${authQuery}`, {
       signal: controller.signal,
       headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
+        'Accept': 'application/json'
       }
     });
     clearTimeout(timer);
@@ -118,9 +119,13 @@ async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<F
   // Same-origin fallback proxy (guarantees data delivery on custom domains like rjworldbd.com)
   if (typeof window !== 'undefined') {
     try {
+      const proxyController = new AbortController();
+      const proxyTimer = setTimeout(() => proxyController.abort(), Math.min(timeoutMs, 2500));
       const fallbackRes = await fetch(`/api/${cleanPath}`, {
+        signal: proxyController.signal,
         headers: { 'Accept': 'application/json' }
       });
+      clearTimeout(proxyTimer);
       if (fallbackRes.ok) {
         const fData = await fallbackRes.json();
         if (fData && typeof fData === 'object' && !('error' in fData)) {

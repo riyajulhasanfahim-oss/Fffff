@@ -195,7 +195,10 @@ function ensureGlobalRTDBListener(): void {
     // Wholesome product merge: RTDB live snapshot + Server-persisted products + Browser local products
     let serverProds: Record<string, any> = {};
     try {
-      const res = await fetch('/api/products');
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 2000);
+      const res = await fetch('/api/products', { signal: c.signal });
+      clearTimeout(t);
       if (res.ok) serverProds = await res.json();
     } catch (_) {}
 
@@ -285,10 +288,18 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
 
   try {
     const [rawProducts, rawStores, rawVendors, serverProds] = await Promise.all([
-      rtdbGet<Record<string, any>>('products', 6000),
-      rtdbGet<Record<string, any>>('stores', 6000),
-      rtdbGet<Record<string, any>>('vendors', 6000),
-      fetch('/api/products').then(r => r.json()).catch(() => null)
+      rtdbGet<Record<string, any>>('products', 4000),
+      rtdbGet<Record<string, any>>('stores', 4000),
+      rtdbGet<Record<string, any>>('vendors', 2500).catch(() => null),
+      (async () => {
+        try {
+          const c = new AbortController();
+          const t = setTimeout(() => c.abort(), 2000);
+          const r = await fetch('/api/products', { signal: c.signal });
+          clearTimeout(t);
+          return r.ok ? await r.json() : null;
+        } catch { return null; }
+      })()
     ]);
 
     const safeStores = rawStores && typeof rawStores === 'object' && !('error' in rawStores) ? rawStores : {};
