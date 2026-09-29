@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbSubscribe, rtdbRemove, rtdbList } from '../../../lib/rtdb';
+import { rtdbSubscribe, rtdbRemove, rtdbList, rtdbGet } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Plus, 
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { StorageManager } from '../../../services/storage/StorageManager';
+import { notifyMarketplaceProductRemoved } from '../../../services/productService';
 import ShareModal from '../../../components/common/ShareModal';
 
 export default function ProductsList() {
@@ -36,40 +37,96 @@ export default function ProductsList() {
     }
     setLoading(true);
 
-    // Subscribe to products in RTDB
-    const unsubscribe = rtdbSubscribe<Record<string, any>>('products', (data) => {
-      if (!data) {
-        setProducts([]);
-        setLoading(false);
-        return;
-      }
-      const list: any[] = [];
-      for (const [key, val] of Object.entries(data)) {
-        if (val && typeof val === 'object') {
-          if (val.vendorId === user.uid || val.storeId === user.uid || val.userId === user.uid) {
-            list.push({ id: key, ...val });
+    const loadProducts = (data: Record<string, any> | null, appendOnly = false) => {
+      const currentMap = new Map<string, any>(appendOnly ? products.map(p => [p.id, p]) : []);
+
+      if (data && typeof data === 'object') {
+        for (const [key, val] of Object.entries(data)) {
+          if (val && typeof val === 'object') {
+            const vId = val.vendorId || val.storeId || val.userId || val?.vendor?.id || val?.vendor?.storeId;
+            if (vId === user.uid || !val.vendorId) {
+              const item = { id: key, ...val };
+              currentMap.set(key, item);
+            }
           }
         }
       }
+
+      // Also incorporate local backup storage
+      try {
+        const local = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+        for (const [key, val] of Object.entries(local) as any[]) {
+          if (val && typeof val === 'object') {
+            const vId = val.vendorId || val.storeId || val.userId;
+            if (vId === user.uid || !vId) {
+              if (!currentMap.has(key)) {
+                currentMap.set(key, { id: key, ...val });
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      const list = Array.from(currentMap.values());
       list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setProducts(list);
       setLoading(false);
+    };
+
+    // 1. Fetch from server API (which merges RTDB + local server products)
+    fetch('/api/products')
+      .then(r => r.json())
+      .then(res => {
+        if (res && typeof res === 'object') loadProducts(res);
+      })
+      .catch(() => {});
+
+    // 2. Fetch directly from vendor's own subtree in RTDB
+    rtdbGet<Record<string, any>>(`vendors/${user.uid}/products`, 2500).then(vProds => {
+      if (vProds && typeof vProds === 'object') loadProducts(vProds, true);
+    }).catch(() => {});
+
+    // 3. Real-time subscription to RTDB products
+    const unsubscribe = rtdbSubscribe<Record<string, any>>('products', (data) => {
+      loadProducts(data, true);
     });
 
     return () => unsubscribe();
   }, [user]);
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this product?')) {
+    if (window.confirm('আপনি কি নিশ্চিত যে আপনি এই পণ্যটি মুছে ফেলতে চান?')) {
       try {
-        // Clean up stored Google Drive images asynchronously
+        // 1. Clean up stored images asynchronously
         StorageManager.deleteProductImages(id).catch(err => console.warn('Drive cleanup warning', err));
+        
+        // 2. Remove from RTDB products node
         await rtdbRemove(`products/${id}`);
+
+        // 3. Remove from vendor subtree in RTDB
+        if (user?.uid) {
+          rtdbRemove(`vendors/${user.uid}/products/${id}`).catch(() => {});
+        }
+
+        // 4. Remove from server persistent registry
+        fetch(`/api/products/${id}`, { method: 'DELETE' }).catch(() => {});
+
+        // 5. Remove from browser local backup
+        try {
+          const local = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+          if (local[id]) {
+            delete local[id];
+            localStorage.setItem('rj_local_products', JSON.stringify(local));
+          }
+        } catch (_) {}
+
+        // 6. Notify marketplace and update local component state
+        notifyMarketplaceProductRemoved(id);
         setProducts(prev => prev.filter(p => p.id !== id));
-        toast.success('Product and storage files deleted successfully');
+        toast.success('পণ্য সফলভাবে মুছে ফেলা হয়েছে');
       } catch (error) {
         console.error("Error deleting product from RTDB:", error);
-        toast.error('Failed to delete product');
+        toast.error('পণ্য মুছতে সমস্যা হয়েছে');
       }
     }
   };

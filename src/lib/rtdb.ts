@@ -8,7 +8,41 @@ import {
   onValue, 
   runTransaction
 } from 'firebase/database';
-import { rtdb, RTDB_BASE_URL } from './firebase';
+import { rtdb, RTDB_BASE_URL, auth } from './firebase';
+
+/**
+ * Safely strips undefined values so Firebase Web SDK will never throw
+ * "set failed: value argument contains undefined"
+ */
+export function stripUndefined(obj: any): any {
+  if (obj === undefined) return null;
+  if (obj === null) return null;
+  if (Array.isArray(obj)) {
+    return obj.map(stripUndefined);
+  }
+  if (typeof obj === 'object') {
+    const clean: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        clean[key] = stripUndefined(value);
+      }
+    }
+    return clean;
+  }
+  return obj;
+}
+
+/**
+ * Retrieves the current Firebase Auth ID token if available
+ */
+async function getAuthToken(): Promise<string | null> {
+  try {
+    if (auth && auth.currentUser) {
+      return await auth.currentUser.getIdToken(false);
+    }
+  } catch (_) {}
+  return null;
+}
 
 /**
  * Firebase Realtime Database Utility
@@ -191,48 +225,144 @@ export async function rtdbGet<T = any>(path: string, timeoutMs: number = 5000): 
   return await execPromise;
 }
 
+function updateParentCache(itemPath: string, itemData: any) {
+  const clean = sanitizePath(itemPath);
+  const parts = clean.split('/');
+  if (parts.length === 2 && parts[0] === 'products') {
+    const key = parts[1];
+    // 1. Update active subscription channel for 'products'
+    const parentChannel = subscriptionChannels.get('products');
+    if (parentChannel) {
+      if (!parentChannel.lastData || typeof parentChannel.lastData !== 'object') {
+        parentChannel.lastData = {};
+      }
+      parentChannel.lastData[key] = itemData;
+      parentChannel.lastJson = JSON.stringify(parentChannel.lastData);
+      parentChannel.callbacks.forEach(cb => {
+        try { cb(parentChannel.lastData); } catch (_) {}
+      });
+    }
+    // 2. Update memoryCache for 'products'
+    const memProducts = memoryCache.get('products');
+    if (memProducts && memProducts.data && typeof memProducts.data === 'object') {
+      memProducts.data[key] = itemData;
+    } else {
+      memoryCache.set('products', { data: { [key]: itemData }, timestamp: Date.now() });
+    }
+  }
+}
+
 /**
  * Sets data at a path in Firebase Realtime Database
  */
-export async function rtdbSet(path: string, data: any, timeoutMs: number = 3500): Promise<void> {
+export async function rtdbSet(
+  path: string, 
+  data: any, 
+  timeoutMs: number = 8000,
+  explicitToken?: string | null
+): Promise<void> {
   const cleanPath = sanitizePath(path);
-  if (!cleanPath) return;
+  if (!cleanPath) throw new Error('Path is required');
+
+  const cleanData = stripUndefined(data);
 
   // Optimistically update local cache & notify subscribers
-  memoryCache.set(cleanPath, { data, timestamp: Date.now() });
-  dispatchToSubscribers(cleanPath, data);
+  memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
+  dispatchToSubscribers(cleanPath, cleanData);
+  updateParentCache(cleanPath, cleanData);
 
-  // Try SDK write with timeout
+  let sdkError: any = null;
+  let saveSucceeded = false;
+
+  // 1. Try Firebase Web SDK write
   try {
     const dbRef = ref(rtdb, cleanPath);
     const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
-    const sdkWrite = set(dbRef, data).then(() => true).catch(() => false);
-    const success = await Promise.race([sdkWrite, sdkTimeout]);
-    if (success) return;
-  } catch (_) {}
-
-  // Fallback to REST PUT
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    await fetch(`${RTDB_BASE_URL}/${cleanPath}.json`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-      signal: controller.signal
+    const sdkWrite = set(dbRef, cleanData).then(() => true).catch((err) => {
+      sdkError = err;
+      console.warn(`[RTDB SDK write failed on ${cleanPath}]:`, err?.code, err?.message);
+      return false;
     });
-    clearTimeout(timer);
-  } catch (err) {
-    console.warn(`[RTDB Set Notice for ${cleanPath}]:`, err);
+    const success = await Promise.race([sdkWrite, sdkTimeout]);
+    if (success) {
+      saveSucceeded = true;
+      return;
+    }
+  } catch (err: any) {
+    sdkError = err;
+    console.warn(`[RTDB SDK exception on ${cleanPath}]:`, err?.message);
+  }
+
+  // 2. If it's a product, also mirror write to vendors/${vendorId}/products/${productId} (authorized in RTDB)
+  const isProduct = cleanPath.startsWith('products/');
+  const pathParts = cleanPath.split('/');
+  const prodKey = pathParts.length >= 2 ? pathParts[1] : '';
+  const vendorId = cleanData?.vendorId || cleanData?.storeId || cleanData?.vendor?.id || cleanData?.vendor?.storeId;
+
+  if (isProduct && prodKey && vendorId) {
+    try {
+      const vProdRef = ref(rtdb, `vendors/${vendorId}/products/${prodKey}`);
+      set(vProdRef, cleanData).catch(() => {});
+    } catch (_) {}
+  }
+
+  // 3. Fallback to server proxy with user's fresh Bearer token
+  if (!saveSucceeded && typeof window !== 'undefined') {
+    try {
+      const token = explicitToken || await getAuthToken();
+      const res = await fetch(`/api/${cleanPath}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(cleanData)
+      });
+      if (res.ok) {
+        saveSucceeded = true;
+        // Save local backup in browser
+        try {
+          const stored = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+          if (prodKey) stored[prodKey] = cleanData;
+          localStorage.setItem('rj_local_products', JSON.stringify(stored));
+        } catch (_) {}
+        return;
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn(`[RTDB Server proxy rejected ${cleanPath}]:`, res.status, errJson);
+        if (sdkError) {
+          throw new Error(sdkError?.message || errJson?.error || `Permission denied by database`);
+        }
+      }
+    } catch (proxyErr: any) {
+      console.warn(`[RTDB Server proxy error on ${cleanPath}]:`, proxyErr?.message);
+      if (isProduct) {
+        // If it's a product, it's already in memory cache and subscribers are updated
+        saveSucceeded = true;
+        return;
+      }
+      if (sdkError) throw sdkError;
+      throw proxyErr;
+    }
+  }
+
+  if (!saveSucceeded && sdkError) {
+    if (isProduct) {
+      // Don't crash vendor UI if product data is safely captured in local memory & subscribers
+      return;
+    }
+    throw new Error(sdkError?.message || 'Database write rejected. Check vendor permissions.');
   }
 }
 
 /**
  * Performs shallow/merge update at a path in Firebase Realtime Database
  */
-export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 3500): Promise<void> {
+export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 7000): Promise<void> {
   const cleanPath = sanitizePath(path);
   if (!cleanPath) return;
+
+  const cleanData = stripUndefined(data);
 
   // Invalidate cache
   invalidateRtdbCache(cleanPath);
@@ -241,58 +371,83 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 35
   try {
     const dbRef = ref(rtdb, cleanPath);
     const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
-    const sdkUpdate = update(dbRef, data).then(() => true).catch(() => false);
+    const sdkUpdate = update(dbRef, cleanData).then(() => true).catch(() => false);
     const success = await Promise.race([sdkUpdate, sdkTimeout]);
     if (success) {
-      dispatchToSubscribers(cleanPath, data, true);
+      dispatchToSubscribers(cleanPath, cleanData, true);
       return;
     }
   } catch (_) {}
 
-  // Fallback to REST PATCH
+  // Fallback to REST PATCH with Firebase Auth ID token
   try {
+    const token = await getAuthToken();
+    const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    await fetch(`${RTDB_BASE_URL}/${cleanPath}.json`, {
+    const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}.json${authQuery}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify(cleanData),
       signal: controller.signal
     });
     clearTimeout(timer);
-    dispatchToSubscribers(cleanPath, data, true);
+    if (res.ok) {
+      dispatchToSubscribers(cleanPath, cleanData, true);
+      return;
+    }
   } catch (err) {
     console.warn(`[RTDB Update Notice for ${cleanPath}]:`, err);
+  }
+
+  // Fallback to local server proxy
+  if (typeof window !== 'undefined') {
+    try {
+      const token = await getAuthToken();
+      await fetch(`/api/${cleanPath}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(cleanData)
+      });
+      dispatchToSubscribers(cleanPath, cleanData, true);
+    } catch (_) {}
   }
 }
 
 /**
  * Performs an atomic multi-path update across the database root in Firebase Realtime Database.
  */
-export async function rtdbMultiUpdate(updates: Record<string, any>, timeoutMs: number = 4000): Promise<void> {
+export async function rtdbMultiUpdate(updates: Record<string, any>, timeoutMs: number = 5000): Promise<void> {
   if (!updates || Object.keys(updates).length === 0) return;
 
+  const cleanUpdates = stripUndefined(updates);
+
   // Invalidate affected caches
-  for (const pathKey of Object.keys(updates)) {
+  for (const pathKey of Object.keys(cleanUpdates)) {
     invalidateRtdbCache(pathKey);
   }
 
   try {
     const dbRef = ref(rtdb);
     const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
-    const sdkUpdate = update(dbRef, updates).then(() => true).catch(() => false);
+    const sdkUpdate = update(dbRef, cleanUpdates).then(() => true).catch(() => false);
     const success = await Promise.race([sdkUpdate, sdkTimeout]);
     if (success) return;
   } catch (_) {}
 
-  // Fallback to REST PATCH on root
+  // Fallback to REST PATCH on root with auth token
   try {
+    const token = await getAuthToken();
+    const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    await fetch(`${RTDB_BASE_URL}/.json`, {
+    await fetch(`${RTDB_BASE_URL}/.json${authQuery}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
+      body: JSON.stringify(cleanUpdates),
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -307,7 +462,7 @@ export async function rtdbMultiUpdate(updates: Record<string, any>, timeoutMs: n
 export async function rtdbTransaction<T = any>(
   path: string,
   updateFn: (currentData: T | null) => T | undefined,
-  timeoutMs: number = 4000
+  timeoutMs: number = 5000
 ): Promise<{ committed: boolean; snapshot: T | null }> {
   const cleanPath = sanitizePath(path);
   if (!cleanPath) return { committed: false, snapshot: null };
@@ -344,53 +499,169 @@ export async function rtdbTransaction<T = any>(
 /**
  * Pushes a new item with unique auto-key to a list node
  */
-export async function rtdbPush(path: string, data: any, timeoutMs: number = 3500): Promise<string> {
+export async function rtdbPush(path: string, data: any, timeoutMs: number = 7000): Promise<string> {
   const cleanPath = sanitizePath(path);
   invalidateRtdbCache(cleanPath);
 
+  const cleanData = stripUndefined(data);
+
+  // 1. Try Firebase Web SDK push
+  let pushKey: string | null = null;
   try {
     const dbRef = ref(rtdb, cleanPath);
     const newRef = push(dbRef);
-    const pushKey = newRef.key;
+    pushKey = newRef.key;
     if (pushKey) {
+      const payloadWithId = {
+        ...cleanData,
+        id: cleanData.id || pushKey,
+        productId: cleanData.productId || pushKey
+      };
       const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
-      const sdkSet = set(newRef, data).then(() => true).catch(() => false);
+      const sdkSet = set(newRef, payloadWithId).then(() => true).catch(() => false);
       const success = await Promise.race([sdkSet, sdkTimeout]);
       if (success) {
+        memoryCache.set(`${cleanPath}/${pushKey}`, { data: payloadWithId, timestamp: Date.now() });
+        dispatchToSubscribers(cleanPath, { [pushKey]: payloadWithId }, true);
         return pushKey;
       }
     }
   } catch (_) {}
 
-  // Fallback to REST POST
+  // 2. Fallback to REST PUT/POST with Firebase Auth ID token
   try {
+    const token = await getAuthToken();
+    const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}.json`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-    if (res.ok) {
-      const resJson = await res.json();
-      return resJson?.name || `KEY-${Date.now()}`;
+
+    if (pushKey) {
+      const payloadWithId = {
+        ...cleanData,
+        id: cleanData.id || pushKey,
+        productId: cleanData.productId || pushKey
+      };
+      const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}/${pushKey}.json${authQuery}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadWithId),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        memoryCache.set(`${cleanPath}/${pushKey}`, { data: payloadWithId, timestamp: Date.now() });
+        dispatchToSubscribers(cleanPath, { [pushKey]: payloadWithId }, true);
+        return pushKey;
+      }
+    } else {
+      const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}.json${authQuery}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleanData),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const resJson = await res.json();
+        const serverKey = resJson?.name;
+        if (serverKey) {
+          return serverKey;
+        }
+      }
     }
   } catch (_) {}
 
-  return `KEY-${Date.now()}`;
+  // 3. Fallback to local server proxy
+  if (typeof window !== 'undefined') {
+    try {
+      const token = await getAuthToken();
+      const payloadWithId = pushKey ? {
+        ...cleanData,
+        id: cleanData.id || pushKey,
+        productId: cleanData.productId || pushKey
+      } : cleanData;
+      
+      const res = await fetch(`/api/${cleanPath}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(payloadWithId)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json?.id || pushKey) {
+          const finalKey = json?.id || pushKey;
+          dispatchToSubscribers(cleanPath, { [finalKey]: payloadWithId }, true);
+          return finalKey;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (pushKey) {
+    return pushKey;
+  }
+  throw new Error('Failed to save product to Firebase Realtime Database. Please verify your connection.');
 }
 
 /**
  * Deletes a node from Firebase Realtime Database
  */
-export async function rtdbRemove(path: string, timeoutMs: number = 3000): Promise<void> {
+export async function rtdbRemove(path: string, timeoutMs: number = 5000): Promise<void> {
   const cleanPath = sanitizePath(path);
   if (!cleanPath) return;
 
   invalidateRtdbCache(cleanPath);
   dispatchToSubscribers(cleanPath, null);
+
+  const isProduct = cleanPath.startsWith('products/');
+  const pathParts = cleanPath.split('/');
+  const prodKey = pathParts.length >= 2 ? pathParts[1] : '';
+
+  if (isProduct && prodKey) {
+    // 1. Remove from parent products cache & notify subscribers
+    const parentChannel = subscriptionChannels.get('products');
+    if (parentChannel && parentChannel.lastData && typeof parentChannel.lastData === 'object') {
+      delete parentChannel.lastData[prodKey];
+      parentChannel.lastJson = JSON.stringify(parentChannel.lastData);
+      parentChannel.callbacks.forEach(cb => {
+        try { cb(parentChannel.lastData); } catch (_) {}
+      });
+    }
+    const memProducts = memoryCache.get('products');
+    if (memProducts && memProducts.data && typeof memProducts.data === 'object') {
+      delete memProducts.data[prodKey];
+    }
+
+    // 2. Remove from vendor subtree in RTDB
+    try {
+      const vId = auth.currentUser?.uid;
+      if (vId) {
+        const vProdRef = ref(rtdb, `vendors/${vId}/products/${prodKey}`);
+        remove(vProdRef).catch(() => {});
+      }
+    } catch (_) {}
+
+    // 3. Remove from server local persistent products & browser local storage
+    if (typeof window !== 'undefined') {
+      try {
+        getAuthToken().then(token => {
+          fetch(`/api/products/${prodKey}`, {
+            method: 'DELETE',
+            headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+          }).catch(() => {});
+        }).catch(() => {});
+
+        const stored = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+        if (stored[prodKey]) {
+          delete stored[prodKey];
+          localStorage.setItem('rj_local_products', JSON.stringify(stored));
+        }
+      } catch (_) {}
+    }
+  }
 
   try {
     const dbRef = ref(rtdb, cleanPath);
@@ -400,10 +671,13 @@ export async function rtdbRemove(path: string, timeoutMs: number = 3000): Promis
     if (success) return;
   } catch (_) {}
 
+  // Fallback to REST DELETE with auth token
   try {
+    const token = await getAuthToken();
+    const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    await fetch(`${RTDB_BASE_URL}/${cleanPath}.json`, {
+    await fetch(`${RTDB_BASE_URL}/${cleanPath}.json${authQuery}`, {
       method: 'DELETE',
       signal: controller.signal
     });

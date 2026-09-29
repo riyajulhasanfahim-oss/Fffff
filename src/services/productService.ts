@@ -192,10 +192,30 @@ function ensureGlobalRTDBListener(): void {
       }
     } catch (_) {}
 
-    const parsed = parseRTDBProducts(rtdbData || {}, globalVendorsMap);
+    // Wholesome product merge: RTDB live snapshot + Server-persisted products + Browser local products
+    let serverProds: Record<string, any> = {};
+    try {
+      const res = await fetch('/api/products');
+      if (res.ok) serverProds = await res.json();
+    } catch (_) {}
+
+    let localProds: Record<string, any> = {};
+    try {
+      if (typeof window !== 'undefined') {
+        localProds = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+      }
+    } catch (_) {}
+
+    const mergedProducts: Record<string, any> = {
+      ...(rtdbData && typeof rtdbData === 'object' ? rtdbData : {}),
+      ...(serverProds && typeof serverProds === 'object' ? serverProds : {}),
+      ...(localProds && typeof localProds === 'object' ? localProds : {})
+    };
+
+    const parsed = parseRTDBProducts(mergedProducts, globalVendorsMap);
     
     // Protect against spurious empty overwrites if we already have loaded products
-    if (parsed.length === 0 && globalMarketplaceProducts && globalMarketplaceProducts.length > 0 && !rtdbData) {
+    if (parsed.length === 0 && globalMarketplaceProducts && globalMarketplaceProducts.length > 0 && !rtdbData && Object.keys(serverProds).length === 0) {
       return;
     }
 
@@ -217,6 +237,41 @@ function ensureGlobalRTDBListener(): void {
 }
 
 /**
+ * Notifies the in-memory marketplace state that a product was added or updated.
+ * Guarantees 0ms immediate rendering on the Homepage, Shop, and all product grids.
+ */
+export function notifyMarketplaceProductChange(rawProduct: any, id?: string): void {
+  const norm = normalizeProduct(rawProduct, id || rawProduct.id || rawProduct.productId);
+  if (!norm || !norm.id) return;
+
+  const current = globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
+  const idx = current.findIndex(p => p.id === norm.id);
+  if (idx >= 0) {
+    current[idx] = norm;
+  } else {
+    current.unshift(norm);
+  }
+  globalMarketplaceProducts = current;
+  subscribers.forEach(cb => {
+    try { cb([...current]); } catch (_) {}
+  });
+}
+
+/**
+ * Notifies the in-memory marketplace state that a product was deleted.
+ * Guarantees immediate removal from the Homepage and all product grids.
+ */
+export function notifyMarketplaceProductRemoved(productId: string): void {
+  if (!productId) return;
+  const current = globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
+  const filtered = current.filter(p => p.id !== productId);
+  globalMarketplaceProducts = filtered;
+  subscribers.forEach(cb => {
+    try { cb([...filtered]); } catch (_) {}
+  });
+}
+
+/**
  * Fetches all products across all vendors strictly from Firebase Realtime Database
  */
 export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise<Product[]> {
@@ -229,17 +284,31 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
   }
 
   try {
-    const [rawProducts, rawStores, rawVendors] = await Promise.all([
+    const [rawProducts, rawStores, rawVendors, serverProds] = await Promise.all([
       rtdbGet<Record<string, any>>('products', 6000),
       rtdbGet<Record<string, any>>('stores', 6000),
-      rtdbGet<Record<string, any>>('vendors', 6000)
+      rtdbGet<Record<string, any>>('vendors', 6000),
+      fetch('/api/products').then(r => r.json()).catch(() => null)
     ]);
 
     const safeStores = rawStores && typeof rawStores === 'object' && !('error' in rawStores) ? rawStores : {};
     const safeVendors = rawVendors && typeof rawVendors === 'object' && !('error' in rawVendors) ? rawVendors : {};
     globalVendorsMap = { ...safeStores, ...safeVendors, ...globalVendorsMap };
 
-    const parsed = parseRTDBProducts(rawProducts || {}, globalVendorsMap);
+    const mergedProducts: Record<string, any> = {
+      ...(rawProducts && typeof rawProducts === 'object' ? rawProducts : {}),
+      ...(serverProds && typeof serverProds === 'object' ? serverProds : {})
+    };
+
+    // Also include any browser local products backup
+    try {
+      if (typeof window !== 'undefined') {
+        const local = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+        Object.assign(mergedProducts, local);
+      }
+    } catch (_) {}
+
+    const parsed = parseRTDBProducts(mergedProducts, globalVendorsMap);
 
     // If fetch returned data, update in-memory cache
     if (parsed.length > 0 || !globalMarketplaceProducts) {
@@ -317,6 +386,17 @@ export async function fetchProductById(identifier: string): Promise<Product | nu
     const direct = await rtdbGet<any>(`products/${identifier}`);
     if (direct && typeof direct === 'object') {
       return normalizeProduct(direct, identifier);
+    }
+  } catch (_) {}
+
+  // 4. Server API lookup
+  try {
+    const res = await fetch(`/api/products/${identifier}`);
+    if (res.ok) {
+      const serverProd = await res.json();
+      if (serverProd && typeof serverProd === 'object') {
+        return normalizeProduct(serverProd, identifier);
+      }
     }
   } catch (_) {}
 

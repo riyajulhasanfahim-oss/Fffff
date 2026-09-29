@@ -1,0 +1,68 @@
+{
+  "-P2fUphKKrp5Usugvr7_": {
+    "id": "-P2fUphKKrp5Usugvr7_",
+    "productId": "-P2fUphKKrp5Usugvr7_",
+    "name": "WhitePlus Daily Enamel Repair Calci Strong Toothpaste 200g |",
+    "productName": "WhitePlus Daily Enamel Repair Calci Strong Toothpaste 200g |",
+    "title": "WhitePlus Daily Enamel Repair Calci Strong Toothpaste 200g |",
+    "slug": "whiteplus-daily-enamel-repair-calci-strong-toothpaste-200g",
+    "description": "ছছছ",
+    "shortDescription": "ছছছ",
+    "featuredImage": "https://i.postimg.cc/MTyJrBBc/1784377257650.jpg",
+    "image": "https://i.postimg.cc/MTyJrBBc/1784377257650.jpg",
+    "imageUrl": "https://i.postimg.cc/MTyJrBBc/1784377257650.jpg",
+    "images": [
+      "https://i.postimg.cc/MTyJrBBc/1784377257650.jpg"
+    ],
+    "price": 33333,
+    "regularPrice": 33333333,
+    "salePrice": 33333,
+    "originalPrice": 33333333,
+    "discount": 100,
+    "discountPercent": 100,
+    "discountPercentage": 100,
+    "resellerPrice": 333,
+    "stock": 333,
+    "stockCount": 333,
+    "inStock": true,
+    "lowStockAlert": 5,
+    "sku": "WHI-3544",
+    "status": "Published",
+    "category": "Grocery & Food",
+    "categorySlug": "grocery-food",
+    "brand": "Generic",
+    "tags": [
+      "WhitePlus Daily Enamel Repair Calci Strong Toothpaste 200g |",
+      "Grocery & Food"
+    ],
+    "weight": "33",
+    "specifications": {
+      "Weight": "33g"
+    },
+    "hasVariants": false,
+    "codEnabled": true,
+    "isCodEnabled": true,
+    "rating": 5,
+    "reviews": 0,
+    "reviewsCount": 0,
+    "soldQuantity": 0,
+    "vendorId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+    "storeId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+    "vendor": {
+      "id": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+      "storeId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+      "name": "RJ WORLD BD",
+      "storeName": "RJ WORLD BD",
+      "rating": 4.6,
+      "joined": "2026"
+    },
+    "createdAt": 1790657320904,
+    "updatedAt": 1790657389558
+  },
+  "test-probe": {
+    "name": "probe product",
+    "id": "test-probe",
+    "productId": "test-probe",
+    "updatedAt": 1790657792019
+  }
+}

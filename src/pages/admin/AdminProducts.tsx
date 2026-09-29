@@ -66,15 +66,28 @@ export default function AdminProducts() {
     try {
       setLoading(true);
       
-      const [pList, cList, uList, vList] = await Promise.all([
+      const [pList, cList, uList, vList, serverRes] = await Promise.all([
         rtdbList<any>('products').catch(() => []),
         rtdbList<any>('categories').catch(() => []),
         rtdbList<any>('users').catch(() => []),
-        rtdbList<any>('vendors').catch(() => [])
+        rtdbList<any>('vendors').catch(() => []),
+        fetch('/api/products').then(r => r.json()).catch(() => null)
       ]);
       
-      const pData = pList.map(item => ({ id: item.id, ...(item.data || {}) }));
-      setProducts(pData);
+      const pDataMap = new Map<string, any>();
+      pList.forEach(item => {
+        pDataMap.set(item.id, { id: item.id, ...(item.data || {}) });
+      });
+      if (serverRes && typeof serverRes === 'object') {
+        for (const [sId, sVal] of Object.entries(serverRes) as any[]) {
+          if (sVal && typeof sVal === 'object') {
+            if (!pDataMap.has(sId)) {
+              pDataMap.set(sId, { id: sId, ...sVal });
+            }
+          }
+        }
+      }
+      setProducts(Array.from(pDataMap.values()));
       
       const cData = cList.map(item => ({ id: item.id, ...(item.data || {}) }));
       const mergedCats = [...MAIN_CATEGORIES];
@@ -264,13 +277,23 @@ export default function AdminProducts() {
 
       if (isEditing) {
         await rtdbUpdate(`products/${currentProduct.id}`, productDataToSave);
+        fetch(`/api/products/${currentProduct.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...currentProduct, ...productDataToSave, id: currentProduct.id })
+        }).catch(() => {});
         toast.success('Product updated successfully');
       } else {
-        await rtdbPush('products', {
+        const newKey = await rtdbPush('products', {
           ...productDataToSave,
           createdAt: Date.now(),
           soldQuantity: 0
         });
+        fetch(`/api/products/${newKey}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...productDataToSave, id: newKey, createdAt: Date.now(), soldQuantity: 0 })
+        }).catch(() => {});
         toast.success('Product created successfully');
       }
 
@@ -288,6 +311,11 @@ export default function AdminProducts() {
     if (window.confirm(`Are you sure you want to archive ${product.name}?\n\nIt is recommended to archive instead of hard delete to preserve order history.`)) {
       try {
         await rtdbUpdate(`products/${product.id}`, { status: 'Archived', updatedAt: Date.now() });
+        fetch(`/api/products/${product.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'Archived', updatedAt: Date.now() })
+        }).catch(() => {});
         toast.success('Product archived successfully');
         fetchInitialData();
       } catch (error) {

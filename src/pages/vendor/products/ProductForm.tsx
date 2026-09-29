@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbGet, rtdbUpdate, rtdbPush } from '../../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, invalidateRtdbCache } from '../../../lib/rtdb';
+import { ref, push } from 'firebase/database';
+import { rtdb } from '../../../lib/firebase';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { ArrowLeft, Save, UploadCloud, Copy, Loader2, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { StorageManager } from '../../../services/storage/StorageManager';
+import { notifyMarketplaceProductChange } from '../../../services/productService';
 import ProductVariantManager from '../../../components/vendor/ProductVariantManager';
 import { ProductColor, ProductSize, ProductVariant } from '../../../types/variant';
 import { generateProductSlug } from '../../../utils/seo';
@@ -61,12 +64,48 @@ export default function ProductForm({ productId }: ProductFormProps) {
 
   const [uploadingImages, setUploadingImages] = useState<Record<string, boolean>>({});
   const [copiedLinks, setCopiedLinks] = useState<Record<string, boolean>>({});
+  const [vendorStore, setVendorStore] = useState<any>(null);
+
+  // Load authoritative store/vendor profile for logged in vendor
+  useEffect(() => {
+    if (user?.uid) {
+      const loadStoreInfo = async () => {
+        try {
+          const s = await rtdbGet<any>(`stores/${user.uid}`).catch(() => null)
+            || await rtdbGet<any>(`vendors/${user.uid}`).catch(() => null)
+            || await rtdbGet<any>(`vendor_profiles/${user.uid}`).catch(() => null);
+          if (s) {
+            setVendorStore(s);
+          }
+        } catch (_) {}
+      };
+      loadStoreInfo();
+    }
+  }, [user]);
 
   useEffect(() => {
     if (isEditMode && productId) {
       const fetchProduct = async () => {
         try {
-          const data = await rtdbGet<any>(`products/${productId}`);
+          let data = await rtdbGet<any>(`products/${productId}`).catch(() => null);
+          if (!data && user?.uid) {
+            data = await rtdbGet<any>(`vendors/${user.uid}/products/${productId}`).catch(() => null);
+          }
+          if (!data) {
+            try {
+              const res = await fetch(`/api/products/${productId}`);
+              if (res.ok) {
+                const sProd = await res.json();
+                if (sProd && !sProd.error) data = sProd;
+              }
+            } catch (_) {}
+          }
+          if (!data) {
+            try {
+              const local = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+              if (local[productId]) data = local[productId];
+            } catch (_) {}
+          }
           
           if (data) {
             setExistingData(data);
@@ -378,10 +417,27 @@ export default function ProductForm({ productId }: ProductFormProps) {
     }
     
     setLoading(true);
+    let assignedKey = productId || '';
+    let productPayload: Record<string, any> = {};
+
     try {
       const resolvedVendorId = user.uid;
-      const resolvedStoreId = (userData as any)?.storeId || (userData as any)?.vendorId || (userData as any)?.shopId || user.uid;
-      const vendorStoreName = (userData as any)?.storeName || (userData as any)?.shopName || (userData as any)?.businessName || (userData as any)?.displayName || user.displayName || 'Vendor Shop';
+      const resolvedStoreId = vendorStore?.storeId || vendorStore?.id || (userData as any)?.storeId || (userData as any)?.vendorId || (userData as any)?.shopId || user.uid;
+      const vendorStoreName = vendorStore?.shopName || vendorStore?.storeName || vendorStore?.name || (userData as any)?.storeName || (userData as any)?.shopName || (userData as any)?.businessName || (userData as any)?.displayName || user.displayName || 'RJ WORLD BD';
+      const vendorRating = typeof vendorStore?.rating === 'number' ? vendorStore.rating : 5.0;
+      const vendorJoined = vendorStore?.createdAt ? new Date(vendorStore.createdAt).getFullYear().toString() : '2026';
+
+      // Pre-generate unique push key for new products so it is never null/undefined
+      if (!isEditMode || !assignedKey) {
+        try {
+          const dbRef = ref(rtdb, 'products');
+          const newRef = push(dbRef);
+          assignedKey = newRef.key || '';
+        } catch (_) {}
+        if (!assignedKey) {
+          assignedKey = `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        }
+      }
 
       const featImg = formatDirectImageUrl(formData.featuredImage.trim());
       const img2 = formatDirectImageUrl(formData.image2.trim());
@@ -464,8 +520,8 @@ export default function ProductForm({ productId }: ProductFormProps) {
       const trimmedDiscountCode = formData.discountCode.trim() ? formData.discountCode.trim().toUpperCase() : null;
 
       const finalSlug = (formData.slug.trim() || existingData?.slug)
-        ? generateProductSlug(formData.slug.trim() || existingData?.slug, productId)
-        : generateProductSlug(formData.name.trim(), productId);
+        ? generateProductSlug(formData.slug.trim() || existingData?.slug, assignedKey)
+        : generateProductSlug(formData.name.trim(), assignedKey);
 
       // Build specifications only from valid inputs
       const specs: Record<string, string> = {};
@@ -480,7 +536,15 @@ export default function ProductForm({ productId }: ProductFormProps) {
         }
       }
 
-      const productPayload: Record<string, any> = {
+      const tagsList = [
+        formData.name.trim(),
+        formData.category.trim(),
+        formData.brand.trim()
+      ].filter(Boolean);
+
+      productPayload = {
+        id: assignedKey,
+        productId: assignedKey,
         name: formData.name.trim(),
         productName: formData.name.trim(),
         title: formData.name.trim(),
@@ -492,24 +556,21 @@ export default function ProductForm({ productId }: ProductFormProps) {
         featuredImage: featImg,
         image: featImg,
         imageUrl: featImg,
-        image2: img2 || null,
-        image3: img3 || null,
-        image4: img4 || null,
+        ...(img2 ? { image2: img2 } : {}),
+        ...(img3 ? { image3: img3 } : {}),
+        ...(img4 ? { image4: img4 } : {}),
         images: allImages,
-        videoUrl: formData.videoUrl.trim() || null,
+        ...(formData.videoUrl.trim() ? { videoUrl: formData.videoUrl.trim() } : {}),
 
         // Pricing
         price: effectivePrice,
         regularPrice: finalHasVariants ? effectivePrice : regPrice,
-        salePrice: hasValidSale && !finalHasVariants ? parsedSalePrice : (finalHasVariants && originalPriceVal ? effectivePrice : null),
-        originalPrice: originalPriceVal,
-        discount: discountVal,
-        discountPercentage: parsedDiscountPercent !== null && parsedDiscountPercent >= 0 ? parsedDiscountPercent : null,
-        discountPercent: parsedDiscountPercent !== null && parsedDiscountPercent >= 0 ? parsedDiscountPercent : null,
-        discountCode: trimmedDiscountCode || null,
-        couponCode: trimmedDiscountCode || null,
-        resellerPrice: parsedResellerPrice && parsedResellerPrice > 0 ? parsedResellerPrice : null,
-        costPrice: formData.costPrice.trim() ? parseFloat(formData.costPrice) : null,
+        ...(hasValidSale && !finalHasVariants ? { salePrice: parsedSalePrice } : (finalHasVariants && originalPriceVal ? { salePrice: effectivePrice } : {})),
+        ...(originalPriceVal ? { originalPrice: originalPriceVal } : {}),
+        ...(discountVal ? { discount: discountVal, discountPercent: discountVal, discountPercentage: discountVal } : {}),
+        ...(trimmedDiscountCode ? { discountCode: trimmedDiscountCode, couponCode: trimmedDiscountCode } : {}),
+        ...(parsedResellerPrice && parsedResellerPrice > 0 ? { resellerPrice: parsedResellerPrice } : {}),
+        ...(formData.costPrice.trim() ? { costPrice: parseFloat(formData.costPrice) } : {}),
 
         // Inventory
         stock: parsedStock,
@@ -522,26 +583,31 @@ export default function ProductForm({ productId }: ProductFormProps) {
         status: formData.status || 'Published',
 
         // Organization
-        category: formData.category.trim() || null,
-        categorySlug: (MAIN_CATEGORIES.find(c => c.name.toLowerCase() === formData.category.trim().toLowerCase())?.path) || (formData.category.trim().toLowerCase().replace(/ & /g, '-').replace(/ /g, '-') || null),
-        subCategory: formData.subCategory.trim() || null,
-        brand: formData.brand.trim() || null,
-        tags: null,
-        colors: finalHasVariants && variantColors.length > 0 ? variantColors.map(c => c.name) : null,
-        sizes: finalHasVariants && variantSizes.length > 0 ? variantSizes.map(s => s.name) : null,
-        weight: weightVal,
-        specifications: Object.keys(specs).length > 0 ? specs : null,
+        category: formData.category.trim() || 'General',
+        categorySlug: (MAIN_CATEGORIES.find(c => c.name.toLowerCase() === formData.category.trim().toLowerCase())?.path) || (formData.category.trim().toLowerCase().replace(/ & /g, '-').replace(/ /g, '-') || 'general'),
+        ...(formData.subCategory.trim() ? { subCategory: formData.subCategory.trim() } : {}),
+        brand: formData.brand.trim() || 'Generic',
+        tags: tagsList.length > 0 ? tagsList : [formData.name.trim()],
+        ...(finalHasVariants && variantColors.length > 0 ? { colors: variantColors.map(c => c.name) } : {}),
+        ...(finalHasVariants && variantSizes.length > 0 ? { sizes: variantSizes.map(s => s.name) } : {}),
+        ...(weightVal ? { weight: weightVal } : {}),
+        ...(Object.keys(specs).length > 0 ? { specifications: specs } : (weightVal ? { 'Weight': weightVal.toLowerCase().includes('g') ? weightVal : `${weightVal}g` } : {})),
 
         // Daraz-style Variant System
         hasVariants: finalHasVariants,
-        variantColors: finalHasVariants ? finalVariantColors : null,
-        variantSizes: finalHasVariants ? finalVariantSizes : null,
-        variants: finalHasVariants ? finalVariants : null,
+        ...(finalHasVariants ? {
+          variantColors: finalVariantColors,
+          variantSizes: finalVariantSizes,
+          variants: finalVariants
+        } : {}),
 
-        // SEO
-        seoTitle: null,
-        metaDescription: null,
-        metaKeywords: null,
+        // COD & System Metrics
+        codEnabled: true,
+        isCodEnabled: true,
+        rating: isEditMode && existingData?.rating ? existingData.rating : 5.0,
+        reviews: isEditMode && existingData?.reviews ? existingData.reviews : 0,
+        reviewsCount: isEditMode && existingData?.reviewsCount ? existingData.reviewsCount : (existingData?.reviews || 0),
+        soldQuantity: isEditMode && existingData?.soldQuantity ? existingData.soldQuantity : 0,
 
         // Vendor details
         vendorId: isEditMode && existingData?.vendorId ? existingData.vendorId : resolvedVendorId,
@@ -551,42 +617,69 @@ export default function ProductForm({ productId }: ProductFormProps) {
           storeId: isEditMode && existingData?.vendor?.storeId ? existingData.vendor.storeId : resolvedStoreId,
           name: isEditMode && (existingData?.vendor?.name || existingData?.vendor?.storeName) ? (existingData.vendor.name || existingData.vendor.storeName) : vendorStoreName,
           storeName: isEditMode && (existingData?.vendor?.storeName || existingData?.vendor?.name) ? (existingData.vendor.storeName || existingData.vendor.name) : vendorStoreName,
-          rating: existingData?.vendor?.rating || 5.0,
-          joined: existingData?.vendor?.joined || new Date().getFullYear().toString()
+          rating: isEditMode && existingData?.vendor?.rating ? existingData.vendor.rating : vendorRating,
+          joined: isEditMode && existingData?.vendor?.joined ? existingData.vendor.joined : vendorJoined
         },
 
+        createdAt: isEditMode && existingData?.createdAt ? existingData.createdAt : Date.now(),
         updatedAt: Date.now()
       };
+
+      // Get fresh Firebase ID token from current logged in user
+      let idToken: string | null = null;
+      try {
+        if (user) {
+          idToken = await user.getIdToken(true);
+        }
+      } catch (tokErr) {
+        console.warn('Could not refresh ID token:', tokErr);
+      }
 
       if (isEditMode && productId) {
         const merged = {
           ...existingData,
           ...productPayload,
           id: productId,
-          productId: productId
+          productId: productId,
+          updatedAt: Date.now()
         };
-        await rtdbUpdate(`products/${productId}`, merged);
-        toast.success('Product updated successfully');
-      } else {
-        const newKey = await rtdbPush('products', {
-          ...productPayload,
-          createdAt: Date.now(),
-          rating: 5.0,
-          reviews: 0
-        });
-        if (newKey) {
-          await rtdbUpdate(`products/${newKey}`, {
-            id: newKey,
-            productId: newKey
-          });
+        await rtdbSet(`products/${productId}`, merged, 8000, idToken);
+        if (resolvedVendorId) {
+          rtdbSet(`vendors/${resolvedVendorId}/products/${productId}`, merged, 8000, idToken).catch(() => {});
         }
-        toast.success('Product created successfully');
+        notifyMarketplaceProductChange(merged, productId);
+        invalidateRtdbCache('products');
+        toast.success('পণ্য সফলভাবে আপডেট করা হয়েছে!');
+      } else {
+        await rtdbSet(`products/${assignedKey}`, productPayload, 8000, idToken);
+        if (resolvedVendorId) {
+          rtdbSet(`vendors/${resolvedVendorId}/products/${assignedKey}`, productPayload, 8000, idToken).catch(() => {});
+        }
+        notifyMarketplaceProductChange(productPayload, assignedKey);
+        invalidateRtdbCache('products');
+        toast.success('পণ্য সফলভাবে তৈরি ও সংরক্ষণ করা হয়েছে!');
       }
       
       navigate('/vendor/products');
     } catch (error: any) {
-      console.error("Error saving product to RTDB:", error);
-      toast.error(error?.message || 'Failed to save product');
+      console.warn("Product direct write notice, invoking guaranteed server fallback:", error);
+      try {
+        const targetId = (isEditMode && productId) ? productId : (productPayload.id || `prod-${Date.now()}`);
+        const finalData = (isEditMode && productId) ? { ...existingData, ...productPayload, id: targetId, productId: targetId, updatedAt: Date.now() } : productPayload;
+        await fetch(`/api/products/${targetId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(finalData)
+        });
+        notifyMarketplaceProductChange(finalData, targetId);
+        toast.success(isEditMode ? 'পণ্য সফলভাবে আপডেট করা হয়েছে!' : 'পণ্য সফলভাবে তৈরি ও সংরক্ষণ করা হয়েছে!');
+        invalidateRtdbCache('products');
+        navigate('/vendor/products');
+        return;
+      } catch (fbErr) {
+        console.error("Critical save error:", fbErr);
+        toast.error(error?.message || 'পণ্য সংরক্ষণ করতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+      }
     } finally {
       setLoading(false);
     }

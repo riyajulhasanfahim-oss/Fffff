@@ -162,6 +162,61 @@ service cloud.firestore {
   }
 }`;
 
+  const recommendedRtdbRules = `{
+  "rules": {
+    "products": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "categories": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "stores": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "vendors": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "vendor_profiles": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "brands": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "banners": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "sliders": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "coupons": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "users": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'Admin' || root.child('users/' + auth.uid + '/role').val() === 'admin')",
+        ".write": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'Admin' || root.child('users/' + auth.uid + '/role').val() === 'admin')"
+      }
+    },
+    "orders": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "payments": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}`;
+
   return (
     <div className="p-6 space-y-8">
       {/* Header */}
@@ -349,6 +404,44 @@ service cloud.firestore {
         <div className="relative">
           <pre className="bg-slate-950 p-4 rounded-xl text-xs font-mono text-emerald-300 overflow-x-auto max-h-64 border border-slate-800 select-all">
             {recommendedRules}
+          </pre>
+        </div>
+      </div>
+
+      {/* Recommended Realtime Database Security Rules */}
+      <div className="bg-slate-900 rounded-2xl p-6 text-white space-y-4 shadow-md">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Database className="w-5 h-5 text-sky-400" />
+            <h4 className="font-semibold text-white">Realtime Database Rules (রিয়েলটাইম ডাটাবেস রুলস)</h4>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/database/${firebaseConfig.projectId}-default-rtdb/rules`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 rounded-lg transition-colors border border-slate-700"
+            >
+              Open RTDB Rules in Console
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+            <button
+              onClick={() => copyToClipboard(recommendedRtdbRules, 'RTDB Rules')}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-xs font-medium text-white rounded-lg transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              Copy RTDB Rules
+            </button>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-300 leading-relaxed">
+          আপনার ফায়ারবেস কনসোলের <strong>Realtime Database &gt; Rules</strong> ট্যাবে গিয়ে নিচের কোডটি পেস্ট করে <strong>Publish</strong> বাটনে ক্লিক করুন। এর ফলে সরাসরি ব্রাউজার থেকে ভেন্ডর প্রোডাক্ট সেভ, আপডেট ও সিঙ্ক ১০০% নির্বিঘ্নে চলবে।
+        </p>
+
+        <div className="relative">
+          <pre className="bg-slate-950 p-4 rounded-xl text-xs font-mono text-sky-300 overflow-x-auto max-h-64 border border-slate-800 select-all">
+            {recommendedRtdbRules}
           </pre>
         </div>
       </div>
