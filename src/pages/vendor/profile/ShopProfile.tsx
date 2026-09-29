@@ -3,7 +3,7 @@ import imageCompression from 'browser-image-compression';
 import { useAuth } from '../../../context/AuthContext';
 import { useVendorStore } from '../../../context/VendorStoreContext';
 import { RTDB_BASE_URL } from '../../../lib/firebase';
-import { rtdbGet, rtdbSet, rtdbUpdate } from '../../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbSubscribe } from '../../../lib/rtdb';
 import { saveStoreThemeToCache, saveStoreToCache, getStoreFromCache } from '../../../services/storeCache';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
@@ -206,8 +206,36 @@ export default function ShopProfile() {
   });
 
   useEffect(() => {
+    if (!user) return;
     fetchData();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedFetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (!saving) {
+          fetchData();
+        }
+      }, 300);
+    };
+
+    const unsubP = rtdbSubscribe(`vendor_profiles/${user.uid}`, () => {
+      debouncedFetch();
+    });
+    const unsubV = rtdbSubscribe(`vendors/${user.uid}`, () => {
+      debouncedFetch();
+    });
+    const unsubT = rtdbSubscribe(`vendor_themes/${user.uid}`, () => {
+      debouncedFetch();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubP();
+      unsubV();
+      unsubT();
+    };
+  }, [user?.uid, saving]);
 
   const fetchData = async () => {
     if (!user) return;

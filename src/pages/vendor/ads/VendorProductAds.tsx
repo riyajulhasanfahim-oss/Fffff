@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbList, rtdbPush, rtdbUpdate } from '../../../lib/rtdb';
+import { rtdbList, rtdbPush, rtdbUpdate, rtdbSubscribe } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Megaphone, 
@@ -35,8 +35,33 @@ export default function VendorProductAds() {
   const [budget, setBudget] = useState('500');
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     loadAdsAndProducts();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedLoad = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        loadAdsAndProducts();
+      }, 300);
+    };
+
+    const unsubAds = rtdbSubscribe('vendor_ads', () => {
+      debouncedLoad();
+    });
+    const unsubProds = rtdbSubscribe('products', () => {
+      debouncedLoad();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubAds();
+      unsubProds();
+    };
+  }, [user?.uid]);
 
   const loadAdsAndProducts = async () => {
     if (!user) {

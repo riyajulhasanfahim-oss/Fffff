@@ -99,39 +99,61 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
     isFirstLoadRef.current = true;
     setLoading(true);
 
-    const unsubscribe = rtdbSubscribe<any>('vendor_notifications', (snap) => {
+    const unsubVendorNotifs = rtdbSubscribe<any>('vendor_notifications', (snap) => {
       setLoading(false);
-      if (!snap) {
-        setNotifications([]);
-        isFirstLoadRef.current = false;
-        return;
+      handleNotifUpdate(snap, 'vendor_notifications');
+    });
+
+    const unsubUserNotifs = rtdbSubscribe<any>(`notifications/${user.uid}`, (snap) => {
+      handleNotifUpdate(snap, 'user_notifications');
+    });
+
+    let currentVendorSnap: any = null;
+    let currentUserSnap: any = null;
+
+    const handleNotifUpdate = (snap: any, source: string) => {
+      if (source === 'vendor_notifications') currentVendorSnap = snap;
+      if (source === 'user_notifications') currentUserSnap = snap;
+
+      const combinedMap = new Map<string, any>();
+
+      if (currentVendorSnap && typeof currentVendorSnap === 'object') {
+        Object.keys(currentVendorSnap).forEach((key) => {
+          const item = currentVendorSnap[key];
+          if (!item) return;
+          const itemVendorId = item.vendorId || item.userId;
+          const matchesUser = 
+            itemVendorId === user.uid || 
+            item.vendorId === user.uid || 
+            item.userId === user.uid ||
+            (item.metadata && item.metadata.vendorId === user.uid);
+          if (matchesUser || isAdmin) {
+            combinedMap.set(key, { id: key, ...item });
+          }
+        });
+      }
+
+      if (currentUserSnap && typeof currentUserSnap === 'object') {
+        Object.keys(currentUserSnap).forEach((key) => {
+          const item = currentUserSnap[key];
+          if (item) {
+            combinedMap.set(key, { id: key, ...item });
+          }
+        });
       }
 
       const list: VendorNotification[] = [];
       const currentReads = userReadsRef.current;
 
-      Object.keys(snap).forEach((key) => {
-        const item = snap[key];
-        if (!item) return;
-
-        const itemVendorId = item.vendorId || item.userId;
-        const matchesUser = 
-          itemVendorId === user.uid || 
-          item.vendorId === user.uid || 
-          item.userId === user.uid ||
-          (item.metadata && item.metadata.vendorId === user.uid);
-
-        if (matchesUser || isAdmin) {
-          const isRead = Boolean(item.read || currentReads[key]?.read);
-          list.push({
-            id: key,
-            ...item,
-            read: isRead
-          });
-        }
+      combinedMap.forEach((item, key) => {
+        const isRead = Boolean(item.read || currentReads[key]?.read);
+        list.push({
+          id: key,
+          ...item,
+          read: isRead
+        });
       });
 
-      // Sort by newest first
       list.sort((a, b) => {
         const timeA = Number(a.timestamp || a.createdAt || 0);
         const timeB = Number(b.timestamp || b.createdAt || 0);
@@ -146,10 +168,7 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
 
         if (newItems.length > 0) {
           const newest = newItems[0];
-          // 1. Play synthesized bell chime
           playNotificationSound();
-
-          // 2. Show native mobile / browser notification
           showDeviceNotification({
             title: newest.title || 'নতুন ভেন্ডর নোটিফিকেশন',
             body: newest.message || 'আপনার স্টোরে একটি নতুন আপডেট এসেছে।',
@@ -157,7 +176,6 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
             tag: newest.id
           });
 
-          // 3. Show in-app banner toast
           toast((t) => (
             <div 
               onClick={() => {
@@ -179,15 +197,14 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
         }
       }
 
-      // Update known IDs
       list.forEach(i => knownNotificationIdsRef.current.add(i.id));
       isFirstLoadRef.current = false;
-
       setNotifications(list);
-    });
+    };
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      unsubVendorNotifs();
+      unsubUserNotifs();
     };
   }, [user?.uid, userData?.role, user?.email]);
 

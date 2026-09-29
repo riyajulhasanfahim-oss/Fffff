@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbGet, rtdbUpdate, rtdbList } from '../../../lib/rtdb';
+import { rtdbGet, rtdbUpdate, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import { clearVendorLocationCache } from '../../../services/vendorLocationService';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
@@ -39,8 +39,35 @@ export default function VendorSettings() {
   });
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     loadSettings();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedLoad = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (!saving) {
+          loadSettings();
+        }
+      }, 300);
+    };
+
+    const unsubV = rtdbSubscribe(`vendors/${user.uid}`, () => {
+      debouncedLoad();
+    });
+    const unsubP = rtdbSubscribe(`vendor_profiles/${user.uid}`, () => {
+      debouncedLoad();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubV();
+      unsubP();
+    };
+  }, [user?.uid, saving]);
 
   const loadSettings = async () => {
     if (!user) {

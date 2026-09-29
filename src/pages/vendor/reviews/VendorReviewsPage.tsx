@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { useAuth } from '../../../context/AuthContext';
 import { useVendorStore } from '../../../context/VendorStoreContext';
+import { rtdbSubscribe } from '../../../lib/rtdb';
 import { 
   fetchVendorReviews, 
   replyToCustomerReview, 
@@ -112,7 +113,32 @@ export default function VendorReviewsPage() {
   };
 
   useEffect(() => {
+    if (!vendorId) {
+      setLoading(false);
+      return;
+    }
     loadReviews();
+
+    let debounceTimer: any = null;
+    const debouncedLoad = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        loadReviews(true);
+      }, 300);
+    };
+
+    const unsubRevs = rtdbSubscribe('reviews', () => {
+      debouncedLoad();
+    });
+    const unsubVRevs = rtdbSubscribe('vendor_reviews', () => {
+      debouncedLoad();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubRevs();
+      unsubVRevs();
+    };
   }, [vendorId]);
 
   // Calculations & Analytics

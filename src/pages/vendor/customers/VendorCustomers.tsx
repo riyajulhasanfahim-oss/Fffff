@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbList } from '../../../lib/rtdb';
+import { rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Users, 
@@ -35,8 +35,33 @@ export default function VendorCustomers() {
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     loadCustomers();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedLoad = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        loadCustomers();
+      }, 300);
+    };
+
+    const unsubV = rtdbSubscribe('vendor_orders', () => {
+      debouncedLoad();
+    });
+    const unsubO = rtdbSubscribe('orders', () => {
+      debouncedLoad();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubV();
+      unsubO();
+    };
+  }, [user?.uid]);
 
   const loadCustomers = async () => {
     if (!user) {

@@ -27,8 +27,18 @@ export default function VendorChats() {
         const data: any[] = [];
         Object.keys(snap).forEach(id => {
           const item = snap[id];
-          if (item && (vendorKeys.has(item.vendorId) || vendorKeys.has(item.storeId))) {
-            data.push({ id, ...item });
+          if (item) {
+            const matchesVendor = 
+              vendorKeys.has(item.vendorId) || 
+              vendorKeys.has(item.storeId) ||
+              item.receiverId === user.uid ||
+              item.userId === user.uid ||
+              id.endsWith(`_${user.uid}`) ||
+              id.includes(user.uid);
+
+            if (matchesVendor) {
+              data.push({ id, ...item });
+            }
           }
         });
         data.sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));

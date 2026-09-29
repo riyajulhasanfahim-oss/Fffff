@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbList, rtdbUpdate, rtdbSet, rtdbPush } from '../../../lib/rtdb';
+import { rtdbList, rtdbUpdate, rtdbSet, rtdbPush, rtdbSubscribe } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Package, AlertTriangle, XCircle, DollarSign, Search, Filter, 
@@ -35,14 +35,40 @@ export default function InventoryDashboard() {
   const [adjustNotes, setAdjustNotes] = useState('');
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     fetchInventory();
     fetchLogs();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchInventory();
+        fetchLogs();
+      }, 300);
+    };
+
+    const unsubProducts = rtdbSubscribe('products', () => {
+      debouncedRefresh();
+    });
+    const unsubLogs = rtdbSubscribe('inventory_logs', () => {
+      debouncedRefresh();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubProducts();
+      unsubLogs();
+    };
+  }, [user?.uid]);
 
   const fetchInventory = async () => {
     if (!user) return;
     try {
-      const itemsList = await rtdbList<any>('products', (p) => p.vendorId === user.uid);
+      const itemsList = await rtdbList<any>('products', (p) => p.vendorId === user.uid || p.storeId === user.uid || p.userId === user.uid);
       const items = itemsList.map(doc => ({ id: doc.id, ...doc.data })) as any[];
       
       setInventory(items);

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList } from '../../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import { db } from '../../../lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import VendorLayout from '../../../components/layout/VendorLayout';
@@ -323,8 +323,33 @@ export default function OrderDetails() {
   useEffect(() => {
     if (id && user) {
       fetchOrderDetails();
+
+      let debounceTimer: any = null;
+      const debouncedFetch = () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          fetchOrderDetails();
+        }, 300);
+      };
+
+      const unsubVOrders = rtdbSubscribe('vendor_orders', () => {
+        debouncedFetch();
+      });
+      const unsubOrders = rtdbSubscribe('orders', () => {
+        debouncedFetch();
+      });
+
+      const handleOrderUpdate = () => debouncedFetch();
+      window.addEventListener('vendor_order_updated', handleOrderUpdate);
+
+      return () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        unsubVOrders();
+        unsubOrders();
+        window.removeEventListener('vendor_order_updated', handleOrderUpdate);
+      };
     }
-  }, [id, user]);
+  }, [id, user?.uid]);
 
   const fetchOrderDetails = async () => {
     try {

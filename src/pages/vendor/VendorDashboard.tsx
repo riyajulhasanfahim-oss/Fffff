@@ -471,11 +471,17 @@ export default function VendorDashboard() {
     window.addEventListener('reseller_profit_updated', handleProfileUpdate);
     window.addEventListener('storage', handleProfileUpdate);
 
-    // RTDB Realtime Subscriptions for immediate updates upon profit lock / release / cancel
+    // RTDB Realtime Subscriptions for immediate updates upon orders, products, reviews, wallet, profile changes
     let unsubWallet: any = null;
     let unsubVendorOrders: any = null;
     let unsubResellerOrders: any = null;
     let unsubOrders: any = null;
+    let unsubProducts: any = null;
+    let unsubReviews: any = null;
+    let unsubVendorReviews: any = null;
+    let unsubVendor: any = null;
+    let unsubProfile: any = null;
+
     if (user?.uid) {
       unsubWallet = rtdbSubscribe(`vendor_wallet/${user.uid}`, () => {
         handleProfileUpdate();
@@ -487,6 +493,23 @@ export default function VendorDashboard() {
         handleProfileUpdate();
       });
       unsubOrders = rtdbSubscribe('orders', () => {
+        handleProfileUpdate();
+      });
+      unsubProducts = rtdbSubscribe('products', () => {
+        handleProfileUpdate();
+      });
+      unsubReviews = rtdbSubscribe('reviews', () => {
+        handleProfileUpdate();
+        fetchVendorReviews(user.uid).then(revs => setVendorReviews(revs)).catch(() => {});
+      });
+      unsubVendorReviews = rtdbSubscribe('vendor_reviews', () => {
+        handleProfileUpdate();
+        fetchVendorReviews(user.uid).then(revs => setVendorReviews(revs)).catch(() => {});
+      });
+      unsubVendor = rtdbSubscribe(`vendors/${user.uid}`, () => {
+        handleProfileUpdate();
+      });
+      unsubProfile = rtdbSubscribe(`vendor_profiles/${user.uid}`, () => {
         handleProfileUpdate();
       });
     }
@@ -501,6 +524,11 @@ export default function VendorDashboard() {
       if (unsubVendorOrders && typeof unsubVendorOrders === 'function') unsubVendorOrders();
       if (unsubResellerOrders && typeof unsubResellerOrders === 'function') unsubResellerOrders();
       if (unsubOrders && typeof unsubOrders === 'function') unsubOrders();
+      if (unsubProducts && typeof unsubProducts === 'function') unsubProducts();
+      if (unsubReviews && typeof unsubReviews === 'function') unsubReviews();
+      if (unsubVendorReviews && typeof unsubVendorReviews === 'function') unsubVendorReviews();
+      if (unsubVendor && typeof unsubVendor === 'function') unsubVendor();
+      if (unsubProfile && typeof unsubProfile === 'function') unsubProfile();
     };
   }, [user]);
 

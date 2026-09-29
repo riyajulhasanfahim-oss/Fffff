@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbList, rtdbUpdate, rtdbPush } from '../../../lib/rtdb';
+import { rtdbList, rtdbUpdate, rtdbPush, rtdbSubscribe } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Rocket, 
@@ -26,8 +26,33 @@ export default function VendorProductBoost() {
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     loadProducts();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedLoad = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        loadProducts();
+      }, 300);
+    };
+
+    const unsubProds = rtdbSubscribe('products', () => {
+      debouncedLoad();
+    });
+    const unsubBoosts = rtdbSubscribe('product_boosts', () => {
+      debouncedLoad();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubProds();
+      unsubBoosts();
+    };
+  }, [user?.uid]);
 
   const loadProducts = async () => {
     if (!user) {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbGet, rtdbSet, rtdbList } from '../../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Wallet, TrendingUp, TrendingDown, Clock, Activity, CreditCard, ArrowRight, FileText, ShieldCheck, RefreshCw
@@ -20,8 +20,37 @@ export default function VendorWallet() {
   const [dateFilter, setDateFilter] = useState('All Time');
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     fetchWalletAndTransactions();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedFetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchWalletAndTransactions();
+      }, 300);
+    };
+
+    const unsubWallet = rtdbSubscribe(`vendor_wallet/${user.uid}`, (snap) => {
+      if (snap) {
+        setWallet((prev: any) => ({ ...(prev || {}), ...snap }));
+      }
+      debouncedFetch();
+    });
+
+    const unsubTx = rtdbSubscribe('wallet_transactions', () => {
+      debouncedFetch();
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubWallet();
+      unsubTx();
+    };
+  }, [user?.uid]);
 
   const fetchWalletAndTransactions = async () => {
     if (!user) return;

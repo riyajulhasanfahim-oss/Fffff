@@ -98,11 +98,18 @@ export default function WithdrawDashboard() {
   };
 
   useEffect(() => {
+    if (!user) return;
     fetchData();
 
-    // Live subscription to RTDB withdrawals
-    if (!user) return;
-    const unsub = rtdbSubscribe<any>('withdrawals', (snap) => {
+    // 1. Live subscription to RTDB vendor wallet
+    const unsubWallet = rtdbSubscribe<any>(`vendor_wallet/${user.uid}`, (snap) => {
+      if (snap) {
+        setWallet((prev: any) => ({ ...(prev || {}), ...snap }));
+      }
+    });
+
+    // 2. Live subscription to RTDB withdrawals
+    const unsubWithdrawals = rtdbSubscribe<any>('withdrawals', (snap) => {
       if (!snap) return;
       const vendorWithdrawals: WithdrawalRecord[] = [];
       Object.keys(snap).forEach(key => {
@@ -123,8 +130,15 @@ export default function WithdrawDashboard() {
       }
     });
 
+    // 3. Live subscription to RTDB withdraw_requests
+    const unsubRequests = rtdbSubscribe<any>('withdraw_requests', () => {
+      fetchData();
+    });
+
     return () => {
-      if (unsub) unsub();
+      if (unsubWallet) unsubWallet();
+      if (unsubWithdrawals) unsubWithdrawals();
+      if (unsubRequests) unsubRequests();
     };
   }, [user?.uid]);
 

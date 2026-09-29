@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbPush } from '../../../lib/rtdb';
+import { rtdbPush, rtdbSubscribe, rtdbList } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import {
   SupportMessage,
@@ -55,6 +55,7 @@ export default function VendorHelpline() {
   const [message, setMessage] = useState('');
   const [submittingTicket, setSubmittingTicket] = useState(false);
   const [ticketSubmitted, setTicketSubmitted] = useState(false);
+  const [tickets, setTickets] = useState<any[]>([]);
 
   const HELPLINE_PHONE = '018783764577';
   const HELPLINE_WHATSAPP = '018884267928';
@@ -62,7 +63,7 @@ export default function VendorHelpline() {
 
   const threadId = user ? getThreadId('vendor', user.uid) : null;
 
-  // Subscribe to real-time vendor chat messages
+  // Subscribe to real-time vendor chat messages & support tickets
   useEffect(() => {
     if (!threadId || !user) {
       setLoadingChat(false);
@@ -72,12 +73,31 @@ export default function VendorHelpline() {
     setLoadingChat(true);
     markThreadReadByUser('vendor', user.uid).catch(() => {});
 
-    const unsub = subscribeToThreadMessages(threadId, (list) => {
+    const unsubChat = subscribeToThreadMessages(threadId, (list) => {
       setMessages(list);
       setLoadingChat(false);
     });
 
-    return () => unsub();
+    const unsubTickets = rtdbSubscribe<any>('vendor_support_tickets', (snap) => {
+      if (snap) {
+        const list: any[] = [];
+        Object.keys(snap).forEach(id => {
+          const t = snap[id];
+          if (t && (t.vendorId === user.uid || t.userId === user.uid)) {
+            list.push({ id, ...t });
+          }
+        });
+        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        setTickets(list);
+      } else {
+        setTickets([]);
+      }
+    });
+
+    return () => {
+      unsubChat();
+      unsubTickets();
+    };
   }, [threadId, user?.uid]);
 
   // Scroll to bottom on new message
@@ -595,6 +615,41 @@ export default function VendorHelpline() {
                 </div>
               </form>
             </div>
+
+            {/* Existing Tickets History */}
+            {tickets.length > 0 && (
+              <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-6 shadow-2xs mb-8">
+                <h3 className="font-bold text-gray-900 text-sm sm:text-base mb-3 flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-primary-main" />
+                  আপনার পূর্ববর্তী টিকিটসমূহ ({tickets.length})
+                </h3>
+                <div className="space-y-3">
+                  {tickets.map((t) => (
+                    <div key={t.id} className="p-3.5 border border-gray-100 rounded-xl bg-gray-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="font-bold text-xs sm:text-sm text-gray-900">{t.subject}</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-200 text-gray-700">{t.category}</span>
+                        </div>
+                        <p className="text-xs text-gray-600 line-clamp-1">{t.message}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                          t.status === 'resolved' ? 'bg-emerald-100 text-emerald-700' :
+                          t.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                          'bg-amber-100 text-amber-700'
+                        }`}>
+                          {t.status === 'resolved' ? 'সমাধানকৃত' : t.status === 'in_progress' ? 'প্রক্রিয়াধীন' : 'অপেক্ষমান'}
+                        </span>
+                        <span className="text-[11px] text-gray-400">
+                          {t.createdAt ? new Date(t.createdAt).toLocaleDateString('bn-BD') : ''}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

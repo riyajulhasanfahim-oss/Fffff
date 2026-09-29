@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList } from '../../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Search, Filter, Eye, Clock, CheckCircle, Package, Truck, 
@@ -120,8 +120,37 @@ export default function OrdersList() {
   });
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     fetchOrders();
-  }, [user]);
+
+    let debounceTimer: any = null;
+    const debouncedFetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchOrders();
+      }, 300);
+    };
+
+    const unsubVOrders = rtdbSubscribe('vendor_orders', () => {
+      debouncedFetch();
+    });
+    const unsubOrders = rtdbSubscribe('orders', () => {
+      debouncedFetch();
+    });
+
+    const handleVendorOrderEvent = () => debouncedFetch();
+    window.addEventListener('vendor_order_updated', handleVendorOrderEvent);
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubVOrders();
+      unsubOrders();
+      window.removeEventListener('vendor_order_updated', handleVendorOrderEvent);
+    };
+  }, [user?.uid]);
 
   const fetchOrders = async () => {
     if (!user) return;
