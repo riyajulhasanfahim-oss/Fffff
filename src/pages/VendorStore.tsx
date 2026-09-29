@@ -264,6 +264,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
         }
 
         if (isMounted && freshStore) {
+          setIsDeletedStore(false);
           setVendor((prev: any) => {
             const merged = mergeStoreObjects(prev || initialCached, freshStore);
             saveStoreToCache(vendorId, merged);

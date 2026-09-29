@@ -4,7 +4,8 @@ import type { Request, Response } from 'express';
 // Vercel Serverless Function entry point
 export default async function handler(req: any, res: any) {
   const rawUrl = String(req.url || '');
-  const pathPart = rawUrl.split('?')[0].toLowerCase();
+  const pathPart = rawUrl.split('?')[0]; // Preserve exact casing for Firebase RTDB IDs!
+  const lowerPath = pathPart.toLowerCase();
 
   const safeSend = (status: number, data: any) => {
     try {
@@ -43,9 +44,16 @@ export default async function handler(req: any, res: any) {
 
   // Fast direct RTDB proxy for core marketplace endpoints
   if (req.method === 'GET') {
-    if (pathPart.includes('product')) {
+    // 1. Explicitly handle deleted_vendors so active stores are NEVER returned as deleted
+    if (lowerPath.includes('deleted_vendor')) {
+      return safeSend(200, {});
+    }
+
+    // 2. Products endpoints
+    if (lowerPath.includes('product')) {
       try {
-        const rtdbRes = await fetch('https://rjworldbdcom-default-rtdb.firebaseio.com/products.json');
+        const cleanPath = pathPart.replace(/^\/api\//i, '').replace(/^\//, '');
+        const rtdbRes = await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/${cleanPath}.json`);
         if (rtdbRes.ok) {
           const data = await rtdbRes.json();
           return safeSend(200, data || {});
@@ -54,18 +62,30 @@ export default async function handler(req: any, res: any) {
       return safeSend(200, {});
     }
 
-    if (pathPart.includes('vendor') || pathPart.includes('store')) {
+    // 3. Stores and Vendors endpoints
+    if (lowerPath.includes('vendor') || lowerPath.includes('store')) {
       try {
-        const rtdbRes = await fetch('https://rjworldbdcom-default-rtdb.firebaseio.com/stores.json');
+        const cleanPath = pathPart.replace(/^\/api\//i, '').replace(/^\//, '');
+        // Map vendors/* to stores/* as vendor store profiles reside under stores/ in RTDB
+        const rtdbPath = cleanPath.toLowerCase().startsWith('vendor') ? cleanPath.replace(/^vendors?/i, 'stores') : cleanPath;
+        const rtdbRes = await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/${rtdbPath}.json`);
         if (rtdbRes.ok) {
           const data = await rtdbRes.json();
-          return safeSend(200, data || {});
+          if (data && typeof data === 'object' && !('error' in data)) {
+            return safeSend(200, data);
+          }
+        }
+        // Fallback to full stores.json if specific subpath wasn't found
+        const fallbackRes = await fetch('https://rjworldbdcom-default-rtdb.firebaseio.com/stores.json');
+        if (fallbackRes.ok) {
+          const fData = await fallbackRes.json();
+          return safeSend(200, fData || {});
         }
       } catch (_) {}
       return safeSend(200, {});
     }
 
-    if (pathPart.includes('health') || pathPart === '/' || pathPart === '/api') {
+    if (lowerPath.includes('health') || lowerPath === '/' || lowerPath === '/api') {
       return safeSend(200, { status: 'ok', domain: 'rjworldbd.com', timestamp: Date.now() });
     }
   }

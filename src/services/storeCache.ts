@@ -1177,9 +1177,32 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
       rtdbGet<any>(`deleted_vendors/${storeId}`)
     ]);
 
-    if (deletedSnap) {
-      removeStoreFromCache(storeId);
-      return { id: storeId, isDeleted: true, status: 'deleted', shopName: 'Deleted Store' };
+    // An actively registered store with active status or verified flag must NEVER be treated as deleted
+    const isActivelyRegistered = (storeSnap && (storeSnap.status === 'active' || storeSnap.status === 'approved' || storeSnap.verified || storeSnap.isVerified)) ||
+                                 (vendorSnap && (vendorSnap.status === 'active' || vendorSnap.status === 'approved' || vendorSnap.verified || vendorSnap.isVerified)) ||
+                                 PROTECTED_ACTIVE_STORE_IDS.has(cleanTarget);
+
+    if (isActivelyRegistered) {
+      deletedStoreIdsSet.delete(storeId);
+      deletedStoreIdsSet.delete(cleanTarget);
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = localStorage.getItem('rj_deleted_vendors_cache');
+          if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr) && (arr.includes(storeId) || arr.includes(cleanTarget))) {
+              const cleaned = arr.filter((x: string) => x !== storeId && x !== cleanTarget);
+              localStorage.setItem('rj_deleted_vendors_cache', JSON.stringify(cleaned));
+            }
+          }
+        } catch (_) {}
+      }
+    } else {
+      const isRealDeletion = deletedSnap === true || deletedSnap?.isDeleted === true || deletedSnap?.status === 'deleted';
+      if (isRealDeletion) {
+        removeStoreFromCache(storeId);
+        return { id: storeId, isDeleted: true, status: 'deleted', shopName: 'Deleted Store' };
+      }
     }
 
     let resolvedVendor = vendorSnap;
@@ -1187,7 +1210,7 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
     let resolvedStore = storeSnap;
     let resolvedTheme = themeSnap;
 
-    if (resolvedVendor?.status === 'deleted' || resolvedStore?.status === 'deleted' || resolvedProfile?.status === 'deleted') {
+    if (!isActivelyRegistered && (resolvedVendor?.status === 'deleted' || resolvedStore?.status === 'deleted' || resolvedProfile?.status === 'deleted')) {
       removeStoreFromCache(storeId);
       return { id: storeId, isDeleted: true, status: 'deleted', shopName: 'Deleted Store' };
     }
