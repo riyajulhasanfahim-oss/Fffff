@@ -172,7 +172,7 @@ export function extractVendorSubdomain(
   hostname: string,
   search?: URLSearchParams | string
 ): DomainExtractionResult {
-  const host = (hostname || '').toLowerCase().trim().split(':')[0]; // strip port
+  const host = (hostname || '').toLowerCase().trim().replace(/\.$/, '').split(':')[0]; // strip port & trailing dot
 
   // 1. Check test / preview parameters (allows testing in development/preview environments)
   const searchParams = typeof search === 'string' 
@@ -204,9 +204,12 @@ export function extractVendorSubdomain(
 
   // 2. Check window.__RJ_VENDOR_SUBDOMAIN__ if injected by server
   if (typeof window !== 'undefined' && (window as any).__RJ_VENDOR_SUBDOMAIN__) {
-    const s = String((window as any).__RJ_VENDOR_SUBDOMAIN__).toLowerCase().trim();
-    if (s && !RESERVED_SUBDOMAINS.has(s)) {
-      return { type: 'subdomain', slugOrDomain: s };
+    const rawVal = (window as any).__RJ_VENDOR_SUBDOMAIN__;
+    if (typeof rawVal === 'string') {
+      const s = rawVal.toLowerCase().trim();
+      if (s && s !== 'undefined' && s !== 'null' && s !== 'false' && s !== 'none' && !RESERVED_SUBDOMAINS.has(s)) {
+        return { type: 'subdomain', slugOrDomain: s };
+      }
     }
   }
 
@@ -278,7 +281,13 @@ export function extractVendorSubdomain(
     host.includes('cloudworkstations.dev') ||
     host.includes('googleusercontent.com') ||
     host.includes('ai.studio') ||
-    host.includes('ais-');
+    host.includes('ais-') ||
+    host.includes('netlify.app') ||
+    host.includes('onrender.com') ||
+    host.includes('railway.app') ||
+    host.includes('github.io') ||
+    host.includes('surge.sh') ||
+    host.includes('amplifyapp.com');
 
   if (isDevHost) {
     return { type: 'main', slugOrDomain: null };

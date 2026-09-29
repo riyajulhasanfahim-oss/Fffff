@@ -1023,10 +1023,19 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
 
       // Do not allow actively registered stores to be in deletedIds
       Object.keys(safeStores).forEach(sId => {
-        if (sId && safeStores[sId]?.status === 'active') {
+        const st = safeStores[sId];
+        if (sId && st && (st.status === 'active' || st.verified === true || st.isVerified === true || st.verificationStatus === 'verified')) {
           deletedIds.delete(sId);
           deletedStoreIdsSet.delete(sId);
           deletedStoreIdsSet.delete(sId.toLowerCase());
+          if (st.userId) {
+            deletedIds.delete(st.userId);
+            deletedStoreIdsSet.delete(st.userId);
+          }
+          if (st.vendorId) {
+            deletedIds.delete(st.vendorId);
+            deletedStoreIdsSet.delete(st.vendorId);
+          }
         }
       });
 

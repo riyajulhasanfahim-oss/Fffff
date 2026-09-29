@@ -90,7 +90,21 @@ app.set('trust proxy', true);
 
 // Normalize routes if Vercel serverless rewrite forwarded without /api prefix
 app.use((req, res, next) => {
-  if (req.url.startsWith('/payment') || 
+  if (req.url.startsWith('/products') ||
+      req.url.startsWith('/stores') ||
+      req.url.startsWith('/vendors') ||
+      req.url.startsWith('/vendor_profiles') ||
+      req.url.startsWith('/deleted_vendors') ||
+      req.url.startsWith('/categories') ||
+      req.url.startsWith('/banners') ||
+      req.url.startsWith('/sliders') ||
+      req.url.startsWith('/brands') ||
+      req.url.startsWith('/coupons') ||
+      req.url.startsWith('/flashSales') ||
+      req.url.startsWith('/notices') ||
+      req.url.startsWith('/settings') ||
+      req.url.startsWith('/health') ||
+      req.url.startsWith('/payment') || 
       req.url.startsWith('/auth') || 
       req.url.startsWith('/courier') || 
       req.url.startsWith('/vendor') || 
@@ -444,6 +458,12 @@ app.use((req, res, next) => {
 
   app.get('/api/vendor_profiles', async (req, res) => {
     const data = await fetchRtdbNode('vendor_profiles');
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(data || {});
+  });
+
+  app.get('/api/deleted_vendors', async (req, res) => {
+    const data = await fetchRtdbNode('deleted_vendors');
     res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
     res.json(data || {});
   });

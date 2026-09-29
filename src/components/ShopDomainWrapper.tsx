@@ -214,8 +214,10 @@ export default function ShopDomainWrapper({ children }: { children: React.ReactN
               setIsShopDomain(true);
               setIsNotFound(false);
             } else {
-              setIsShopDomain(true);
-              setIsNotFound(true);
+              // Fallback gracefully to main marketplace if no vendor matched this custom domain
+              setIsShopDomain(false);
+              setVendorId(null);
+              setIsNotFound(false);
             }
             setLoading(false);
           }

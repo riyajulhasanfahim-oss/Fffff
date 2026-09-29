@@ -127,9 +127,12 @@ async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<F
       });
       clearTimeout(proxyTimer);
       if (fallbackRes.ok) {
-        const fData = await fallbackRes.json();
-        if (fData && typeof fData === 'object' && !('error' in fData)) {
-          return { ok: true, data: (fData !== null && fData !== undefined) ? (fData as T) : null };
+        const contentType = fallbackRes.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const fData = await fallbackRes.json();
+          if (fData && typeof fData === 'object' && !('error' in fData)) {
+            return { ok: true, data: (fData !== null && fData !== undefined) ? (fData as T) : null };
+          }
         }
       }
     } catch (_) {}
@@ -185,14 +188,15 @@ export async function rtdbGet<T = any>(path: string, timeoutMs: number = 5000): 
       const restCall = fetchRtdbRest<T>(cleanPath, timeoutMs);
       const sdkCall = fetchRtdbSdk<T>(cleanPath, timeoutMs);
 
-      // Whichever authoritative source completes successfully first wins (0ms delay for empty nodes!)
+      // Prioritize non-null authoritative data: if either source returns actual data, resolve immediately.
+      // If a source returns null, wait for the other source before concluding the node is null.
       const result = await new Promise<T | null>((resolve) => {
         let settled = 0;
         let hasResolved = false;
 
-        const handleSuccess = (res: FetchResult<T>) => {
+        const handleResult = (res: FetchResult<T>) => {
           if (hasResolved) return;
-          if (res && res.ok) {
+          if (res && res.ok && res.data !== null && res.data !== undefined) {
             hasResolved = true;
             resolve(res.data);
           } else {
@@ -204,8 +208,8 @@ export async function rtdbGet<T = any>(path: string, timeoutMs: number = 5000): 
           }
         };
 
-        restCall.then(handleSuccess).catch(() => handleSuccess({ ok: false, data: null }));
-        sdkCall.then(handleSuccess).catch(() => handleSuccess({ ok: false, data: null }));
+        restCall.then(handleResult).catch(() => handleResult({ ok: false, data: null }));
+        sdkCall.then(handleResult).catch(() => handleResult({ ok: false, data: null }));
 
         // Hard safety timeout
         setTimeout(() => {
