@@ -43,8 +43,9 @@ export default function AdminVendors() {
 
       const vendorMap = new Map<string, any>();
 
-      // 1. Fetch vendors from RTDB 'vendors'
-      const [rtdbVendors, rtdbProducts, rtdbOrders] = await Promise.all([
+      // 1. Fetch vendors from RTDB 'stores' and 'vendors'
+      const [rtdbStores, rtdbVendors, rtdbProducts, rtdbOrders] = await Promise.all([
+        rtdbList<any>('stores').catch(() => []),
         rtdbList<any>('vendors').catch(() => []),
         rtdbList<any>('products').catch(() => []),
         rtdbList<any>('orders').catch(() => [])
@@ -72,12 +73,16 @@ export default function AdminVendors() {
         }
       });
 
-      rtdbVendors.forEach(({ id, data }) => {
+      // Merge both stores and vendors nodes
+      const allStoresAndVendors = [...rtdbStores, ...rtdbVendors];
+      allStoresAndVendors.forEach(({ id, data }) => {
         if (!id || !data) return;
+        const existing = vendorMap.get(id);
+        const mergedData = { ...(existing?.vendorData || {}), ...data };
         vendorMap.set(id, {
           id,
-          ...data,
-          name: data.ownerName || data.name || data.fullName || 'Unknown Owner',
+          ...mergedData,
+          name: mergedData.ownerName || mergedData.name || mergedData.fullName || 'Unknown Owner',
           shopName: data.storeName || data.shopName || data.businessName || 'Unknown Shop',
           email: data.email || '',
           phone: data.mobileNumber || data.phone || '',

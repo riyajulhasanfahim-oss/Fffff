@@ -66,11 +66,12 @@ export default function AdminProducts() {
     try {
       setLoading(true);
       
-      const [pList, cList, uList, vList, serverRes] = await Promise.all([
+      const [pList, cList, uList, vList, sList, serverRes] = await Promise.all([
         rtdbList<any>('products').catch(() => []),
         rtdbList<any>('categories').catch(() => []),
         rtdbList<any>('users').catch(() => []),
         rtdbList<any>('vendors').catch(() => []),
+        rtdbList<any>('stores').catch(() => []),
         fetch('/api/products').then(r => r.json()).catch(() => null)
       ]);
       
@@ -102,7 +103,8 @@ export default function AdminProducts() {
         .filter(({ data }) => (data?.role || '').toLowerCase() === 'vendor')
         .map(({ id, data }) => ({ id, ...(data || {}) }));
       const vendorsDirect = vList.map(({ id, data }) => ({ id, ...(data || {}) }));
-      const allVendors = [...vendorsFromUsers, ...vendorsDirect];
+      const storesDirect = (sList || []).map(({ id, data }) => ({ id, ...(data || {}) }));
+      const allVendors = [...vendorsFromUsers, ...storesDirect, ...vendorsDirect];
       
       const uniqueVendors = Array.from(new Map(allVendors.map(item => [item.id, item])).values());
       setVendors(uniqueVendors);

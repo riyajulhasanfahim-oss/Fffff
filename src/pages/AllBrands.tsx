@@ -18,15 +18,19 @@ import {
 } from '../services/storeCache';
 
 export default function AllBrands() {
+  const isStoreNotDeleted = (b: CachedStore) => {
+    if (!b) return false;
+    if (b.status === 'deleted' || b.status === 'rejected') return false;
+    if (b.status === 'active' || b.status === 'approved' || b.isVerified || b.verified) return true;
+    return !isStoreDeletedFromCache(b.id) &&
+      !isStoreDeletedFromCache(b.vendorId || '') &&
+      !isStoreDeletedFromCache(b.storeId || '') &&
+      !isStoreDeletedFromCache(b.userId || '');
+  };
+
   const [brands, setBrands] = useState<CachedStore[]>(() => 
     sortStoresByVerifiedFirst(
-      getOfficialStoresFromCache().filter(b => 
-        b &&
-        !isStoreDeletedFromCache(b.id) &&
-        !isStoreDeletedFromCache(b.vendorId || '') &&
-        !isStoreDeletedFromCache(b.storeId || '') &&
-        !isStoreDeletedFromCache(b.userId || '')
-      )
+      getOfficialStoresFromCache().filter(isStoreNotDeleted)
     )
   );
   const [loading, setLoading] = useState(false);
@@ -41,13 +45,7 @@ export default function AllBrands() {
         if (isMounted && data && data.length > 0) {
           setBrands(
             sortStoresByVerifiedFirst(
-              data.filter(b => 
-                b &&
-                !isStoreDeletedFromCache(b.id) &&
-                !isStoreDeletedFromCache(b.vendorId || '') &&
-                !isStoreDeletedFromCache(b.storeId || '') &&
-                !isStoreDeletedFromCache(b.userId || '')
-              )
+              data.filter(isStoreNotDeleted)
             )
           );
         }
@@ -100,13 +98,7 @@ export default function AllBrands() {
   // Ensure verified stores are always ranked first before all normal stores
   const filteredBrands = useMemo(() => {
     const list = brands
-      .filter(b => 
-        b &&
-        !isStoreDeletedFromCache(b.id) &&
-        !isStoreDeletedFromCache(b.vendorId || '') &&
-        !isStoreDeletedFromCache(b.storeId || '') &&
-        !isStoreDeletedFromCache(b.userId || '')
-      )
+      .filter(isStoreNotDeleted)
       .filter(brand => {
         const shopName = brand.shopName || brand.storeName || brand.vendorData?.shopName || brand.name || 'Vendor Shop';
         const originalName = brand.name || '';

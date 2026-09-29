@@ -116,6 +116,21 @@ async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<F
     // Network abort or offline
   }
 
+  // If requesting vendors node and it failed, fallback to stores node (stores node in RTDB holds vendor stores)
+  if (cleanPath === 'vendors') {
+    try {
+      const storesRes = await fetch(`${RTDB_BASE_URL}/stores.json`, {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (storesRes.ok) {
+        const sData = await storesRes.json();
+        if (sData && typeof sData === 'object' && !('error' in sData)) {
+          return { ok: true, data: sData as T };
+        }
+      }
+    } catch (_) {}
+  }
+
   // Same-origin fallback proxy (guarantees data delivery on custom domains like rjworldbd.com)
   if (typeof window !== 'undefined') {
     try {
@@ -155,7 +170,17 @@ async function fetchRtdbSdk<T>(cleanPath: string, timeoutMs: number): Promise<Fe
         return { ok: true, data: snap.val() as T };
       }
       return { ok: true, data: null };
-    }).catch(() => ({ ok: false, data: null }));
+    }).catch(async () => {
+      if (cleanPath === 'vendors') {
+        try {
+          const sSnap = await get(ref(rtdb, 'stores'));
+          if (sSnap && sSnap.exists()) {
+            return { ok: true, data: sSnap.val() as T };
+          }
+        } catch (_) {}
+      }
+      return { ok: false, data: null };
+    });
 
     return await Promise.race([getPromise, timeoutPromise]);
   } catch (_) {

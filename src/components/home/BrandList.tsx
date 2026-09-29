@@ -16,16 +16,17 @@ import {
 } from '../../services/storeCache';
 
 export default function BrandList() {
+  const isStoreNotDeleted = (b: CachedStore) => {
+    if (!b) return false;
+    if (b.status === 'deleted' || b.status === 'rejected') return false;
+    if (b.status === 'active' || b.status === 'approved' || b.isVerified || b.verified) return true;
+    return !isStoreDeletedFromCache(b.id);
+  };
+
   // Synchronously initialize with cached official stores with verified stores first
   const [brands, setBrands] = useState<CachedStore[]>(() => 
     sortStoresByVerifiedFirst(
-      getOfficialStoresFromCache().filter(b => 
-        b &&
-        !isStoreDeletedFromCache(b.id) &&
-        !isStoreDeletedFromCache(b.vendorId || '') &&
-        !isStoreDeletedFromCache(b.storeId || '') &&
-        !isStoreDeletedFromCache(b.userId || '')
-      )
+      getOfficialStoresFromCache().filter(isStoreNotDeleted)
     )
   );
   const navigate = useNavigate();
@@ -40,13 +41,7 @@ export default function BrandList() {
         if (isMounted && freshStores && freshStores.length > 0) {
           setBrands(
             sortStoresByVerifiedFirst(
-              freshStores.filter(b => 
-                b &&
-                !isStoreDeletedFromCache(b.id) &&
-                !isStoreDeletedFromCache(b.vendorId || '') &&
-                !isStoreDeletedFromCache(b.storeId || '') &&
-                !isStoreDeletedFromCache(b.userId || '')
-              )
+              freshStores.filter(isStoreNotDeleted)
             )
           );
         }
@@ -84,10 +79,9 @@ export default function BrandList() {
     return sortStoresByVerifiedFirst(
       brands.filter(b => 
         b &&
-        !isStoreDeletedFromCache(b.id) &&
-        !isStoreDeletedFromCache(b.vendorId || '') &&
-        !isStoreDeletedFromCache(b.storeId || '') &&
-        !isStoreDeletedFromCache(b.userId || '')
+        b.status !== 'deleted' &&
+        b.status !== 'rejected' &&
+        !isStoreDeletedFromCache(b.id)
       )
     );
   }, [brands]);

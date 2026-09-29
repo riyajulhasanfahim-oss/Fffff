@@ -152,8 +152,12 @@ function parseRTDBProducts(rtdbData: Record<string, any>, vendors: Record<string
       }
       const norm = normalizeProduct(val, key);
       const vId = norm.vendorId || val.storeId;
-      if (vId && isStoreDeletedFromCache(vId)) {
-        continue;
+      if (vId) {
+        const vStore = vendors[vId];
+        const isActivelyRegistered = vStore && (vStore.status === 'active' || vStore.status === 'approved' || vStore.isVerified);
+        if (!isActivelyRegistered && isStoreDeletedFromCache(vId)) {
+          continue;
+        }
       }
       if (norm.id) {
         combinedMap.set(norm.id, norm);

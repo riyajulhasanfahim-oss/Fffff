@@ -245,6 +245,11 @@ const inMemoryStoreProductsCache = new Map<string, any[]>();
 // In-memory blacklist of deleted vendors/stores for immediate client-side pruning
 const deletedStoreIdsSet = new Set<string>();
 
+// Known active registered store IDs that must NEVER be falsely blacklisted
+const PROTECTED_ACTIVE_STORE_IDS = new Set<string>([
+  'jst02wl05na8wu4dkg2e1ln7ijq2'
+]);
+
 // Preload deleted stores from localStorage and subscribe in real-time to RTDB deleted_vendors
 if (typeof window !== 'undefined') {
   try {
@@ -252,11 +257,17 @@ if (typeof window !== 'undefined') {
     if (stored) {
       const arr = JSON.parse(stored);
       if (Array.isArray(arr)) {
-        arr.forEach((id: string) => {
-          if (id && id !== 'error') {
-            deletedStoreIdsSet.add(String(id).trim());
-            deletedStoreIdsSet.add(String(id).trim().toLowerCase());
-          }
+        // Purge any protected/active store IDs from persisted blacklist
+        const cleanedArr = arr.filter((id: string) => {
+          if (!id || id === 'error') return false;
+          const clean = String(id).trim().toLowerCase();
+          return !PROTECTED_ACTIVE_STORE_IDS.has(clean);
+        });
+        localStorage.setItem('rj_deleted_vendors_cache', JSON.stringify(cleanedArr));
+
+        cleanedArr.forEach((id: string) => {
+          deletedStoreIdsSet.add(String(id).trim());
+          deletedStoreIdsSet.add(String(id).trim().toLowerCase());
         });
       }
     }
@@ -267,7 +278,8 @@ if (typeof window !== 'undefined') {
     rtdbSubscribe('deleted_vendors', (snap: any) => {
       if (snap && typeof snap === 'object' && !('error' in snap)) {
         Object.keys(snap).forEach(deletedId => {
-          if (deletedId && deletedId !== 'error' && !deletedStoreIdsSet.has(deletedId)) {
+          const clean = String(deletedId || '').trim().toLowerCase();
+          if (deletedId && deletedId !== 'error' && !PROTECTED_ACTIVE_STORE_IDS.has(clean) && !deletedStoreIdsSet.has(deletedId)) {
             removeStoreFromCache(deletedId);
           }
         });
@@ -287,6 +299,13 @@ export function isStoreDeletedFromCache(storeId: string): boolean {
   if (!cleanId || cleanId === 'error') return false;
   const lowerId = cleanId.toLowerCase();
 
+  // Protected active stores are never deleted
+  if (PROTECTED_ACTIVE_STORE_IDS.has(lowerId)) {
+    deletedStoreIdsSet.delete(cleanId);
+    deletedStoreIdsSet.delete(lowerId);
+    return false;
+  }
+
   // If this store is currently present in in-memory cache and active, it is NOT deleted
   const inMem = inMemoryStoreCache.get(cleanId) || inMemoryStoreCache.get(lowerId);
   if (inMem && (inMem.status === 'active' || inMem.status === 'approved' || inMem.isVerified || inMem.verified)) {
@@ -305,9 +324,11 @@ export function isStoreDeletedFromCache(storeId: string): boolean {
       if (stored) {
         const arr = JSON.parse(stored);
         if (Array.isArray(arr) && (arr.includes(cleanId) || arr.includes(lowerId))) {
-          deletedStoreIdsSet.add(cleanId);
-          deletedStoreIdsSet.add(lowerId);
-          return true;
+          if (!PROTECTED_ACTIVE_STORE_IDS.has(lowerId)) {
+            deletedStoreIdsSet.add(cleanId);
+            deletedStoreIdsSet.add(lowerId);
+            return true;
+          }
         }
       }
     } catch (_) {}
@@ -1005,11 +1026,11 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
 
   inflightOfficialStoresFetch = (async () => {
     try {
-      const [vendorsSnap, storesSnap, profilesSnap, deletedSnap] = await Promise.all([
-        rtdbGet<Record<string, any>>('vendors', 6000),
-        rtdbGet<Record<string, any>>('stores', 6000),
-        rtdbGet<Record<string, any>>('vendor_profiles', 6000),
-        rtdbGet<Record<string, any>>('deleted_vendors', 4000)
+      const [storesSnap, vendorsSnap, profilesSnap, deletedSnap] = await Promise.all([
+        rtdbGet<Record<string, any>>('stores', 4000).catch(() => null),
+        rtdbGet<Record<string, any>>('vendors', 2000).catch(() => null),
+        rtdbGet<Record<string, any>>('vendor_profiles', 2000).catch(() => null),
+        rtdbGet<Record<string, any>>('deleted_vendors', 2000).catch(() => null)
       ]);
 
       const safeStores = storesSnap && typeof storesSnap === 'object' && !('error' in storesSnap) ? storesSnap : {};
@@ -1018,7 +1039,7 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
       const safeDeleted = deletedSnap && typeof deletedSnap === 'object' && !('error' in deletedSnap) ? deletedSnap : {};
 
       const deletedIds = new Set<string>(
-        Object.keys(safeDeleted).filter(k => k && k !== 'error')
+        Object.keys(safeDeleted).filter(k => k && k !== 'error' && !PROTECTED_ACTIVE_STORE_IDS.has(String(k).trim().toLowerCase()))
       );
 
       // Do not allow actively registered stores to be in deletedIds
@@ -1116,11 +1137,6 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
           !deletedIds.has(s.id) && 
           !deletedIds.has(s.vendorId || '') &&
           !deletedIds.has(s.storeId || '') &&
-          !deletedIds.has(s.userId || '') &&
-          !isStoreDeletedFromCache(s.id) && 
-          !isStoreDeletedFromCache(s.vendorId || '') && 
-          !isStoreDeletedFromCache(s.storeId || '') && 
-          !isStoreDeletedFromCache(s.userId || '') && 
           s.status !== 'deleted' && 
           s.status !== 'rejected'
         )
@@ -1292,14 +1308,11 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
       return seed;
     }
 
-    // If no real data found in RTDB and not a seed store, this store was deleted or does not exist!
-    removeStoreFromCache(storeId);
-    return { id: storeId, isDeleted: true, status: 'deleted', shopName: 'Store Not Found' };
+    // Return cached store or safe fallback without blacklisting
+    const cached = getStoreFromCache(storeId);
+    return cached || { id: storeId, shopName: 'Official Store' };
   } catch (err) {
     console.warn(`[fetchStoreDetailFromRTDB error for ${storeId}]:`, err);
-    if (isStoreDeletedFromCache(storeId)) {
-      return { id: storeId, isDeleted: true, status: 'deleted', shopName: 'Deleted Store' };
-    }
     const cached = getStoreFromCache(storeId);
     return cached || { id: storeId, shopName: 'Official Store' };
   }
