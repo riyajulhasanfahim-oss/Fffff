@@ -431,7 +431,13 @@ export default function OrderDetails() {
       }
 
       if (!orderData) {
-        const mData = await rtdbGet<any>(`orders/${id}`);
+        let mData = await rtdbGet<any>(`orders/${id}`);
+        if (!mData && id && id.includes('_')) {
+          mData = await rtdbGet<any>(`orders/${id.split('_')[0]}`);
+        }
+        if (!mData && user && id) {
+          mData = await rtdbGet<any>(`orders/${id}_${user.uid}`);
+        }
         if (mData) {
           const vItems = (mData.items || []).filter((it: any) => !it.vendorId || it.vendorId === user?.uid);
           const vSub = vItems.reduce((acc: number, it: any) => acc + ((it.price || 0) * (it.quantity || 1)), 0);

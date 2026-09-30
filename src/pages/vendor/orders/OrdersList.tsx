@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe, invalidateRtdbCache } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Search, Filter, Eye, Clock, CheckCircle, Package, Truck, 
@@ -130,6 +130,8 @@ export default function OrdersList() {
     const debouncedFetch = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
+        invalidateRtdbCache('orders');
+        invalidateRtdbCache('vendor_orders');
         fetchOrders();
       }, 300);
     };
@@ -156,15 +158,43 @@ export default function OrdersList() {
     if (!user) return;
     try {
       const [vOrdersList, mainOrdersList] = await Promise.all([
-        rtdbList<any>('vendor_orders', (item) => item.vendorId === user.uid),
-        rtdbList<any>('orders', (item) => item.vendorId === user.uid || (item.items && item.items.some((i: any) => i.vendorId === user.uid)))
+        rtdbList<any>('vendor_orders', (item, id) => {
+          if (!item) return false;
+          if (item.vendorId === user.uid) return true;
+          if (id && (id.endsWith(`_${user.uid}`) || id.includes(user.uid))) return true;
+          return false;
+        }),
+        rtdbList<any>('orders', (item, id) => {
+          if (!item) return false;
+          if (item.vendorId === user.uid) return true;
+          if (id && (id.endsWith(`_${user.uid}`) || id.includes(user.uid))) return true;
+          if (item.vendorIds) {
+            if (Array.isArray(item.vendorIds) && item.vendorIds.includes(user.uid)) return true;
+            if (typeof item.vendorIds === 'object' && Object.values(item.vendorIds).includes(user.uid)) return true;
+          }
+          if (item.storeId === user.uid || item.sellerId === user.uid) return true;
+          const itemsList = Array.isArray(item.items)
+            ? item.items
+            : (item.items && typeof item.items === 'object' ? Object.values(item.items) : []);
+          return itemsList.some((i: any) => i && (i.vendorId === user.uid || i.storeId === user.uid || i.sellerId === user.uid));
+        })
       ]);
 
-      const items: any[] = vOrdersList.map(v => {
-        const vData = { id: v.id, ...v.data };
-        const breakdown = calculateOrderPaymentBreakdown(vData);
+      const items: any[] = [];
+      const seenOrderIds = new Set<string>();
 
-        const mainOrder = mainOrdersList.find(m => m.id === vData.orderId || m.id === vData.mainOrderId || m.data?.orderId === vData.orderId);
+      // 1. Process vendor_orders (if any)
+      vOrdersList.forEach(v => {
+        const vData = { id: v.id, ...v.data };
+        const cleanId = v.id;
+        const pureOrderId = (vData.orderId || vData.mainOrderId || (cleanId.includes('_') ? cleanId.split('_')[0] : cleanId)).trim();
+
+        seenOrderIds.add(cleanId);
+        if (pureOrderId) seenOrderIds.add(pureOrderId);
+
+        const breakdown = calculateOrderPaymentBreakdown(vData);
+        const mainOrder = mainOrdersList.find(m => m.id === pureOrderId || m.id === vData.orderId || m.data?.orderId === pureOrderId || m.data?.orderId === vData.orderId);
+
         const isDelivered = 
           vData.status === 'Delivered' || 
           vData.vendorStatus === 'Delivered' ||
@@ -172,56 +202,90 @@ export default function OrdersList() {
           mainOrder?.data?.vendorStatus === 'Delivered' ||
           ((vData.reviewSubmitted || vData.reviewCompleted || mainOrder?.data?.reviewSubmitted || mainOrder?.data?.reviewCompleted) && (breakdown.isCod || mainOrder?.data?.paymentMethod === 'cod'));
 
-        return {
+        const rawItems = Array.isArray(vData.items) ? vData.items : (vData.items && typeof vData.items === 'object' ? Object.values(vData.items) : (mainOrder?.data?.items ? (Array.isArray(mainOrder.data.items) ? mainOrder.data.items : Object.values(mainOrder.data.items)) : []));
+        const vItems = rawItems.filter((it: any) => !it?.vendorId || it?.vendorId === user.uid || it?.storeId === user.uid);
+
+        items.push({
           ...vData,
+          id: cleanId,
+          orderId: vData.orderId || pureOrderId || cleanId,
+          mainOrderId: vData.mainOrderId || pureOrderId || cleanId,
+          vendorId: user.uid,
+          customerId: vData.customerId || vData.userId || mainOrder?.data?.userId || '',
+          customerName: vData.customerName || vData.shippingAddress?.name || mainOrder?.data?.shippingAddress?.name || mainOrder?.data?.customerName || 'Customer',
+          customerEmail: vData.customerEmail || vData.shippingAddress?.email || mainOrder?.data?.shippingAddress?.email || mainOrder?.data?.customerEmail || '',
+          customerPhone: vData.customerPhone || vData.shippingAddress?.mobile || vData.shippingAddress?.phone || mainOrder?.data?.shippingAddress?.mobile || '',
+          itemsCount: vItems.length || rawItems.length || 1,
+          items: vItems.length > 0 ? vItems : rawItems,
+          itemsPrice: vData.itemsPrice || breakdown.itemsPrice,
+          subtotal: vData.subtotal || breakdown.itemsPrice || vData.total,
+          deliveryCharge: vData.deliveryCharge ?? breakdown.deliveryCharge ?? 0,
+          grandTotal: vData.grandTotal || breakdown.grandTotal,
+          advancePaymentAmount: vData.advancePaymentAmount ?? breakdown.advanceAmount ?? 0,
+          paidAmount: vData.paidAmount ?? breakdown.advanceAmount ?? 0,
+          codAmount: vData.codAmount ?? breakdown.codAmount ?? 0,
+          isFullPayment: vData.isFullPayment ?? breakdown.isFullPayment,
+          paymentMethod: vData.paymentMethod || mainOrder?.data?.paymentMethod || 'Cash on Delivery',
+          paymentStatus: vData.paymentStatus || mainOrder?.data?.paymentStatus || 'Pending',
           status: isDelivered ? 'Delivered' : (vData.status || mainOrder?.data?.status || 'Pending'),
           vendorStatus: isDelivered ? 'Delivered' : (vData.vendorStatus || mainOrder?.data?.vendorStatus || vData.status || 'Pending'),
-          itemsPrice: breakdown.itemsPrice,
-          deliveryCharge: breakdown.deliveryCharge,
-          grandTotal: breakdown.grandTotal,
-          advancePaymentAmount: breakdown.advanceAmount,
-          paidAmount: breakdown.advanceAmount,
-          codAmount: breakdown.codAmount,
-          isFullPayment: breakdown.isFullPayment
-        };
+          courierName: vData.courierName || mainOrder?.data?.courierName || '',
+          trackingNumber: vData.trackingNumber || vData.trackingId || mainOrder?.data?.trackingNumber || mainOrder?.data?.trackingId || '',
+          trackingId: vData.trackingNumber || vData.trackingId || mainOrder?.data?.trackingNumber || mainOrder?.data?.trackingId || '',
+          trackingUrl: vData.trackingUrl || mainOrder?.data?.trackingUrl || '',
+          createdAt: vData.createdAt || mainOrder?.data?.createdAt || Date.now(),
+          shippingAddress: vData.shippingAddress || mainOrder?.data?.shippingAddress,
+        });
       });
 
+      // 2. Process mainOrdersList from 'orders' node
       mainOrdersList.forEach(({ id: docId, data: oData }) => {
-        if (!items.some(it => it.orderId === docId || it.id === docId || it.mainOrderId === docId)) {
-          const vItems = (oData.items || []).filter((it: any) => !it.vendorId || it.vendorId === user.uid);
-          const breakdown = calculateOrderPaymentBreakdown(oData);
+        const pureOrderId = (oData.orderId || (docId.includes('_') ? docId.split('_')[0] : docId)).trim();
 
-          items.push({
-            id: docId,
-            orderId: oData.orderId || docId,
-            mainOrderId: docId,
-            vendorId: user.uid,
-            customerId: oData.userId,
-            customerName: oData.shippingAddress?.name || 'Customer',
-            customerEmail: oData.shippingAddress?.email || '',
-            customerPhone: oData.shippingAddress?.mobile || '',
-            itemsCount: vItems.length || (oData.items || []).length,
-            itemsPrice: breakdown.itemsPrice,
-            subtotal: breakdown.itemsPrice || oData.total,
-            deliveryCharge: breakdown.deliveryCharge,
-            grandTotal: breakdown.grandTotal,
-            advancePaymentAmount: breakdown.advanceAmount,
-            paidAmount: breakdown.advanceAmount,
-            codAmount: breakdown.codAmount,
-            isFullPayment: breakdown.isFullPayment,
-            paymentMethod: oData.paymentMethod,
-            paymentStatus: oData.paymentStatus,
-            status: (oData.status === 'Delivered' || ((oData.reviewSubmitted || oData.reviewCompleted) && (breakdown.isCod || oData.paymentGateway === 'Cash on Delivery'))) ? 'Delivered' : (oData.status || 'Pending'),
-            vendorStatus: (oData.status === 'Delivered' || oData.vendorStatus === 'Delivered' || ((oData.reviewSubmitted || oData.reviewCompleted) && (breakdown.isCod || oData.paymentGateway === 'Cash on Delivery'))) ? 'Delivered' : (oData.vendorStatus || oData.status || 'Pending'),
-            courierName: oData.courierName || '',
-            trackingNumber: oData.trackingNumber || oData.trackingId || '',
-            trackingId: oData.trackingNumber || oData.trackingId || '',
-            trackingUrl: oData.trackingUrl || '',
-            createdAt: oData.createdAt || Date.now(),
-            shippingAddress: oData.shippingAddress,
-            isFromMainOrders: true
-          });
+        if (seenOrderIds.has(docId) || seenOrderIds.has(pureOrderId)) {
+          return;
         }
+        seenOrderIds.add(docId);
+        if (pureOrderId) seenOrderIds.add(pureOrderId);
+
+        const rawItems = Array.isArray(oData.items) ? oData.items : (oData.items && typeof oData.items === 'object' ? Object.values(oData.items) : []);
+        const vItems = rawItems.filter((it: any) => !it?.vendorId || it?.vendorId === user.uid || it?.storeId === user.uid);
+        const breakdown = calculateOrderPaymentBreakdown(oData);
+
+        const isDelivered = oData.status === 'Delivered' || oData.vendorStatus === 'Delivered' || ((oData.reviewSubmitted || oData.reviewCompleted) && (breakdown.isCod || oData.paymentGateway === 'Cash on Delivery' || oData.paymentMethod === 'cod'));
+
+        items.push({
+          ...oData,
+          id: docId,
+          orderId: oData.orderId || pureOrderId || docId,
+          mainOrderId: oData.mainOrderId || pureOrderId || docId,
+          vendorId: user.uid,
+          customerId: oData.userId || oData.customerId || '',
+          customerName: oData.customerName || oData.shippingAddress?.name || 'Customer',
+          customerEmail: oData.customerEmail || oData.shippingAddress?.email || '',
+          customerPhone: oData.customerPhone || oData.shippingAddress?.mobile || oData.shippingAddress?.phone || '',
+          itemsCount: vItems.length || rawItems.length || 1,
+          items: vItems.length > 0 ? vItems : rawItems,
+          itemsPrice: breakdown.itemsPrice || oData.itemsPrice || oData.subtotal || oData.total,
+          subtotal: breakdown.itemsPrice || oData.subtotal || oData.total,
+          deliveryCharge: breakdown.deliveryCharge ?? oData.deliveryCharge ?? oData.shippingCharge ?? 0,
+          grandTotal: breakdown.grandTotal || oData.grandTotal || oData.total,
+          advancePaymentAmount: breakdown.advanceAmount ?? oData.advancePaymentAmount ?? 0,
+          paidAmount: breakdown.advanceAmount ?? oData.paidAmount ?? 0,
+          codAmount: breakdown.codAmount ?? oData.codAmount ?? 0,
+          isFullPayment: breakdown.isFullPayment ?? oData.isFullPayment,
+          paymentMethod: oData.paymentMethod || 'Cash on Delivery',
+          paymentStatus: oData.paymentStatus || 'Pending',
+          status: isDelivered ? 'Delivered' : (oData.status || 'Pending'),
+          vendorStatus: isDelivered ? 'Delivered' : (oData.vendorStatus || oData.status || 'Pending'),
+          courierName: oData.courierName || '',
+          trackingNumber: oData.trackingNumber || oData.trackingId || '',
+          trackingId: oData.trackingNumber || oData.trackingId || '',
+          trackingUrl: oData.trackingUrl || '',
+          createdAt: oData.createdAt || Date.now(),
+          shippingAddress: oData.shippingAddress,
+          isFromMainOrders: true
+        });
       });
 
       setOrders(items);
@@ -419,13 +483,21 @@ export default function OrdersList() {
   };
 
   const filteredOrders = orders.filter(order => {
-    const matchesSearch = 
-      (order.orderId?.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.customerName?.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.customerEmail?.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.courierName?.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.trackingNumber?.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.trackingId?.toLowerCase().includes(searchTerm.toLowerCase()));
+    const term = searchTerm.trim().toLowerCase();
+    const matchesSearch = !term || Boolean(
+      (order.orderId && String(order.orderId).toLowerCase().includes(term)) ||
+      (order.id && String(order.id).toLowerCase().includes(term)) ||
+      (order.mainOrderId && String(order.mainOrderId).toLowerCase().includes(term)) ||
+      (order.customerName && String(order.customerName).toLowerCase().includes(term)) ||
+      (order.customerEmail && String(order.customerEmail).toLowerCase().includes(term)) ||
+      (order.customerPhone && String(order.customerPhone).toLowerCase().includes(term)) ||
+      (order.shippingAddress?.name && String(order.shippingAddress.name).toLowerCase().includes(term)) ||
+      (order.shippingAddress?.mobile && String(order.shippingAddress.mobile).toLowerCase().includes(term)) ||
+      (order.shippingAddress?.phone && String(order.shippingAddress.phone).toLowerCase().includes(term)) ||
+      (order.courierName && String(order.courierName).toLowerCase().includes(term)) ||
+      (order.trackingNumber && String(order.trackingNumber).toLowerCase().includes(term)) ||
+      (order.trackingId && String(order.trackingId).toLowerCase().includes(term))
+    );
     
     const matchesStatus = statusFilter === 'All' 
       || (statusFilter === 'Pending' 
@@ -446,10 +518,10 @@ export default function OrdersList() {
       }
     }
     
-    return matchesSearch && matchesStatus && matchesDate;
+    return Boolean(matchesSearch && matchesStatus && matchesDate);
   }).sort((a, b) => {
-    const tA = a.createdAt || 0;
-    const tB = b.createdAt || 0;
+    const tA = Number(a.createdAt) || 0;
+    const tB = Number(b.createdAt) || 0;
     return sortBy === 'Newest' ? tB - tA : tA - tB;
   });
 
@@ -571,7 +643,7 @@ export default function OrdersList() {
                 <div key={order.id} className="p-3 hover:bg-gray-50/80 transition-colors">
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-gray-900">#{order.orderId?.substring(0, 8)}</span>
+                      <span className="text-xs font-bold text-gray-900">#{String(order.orderId || order.id || '').substring(0, 16)}</span>
                       {Boolean(order.isResellerOrder || order.resellerId || order.profitStatus) && (
                         <span className="px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-purple-100 text-purple-700 border border-purple-200">
                           Reseller
@@ -777,7 +849,7 @@ export default function OrdersList() {
                     <tr key={order.id} className="bg-white hover:bg-gray-50/70 transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-gray-900">#{order.orderId?.substring(0, 8)}</span>
+                          <span className="text-xs font-bold text-gray-900">#{String(order.orderId || order.id || '').substring(0, 16)}</span>
                           {Boolean(order.isResellerOrder || order.resellerId || order.profitStatus) && (
                             <span className="px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-purple-100 text-purple-700 border border-purple-200">
                               Reseller

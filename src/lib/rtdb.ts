@@ -769,6 +769,7 @@ function dispatchToSubscribers(path: string, data: any, isPartial = false) {
   if (json !== channel.lastJson) {
     channel.lastData = merged;
     channel.lastJson = json;
+    memoryCache.set(path, { data: merged, timestamp: Date.now() });
     channel.callbacks.forEach(cb => {
       try {
         cb(merged);
