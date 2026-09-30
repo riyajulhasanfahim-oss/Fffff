@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
+import { useVendorStore } from '../../../context/VendorStoreContext';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe, invalidateRtdbCache } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
@@ -10,12 +11,20 @@ import {
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { getCourierTrackingUrl, calculateOrderPaymentBreakdown } from '../../../services/vendorPayoutService';
-import { getVendorWalletBalances, confirmVendorResellerOrder, isResellerOrderRecord } from '../../../services/vendorResellerOrderService';
+import { 
+  getVendorWalletBalances, 
+  confirmVendorResellerOrder, 
+  isResellerOrderRecord,
+  getAuthenticatedVendorIds,
+  checkIsAdminUser,
+  isOrderOwnedByVendor
+} from '../../../services/vendorResellerOrderService';
 import CourierVerificationModal from '../../../components/vendor/CourierVerificationModal';
 import VendorCancelOrderModal from '../../../components/vendor/VendorCancelOrderModal';
 
 export default function OrdersList() {
-  const { user } = useAuth();
+  const { user, userData, loading: authLoading, isAdmin } = useAuth();
+  const { vendorInfo } = useVendorStore();
   const navigate = useNavigate();
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -120,6 +129,7 @@ export default function OrdersList() {
   });
 
   useEffect(() => {
+    if (authLoading) return;
     if (!user) {
       setLoading(false);
       return;
@@ -152,36 +162,33 @@ export default function OrdersList() {
       unsubOrders();
       window.removeEventListener('vendor_order_updated', handleVendorOrderEvent);
     };
-  }, [user?.uid]);
+  }, [user?.uid, authLoading, vendorInfo?.vendorId, vendorInfo?.storeId]);
 
   const fetchOrders = async () => {
     if (!user) return;
+    const vendorIds = getAuthenticatedVendorIds(user, userData, vendorInfo);
+    const isUserAdmin = checkIsAdminUser(user, userData) || isAdmin;
+
     try {
       const [vOrdersList, mainOrdersList] = await Promise.all([
-        rtdbList<any>('vendor_orders', (item, id) => {
-          if (!item) return false;
-          if (item.vendorId === user.uid) return true;
-          if (id && (id.endsWith(`_${user.uid}`) || id.includes(user.uid))) return true;
-          return false;
-        }),
-        rtdbList<any>('orders', (item, id) => {
-          if (!item) return false;
-          if (item.vendorId === user.uid) return true;
-          if (id && (id.endsWith(`_${user.uid}`) || id.includes(user.uid))) return true;
-          if (item.vendorIds) {
-            if (Array.isArray(item.vendorIds) && item.vendorIds.includes(user.uid)) return true;
-            if (typeof item.vendorIds === 'object' && Object.values(item.vendorIds).includes(user.uid)) return true;
-          }
-          if (item.storeId === user.uid || item.sellerId === user.uid) return true;
-          const itemsList = Array.isArray(item.items)
-            ? item.items
-            : (item.items && typeof item.items === 'object' ? Object.values(item.items) : []);
-          return itemsList.some((i: any) => i && (i.vendorId === user.uid || i.storeId === user.uid || i.sellerId === user.uid));
-        })
+        rtdbList<any>('vendor_orders', (item, id) => isOrderOwnedByVendor(item, vendorIds, isUserAdmin, id)),
+        rtdbList<any>('orders', (item, id) => isOrderOwnedByVendor(item, vendorIds, isUserAdmin, id))
       ]);
 
       const items: any[] = [];
       const seenOrderIds = new Set<string>();
+
+      // Helper to check item ownership
+      const isMyItem = (it: any) => 
+        !it?.vendorId || 
+        isUserAdmin || 
+        Array.from(vendorIds).some(vid => 
+          String(it.vendorId).trim() === vid || 
+          String(it.vendorUID).trim() === vid || 
+          String(it.vendorUid).trim() === vid || 
+          String(it.storeId).trim() === vid || 
+          String(it.sellerId).trim() === vid
+        );
 
       // 1. Process vendor_orders (if any)
       vOrdersList.forEach(v => {
@@ -203,14 +210,14 @@ export default function OrdersList() {
           ((vData.reviewSubmitted || vData.reviewCompleted || mainOrder?.data?.reviewSubmitted || mainOrder?.data?.reviewCompleted) && (breakdown.isCod || mainOrder?.data?.paymentMethod === 'cod'));
 
         const rawItems = Array.isArray(vData.items) ? vData.items : (vData.items && typeof vData.items === 'object' ? Object.values(vData.items) : (mainOrder?.data?.items ? (Array.isArray(mainOrder.data.items) ? mainOrder.data.items : Object.values(mainOrder.data.items)) : []));
-        const vItems = rawItems.filter((it: any) => !it?.vendorId || it?.vendorId === user.uid || it?.storeId === user.uid);
+        const vItems = isUserAdmin ? rawItems : rawItems.filter(isMyItem);
 
         items.push({
           ...vData,
           id: cleanId,
           orderId: vData.orderId || pureOrderId || cleanId,
           mainOrderId: vData.mainOrderId || pureOrderId || cleanId,
-          vendorId: user.uid,
+          vendorId: vData.vendorId || user.uid,
           customerId: vData.customerId || vData.userId || mainOrder?.data?.userId || '',
           customerName: vData.customerName || vData.shippingAddress?.name || mainOrder?.data?.shippingAddress?.name || mainOrder?.data?.customerName || 'Customer',
           customerEmail: vData.customerEmail || vData.shippingAddress?.email || mainOrder?.data?.shippingAddress?.email || mainOrder?.data?.customerEmail || '',
@@ -249,7 +256,7 @@ export default function OrdersList() {
         if (pureOrderId) seenOrderIds.add(pureOrderId);
 
         const rawItems = Array.isArray(oData.items) ? oData.items : (oData.items && typeof oData.items === 'object' ? Object.values(oData.items) : []);
-        const vItems = rawItems.filter((it: any) => !it?.vendorId || it?.vendorId === user.uid || it?.storeId === user.uid);
+        const vItems = isUserAdmin ? rawItems : rawItems.filter(isMyItem);
         const breakdown = calculateOrderPaymentBreakdown(oData);
 
         const isDelivered = oData.status === 'Delivered' || oData.vendorStatus === 'Delivered' || ((oData.reviewSubmitted || oData.reviewCompleted) && (breakdown.isCod || oData.paymentGateway === 'Cash on Delivery' || oData.paymentMethod === 'cod'));
@@ -259,7 +266,7 @@ export default function OrdersList() {
           id: docId,
           orderId: oData.orderId || pureOrderId || docId,
           mainOrderId: oData.mainOrderId || pureOrderId || docId,
-          vendorId: user.uid,
+          vendorId: oData.vendorId || user.uid,
           customerId: oData.userId || oData.customerId || '',
           customerName: oData.customerName || oData.shippingAddress?.name || 'Customer',
           customerEmail: oData.customerEmail || oData.shippingAddress?.email || '',
@@ -290,17 +297,20 @@ export default function OrdersList() {
 
       setOrders(items);
       
-      // Calculate stats
+      // Calculate stats with normalized status matching
       const s = {
         total: items.length,
-        pending: items.filter(i => i.status === 'Pending' || i.status === 'Confirmed' || (!['Accepted', 'Shipped', 'In Transit', 'Out for Delivery', 'Delivered', 'Cancelled', 'Refunded', 'Rejected', 'Returned'].includes(i.status) && !i.acceptedAt)).length,
-        accepted: items.filter(i => i.status === 'Accepted').length,
-        shipped: items.filter(i => i.status === 'Shipped').length,
-        inTransit: items.filter(i => i.status === 'In Transit').length,
-        outForDelivery: items.filter(i => i.status === 'Out for Delivery').length,
-        delivered: items.filter(i => i.status === 'Delivered').length,
-        rejected: items.filter(i => i.status === 'Rejected').length,
-        cancelled: items.filter(i => ['Cancelled', 'Refunded'].includes(i.status)).length,
+        pending: items.filter(i => {
+          const st = String(i.status || 'Pending').trim().toLowerCase();
+          return st === 'pending' || st === 'confirmed' || (!['accepted', 'shipped', 'in transit', 'out for delivery', 'delivered', 'cancelled', 'refunded', 'rejected', 'returned'].includes(st) && !i.acceptedAt);
+        }).length,
+        accepted: items.filter(i => String(i.status || '').trim().toLowerCase() === 'accepted').length,
+        shipped: items.filter(i => String(i.status || '').trim().toLowerCase() === 'shipped').length,
+        inTransit: items.filter(i => String(i.status || '').trim().toLowerCase() === 'in transit').length,
+        outForDelivery: items.filter(i => String(i.status || '').trim().toLowerCase() === 'out for delivery').length,
+        delivered: items.filter(i => String(i.status || '').trim().toLowerCase() === 'delivered').length,
+        rejected: items.filter(i => String(i.status || '').trim().toLowerCase() === 'rejected').length,
+        cancelled: items.filter(i => ['cancelled', 'refunded'].includes(String(i.status || '').trim().toLowerCase())).length,
       };
       setStats(s);
     } catch (error) {
@@ -499,22 +509,39 @@ export default function OrdersList() {
       (order.trackingId && String(order.trackingId).toLowerCase().includes(term))
     );
     
-    const matchesStatus = statusFilter === 'All' 
-      || (statusFilter === 'Pending' 
-        ? (order.status === 'Pending' || order.status === 'Confirmed' || (!['Accepted', 'Shipped', 'In Transit', 'Out for Delivery', 'Delivered', 'Cancelled', 'Refunded', 'Rejected', 'Returned'].includes(order.status) && !order.acceptedAt)) 
-        : order.status === statusFilter);
+    const statusVal = String(order.status || 'Pending').trim().toLowerCase();
+    const vendorStatusVal = String(order.vendorStatus || '').trim().toLowerCase();
+    const vendorOrderStatusVal = String(order.vendorOrderStatus || '').trim().toLowerCase();
+    const profitStatusVal = String(order.profitStatus || '').trim().toLowerCase();
+
+    const isPendingOrder = 
+      statusVal === 'pending' || 
+      statusVal === 'confirmed' || 
+      vendorStatusVal === 'pending' ||
+      vendorOrderStatusVal === 'pending' ||
+      profitStatusVal === 'pending' ||
+      (!['accepted', 'shipped', 'in transit', 'out for delivery', 'delivered', 'cancelled', 'refunded', 'rejected', 'returned'].includes(statusVal) && !order.acceptedAt);
+
+    const matchesStatus = !statusFilter || statusFilter === 'All' 
+      || (statusFilter.toLowerCase() === 'pending' 
+        ? isPendingOrder 
+        : (statusVal === statusFilter.toLowerCase() || vendorStatusVal === statusFilter.toLowerCase()));
     
     let matchesDate = true;
     if (dateFilter !== 'All Time' && order.createdAt) {
-      const orderDate = new Date(order.createdAt);
-      const now = new Date();
-      if (dateFilter === 'Today') {
-        matchesDate = orderDate.toDateString() === now.toDateString();
-      } else if (dateFilter === 'This Week') {
-        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        matchesDate = orderDate >= weekAgo;
-      } else if (dateFilter === 'This Month') {
-        matchesDate = orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear();
+      let orderTime = Number(order.createdAt) || new Date(order.createdAt).getTime();
+      if (!isNaN(orderTime)) {
+        if (orderTime < 1e11) orderTime *= 1000; // convert seconds to ms if needed
+        const orderDate = new Date(orderTime);
+        const now = new Date();
+        if (dateFilter === 'Today') {
+          matchesDate = orderDate.toDateString() === now.toDateString();
+        } else if (dateFilter === 'This Week') {
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          matchesDate = orderDate >= weekAgo;
+        } else if (dateFilter === 'This Month') {
+          matchesDate = orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear();
+        }
       }
     }
     
@@ -621,7 +648,7 @@ export default function OrdersList() {
 
         {/* Mobile Order Cards (Visible on mobile) */}
         <div className="block md:hidden divide-y divide-gray-100">
-          {loading ? (
+          {loading || authLoading ? (
             Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="p-3 animate-pulse space-y-2">
                 <div className="h-3.5 bg-gray-200 rounded w-1/3"></div>
@@ -818,7 +845,7 @@ export default function OrdersList() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {loading ? (
+              {loading || authLoading ? (
                 // Skeleton loading
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="animate-pulse">

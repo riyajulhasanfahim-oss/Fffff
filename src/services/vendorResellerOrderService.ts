@@ -136,7 +136,8 @@ export function isResellerOrderRecord(order: any): boolean {
     order.resellerUserId || 
     order.reseller_id || 
     order.priceSnapshot?.resellerId || 
-    order.resellerPriceSnapshot?.resellerId;
+    order.resellerPriceSnapshot?.resellerId ||
+    order.resellerOrderRecord?.resellerId;
   if (
     resellerId && 
     typeof resellerId === 'string' && 
@@ -164,18 +165,32 @@ export function isResellerOrderRecord(order: any): boolean {
     return true;
   }
 
-  // 5. Stored price snapshot reseller profit
+  // 5. Stored price snapshots / records (presence of object or profit amount)
+  if (order.resellerPriceSnapshot && typeof order.resellerPriceSnapshot === 'object') {
+    return true;
+  }
+  if (order.resellerOrderRecord && typeof order.resellerOrderRecord === 'object') {
+    return true;
+  }
+  if (order.priceSnapshot && typeof order.priceSnapshot === 'object') {
+    if (order.priceSnapshot.resellerId || order.priceSnapshot.resellerProfit !== undefined || order.priceSnapshot.resellerProfitAmount !== undefined) {
+      return true;
+    }
+  }
+
   const snapshotProfit = 
     order.priceSnapshot?.resellerProfit ?? 
     order.resellerPriceSnapshot?.resellerProfit ?? 
     order.priceSnapshot?.resellerProfitAmount ?? 
     order.resellerPriceSnapshot?.resellerProfitAmount ?? 
     order.lockedProfitAmount;
-  if (snapshotProfit !== undefined && snapshotProfit !== null && Number(snapshotProfit) > 0) {
-    return true;
+  if (snapshotProfit !== undefined && snapshotProfit !== null && Number(snapshotProfit) >= 0) {
+    if (Number(snapshotProfit) > 0 || order.priceSnapshot?.resellerId || order.resellerPriceSnapshot?.resellerId) {
+      return true;
+    }
   }
 
-  // 6. Direct resellerProfit field > 0
+  // 6. Direct resellerProfit field
   if (order.resellerProfit !== undefined && order.resellerProfit !== null && Number(order.resellerProfit) > 0) {
     return true;
   }
@@ -549,7 +564,28 @@ export async function confirmVendorResellerOrder(
     isResellerOrderRecord(order) ||
     isResellerOrderRecord(existingOrderData) ||
     isResellerOrderRecord(resellerOrderData) ||
-    isResellerOrderRecord(mainOrderData)
+    isResellerOrderRecord(mainOrderData) ||
+    order?.isResellerOrder ||
+    order?.resellerId ||
+    order?.profitStatus ||
+    order?.priceSnapshot ||
+    order?.resellerPriceSnapshot ||
+    order?.resellerOrderRecord ||
+    existingOrderData?.isResellerOrder ||
+    existingOrderData?.resellerId ||
+    existingOrderData?.profitStatus ||
+    existingOrderData?.priceSnapshot ||
+    existingOrderData?.resellerPriceSnapshot ||
+    existingOrderData?.resellerOrderRecord ||
+    mainOrderData?.isResellerOrder ||
+    mainOrderData?.resellerId ||
+    mainOrderData?.profitStatus ||
+    mainOrderData?.priceSnapshot ||
+    mainOrderData?.resellerPriceSnapshot ||
+    mainOrderData?.resellerOrderRecord ||
+    resellerOrderData?.isResellerOrder ||
+    resellerOrderData?.resellerId ||
+    resellerOrderData?.profitStatus
   );
   if (!isReseller) {
     return { success: false, error: 'NOT_RESELLER_ORDER', message: 'This is not a reseller order' };
@@ -558,10 +594,10 @@ export async function confirmVendorResellerOrder(
   // Ensure normalized reseller flags
   order.isResellerOrder = true;
   if (!order.profitStatus || order.profitStatus === 'null') {
-    order.profitStatus = 'PENDING';
+    order.profitStatus = existingOrderData?.profitStatus || resellerOrderData?.profitStatus || 'PENDING';
   }
   if (!order.resellerId) {
-    order.resellerId = resellerOrderData?.resellerId || mainOrderData?.resellerId || existingOrderData?.resellerId || order.resellerUID || order.resellerUid || '';
+    order.resellerId = existingOrderData?.resellerId || resellerOrderData?.resellerId || mainOrderData?.resellerId || order.resellerUID || order.resellerUid || '';
   }
 
   // 3. Duplicate Confirmation & Lock Prevention
@@ -990,4 +1026,154 @@ export async function getVendorResellerLockedProfit(vendorId: string): Promise<n
     console.error('Error fetching vendor reseller locked profit:', err);
     return 0;
   }
+}
+
+/**
+ * Returns all possible vendor identifier aliases for the current authenticated user/store.
+ * Ensures consistent vendor identification across counters, list, view, and confirmation flows.
+ */
+export function getAuthenticatedVendorIds(user: any, userData?: any, vendorInfo?: any): Set<string> {
+  const ids = new Set<string>();
+  if (user?.uid) ids.add(String(user.uid).trim());
+  if (user?.id) ids.add(String(user.id).trim());
+  if (userData?.uid) ids.add(String(userData.uid).trim());
+  if (userData?.id) ids.add(String(userData.id).trim());
+  if (userData?.vendorId) ids.add(String(userData.vendorId).trim());
+  if (userData?.storeId) ids.add(String(userData.storeId).trim());
+  if (userData?.shopId) ids.add(String(userData.shopId).trim());
+  if (userData?.sellerId) ids.add(String(userData.sellerId).trim());
+  if (vendorInfo?.vendorId) ids.add(String(vendorInfo.vendorId).trim());
+  if (vendorInfo?.storeId) ids.add(String(vendorInfo.storeId).trim());
+  if (vendorInfo?.shopId) ids.add(String(vendorInfo.shopId).trim());
+  if (vendorInfo?.sellerId) ids.add(String(vendorInfo.sellerId).trim());
+  if (vendorInfo?.userId) ids.add(String(vendorInfo.userId).trim());
+  if (vendorInfo?.id) ids.add(String(vendorInfo.id).trim());
+
+  // Also read synchronous localStorage caches if available in browser
+  // This guarantees valid vendor identity resolution even during initial mount/refresh before async state settles
+  if (typeof window !== 'undefined' && user?.uid) {
+    try {
+      const keys = ['rj_active_vendor_', 'rj_vendor_store_', 'rj_vendor_profile_'];
+      for (const k of keys) {
+        const raw = localStorage.getItem(k + user.uid);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.vendorId) ids.add(String(parsed.vendorId).trim());
+            if (parsed.storeId) ids.add(String(parsed.storeId).trim());
+            if (parsed.shopId) ids.add(String(parsed.shopId).trim());
+            if (parsed.id) ids.add(String(parsed.id).trim());
+            if (parsed.userId) ids.add(String(parsed.userId).trim());
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  return ids;
+}
+
+/**
+ * Checks whether the current user is an Admin, considering email whitelist and role.
+ */
+export function checkIsAdminUser(user: any, userData?: any): boolean {
+  if (!user && !userData) return false;
+  const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
+  const userEmail = (user?.email || userData?.email || '').toLowerCase().trim();
+  if (userEmail && adminEmails.includes(userEmail)) return true;
+  const role = (userData?.role || (user as any)?.role || '').toLowerCase().trim();
+  return role === 'admin';
+}
+
+/**
+ * Checks whether an order record belongs to the authenticated vendor using consistent ID matching.
+ * Validates direct vendor fields, items, snapshot, and document key aliases.
+ */
+export function isOrderOwnedByVendor(
+  order: any, 
+  vendorIds: Set<string> | string[], 
+  isAdmin = false,
+  docKey?: string
+): boolean {
+  if (!order) return false;
+  if (isAdmin) return true;
+
+  const ids = vendorIds instanceof Set ? vendorIds : new Set(vendorIds);
+  if (ids.size === 0) return false;
+
+  // 1. Direct vendorId / vendorUID / vendorUid / sellerId / sellerUID / storeId / storeUID / userId / customerId
+  const directFields = [
+    order.vendorId,
+    typeof order.vendorId === 'object' ? order.vendorId?.id || order.vendorId?.uid || order.vendorId?.vendorId : null,
+    order.vendorUID,
+    order.vendorUid,
+    order.sellerId,
+    order.sellerUID,
+    order.sellerUid,
+    typeof order.seller === 'object' ? order.seller?.id || order.seller?.uid || order.seller?.vendorId : null,
+    order.storeId,
+    order.storeUID,
+    order.storeUid,
+    typeof order.store === 'object' ? order.store?.id || order.store?.storeId : null,
+    typeof order.vendor === 'object' ? order.vendor?.id || order.vendor?.uid : null,
+    order.userId, // Matches vendor/creator user ID as in VendorDashboard & VendorNotifications
+    order.creatorId,
+    order.creatorUID
+  ];
+  for (const f of directFields) {
+    if (f && ids.has(String(f).trim())) return true;
+  }
+
+  // 2. Document key match (e.g. orderId_vendorId or vendorId prefix or cleanId)
+  if (docKey) {
+    for (const vId of ids) {
+      if (docKey.endsWith(`_${vId}`) || docKey.includes(vId)) return true;
+    }
+  }
+
+  // 3. vendorIds array or map
+  if (order.vendorIds) {
+    const list = Array.isArray(order.vendorIds) 
+      ? order.vendorIds 
+      : (typeof order.vendorIds === 'object' ? Object.values(order.vendorIds) : []);
+    for (const v of list) {
+      if (v && ids.has(String(v).trim())) return true;
+    }
+  }
+
+  // 4. Line items
+  const rawItems = Array.isArray(order.items) 
+    ? order.items 
+    : (order.items && typeof order.items === 'object' ? Object.values(order.items) : []);
+  for (const it of rawItems) {
+    if (!it || typeof it !== 'object') continue;
+    if (
+      (it.vendorId && ids.has(String(it.vendorId).trim())) ||
+      (it.vendorUID && ids.has(String(it.vendorUID).trim())) ||
+      (it.vendorUid && ids.has(String(it.vendorUid).trim())) ||
+      (it.sellerId && ids.has(String(it.sellerId).trim())) ||
+      (it.sellerUID && ids.has(String(it.sellerUID).trim())) ||
+      (it.storeId && ids.has(String(it.storeId).trim())) ||
+      (it.storeUID && ids.has(String(it.storeUID).trim())) ||
+      (typeof it.vendor === 'object' && ((it.vendor?.id && ids.has(String(it.vendor.id).trim())) || (it.vendor?.uid && ids.has(String(it.vendor.uid).trim())) || (it.vendor?.vendorId && ids.has(String(it.vendor.vendorId).trim())))) ||
+      (typeof it.seller === 'object' && ((it.seller?.id && ids.has(String(it.seller.id).trim())) || (it.seller?.uid && ids.has(String(it.seller.uid).trim()))))
+    ) {
+      return true;
+    }
+  }
+
+  // 5. Price snapshots & metadata
+  if (order.priceSnapshot?.vendorId && ids.has(String(order.priceSnapshot.vendorId).trim())) return true;
+  if (order.resellerPriceSnapshot?.vendorId && ids.has(String(order.resellerPriceSnapshot.vendorId).trim())) return true;
+  if (order.resellerOrderRecord?.vendorId && ids.has(String(order.resellerOrderRecord.vendorId).trim())) return true;
+  if (order.priceSnapshot?.vendorUID && ids.has(String(order.priceSnapshot.vendorUID).trim())) return true;
+  if (order.resellerPriceSnapshot?.vendorUID && ids.has(String(order.resellerPriceSnapshot.vendorUID).trim())) return true;
+
+  // 6. Shipping Snapshot vendor packages
+  if (order.shippingSnapshot?.vendorPackages && Array.isArray(order.shippingSnapshot.vendorPackages)) {
+    for (const pkg of order.shippingSnapshot.vendorPackages) {
+      if (pkg?.vendorId && ids.has(String(pkg.vendorId).trim())) return true;
+    }
+  }
+
+  return false;
 }

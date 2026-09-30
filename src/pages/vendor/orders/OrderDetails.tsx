@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
+import { useVendorStore } from '../../../context/VendorStoreContext';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import { db } from '../../../lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
@@ -36,6 +37,9 @@ import {
   checkResellerOrderEligibility, 
   confirmVendorResellerOrder, 
   isResellerOrderRecord,
+  getAuthenticatedVendorIds,
+  checkIsAdminUser,
+  isOrderOwnedByVendor,
   type VendorWalletBalances,
   type ResellerOrderEligibilityResult
 } from '../../../services/vendorResellerOrderService';
@@ -170,7 +174,8 @@ export function resolveCustomerOrderDetails(order: any): ResolvedOrderDetails {
 
 export default function OrderDetails() {
   const { id } = useParams<{ id: string }>();
-  const { user } = useAuth();
+  const { user, userData } = useAuth();
+  const { vendorInfo } = useVendorStore();
   const navigate = useNavigate();
   const location = useLocation();
   const passedOrder = location.state?.order;
@@ -354,27 +359,12 @@ export default function OrderDetails() {
     }
   }, [id, user?.uid]);
 
-  // Check if an order record belongs to the currently authenticated vendor
-  const isOrderAuthorizedForVendor = (orderObj: any, currentUserId: string, docId?: string): boolean => {
-    if (!orderObj || !currentUserId) return false;
-    if ((user as any)?.role === 'Admin') return true;
-    if (orderObj.vendorId === currentUserId) return true;
-    if (docId && (docId.endsWith(`_${currentUserId}`) || docId.includes(currentUserId))) return true;
-    if (orderObj.storeId === currentUserId || orderObj.sellerId === currentUserId) return true;
-    if (orderObj.vendorIds) {
-      if (Array.isArray(orderObj.vendorIds) && orderObj.vendorIds.includes(currentUserId)) return true;
-      if (typeof orderObj.vendorIds === 'object' && Object.values(orderObj.vendorIds).includes(currentUserId)) return true;
-    }
-    const itemsList = Array.isArray(orderObj.items)
-      ? orderObj.items
-      : (orderObj.items && typeof orderObj.items === 'object' ? Object.values(orderObj.items) : []);
-    if (itemsList.some((i: any) => i && (i.vendorId === currentUserId || i.storeId === currentUserId || i.sellerId === currentUserId))) {
-      return true;
-    }
-    if (orderObj.priceSnapshot?.vendorId === currentUserId || orderObj.resellerPriceSnapshot?.vendorId === currentUserId) {
-      return true;
-    }
-    return false;
+  // Check if an order record belongs to the currently authenticated vendor using unified matcher
+  const isOrderAuthorizedForVendor = (orderObj: any, _currentUserId?: string, docId?: string): boolean => {
+    if (!orderObj) return false;
+    const vendorIds = getAuthenticatedVendorIds(user, userData, vendorInfo);
+    const isUserAdmin = checkIsAdminUser(user, userData) || (user as any)?.role === 'Admin';
+    return isOrderOwnedByVendor(orderObj, vendorIds, isUserAdmin, docId);
   };
 
   const fetchOrderDetails = async () => {
@@ -401,6 +391,9 @@ export default function OrderDetails() {
         vData = await rtdbGet<any>(`vendor_orders/${pureOrderId}`);
       }
 
+      const vendorIds = getAuthenticatedVendorIds(user, userData, vendorInfo);
+      const isUserAdmin = checkIsAdminUser(user, userData) || (user as any)?.role === 'Admin';
+
       // If neither mData nor vData was found directly, search RTDB collections
       if (!mData && !vData) {
         try {
@@ -409,7 +402,7 @@ export default function OrderDetails() {
             const item = allOrders[k];
             if (!item) return false;
             const matchesId = k === cleanId || k === pureOrderId || item.orderId === cleanId || item.orderId === pureOrderId || k.startsWith(pureOrderId);
-            return matchesId && (user?.uid ? isOrderAuthorizedForVendor(item, user.uid, k) : true);
+            return matchesId && (vendorIds.size > 0 ? isOrderOwnedByVendor(item, vendorIds, isUserAdmin, k) : true);
           });
           if (foundMKey && allOrders[foundMKey]) {
             mData = { id: foundMKey, ...allOrders[foundMKey] };
@@ -424,7 +417,7 @@ export default function OrderDetails() {
             const item = allVendorOrders[k];
             if (!item) return false;
             const matchesId = k === cleanId || k === vendorSpecificId || k === pureOrderId || item.orderId === cleanId || item.orderId === pureOrderId || k.startsWith(cleanId);
-            return matchesId && (user?.uid ? isOrderAuthorizedForVendor(item, user.uid, k) : true);
+            return matchesId && (vendorIds.size > 0 ? isOrderOwnedByVendor(item, vendorIds, isUserAdmin, k) : true);
           });
           if (foundVKey && allVendorOrders[foundVKey]) {
             vData = { id: foundVKey, ...allVendorOrders[foundVKey] };
@@ -447,11 +440,12 @@ export default function OrderDetails() {
         return;
       }
 
-      // Verify vendor authorization
+      // Verify vendor authorization using consistent ID mapping
       const isAuthorized = 
-        (user as any)?.role === 'Admin' ||
-        (mData && isOrderAuthorizedForVendor(mData, user?.uid || '', mData.id || cleanId)) ||
-        (vData && isOrderAuthorizedForVendor(vData, user?.uid || '', vData.id || cleanId));
+        isUserAdmin ||
+        (mData && isOrderOwnedByVendor(mData, vendorIds, isUserAdmin, mData.id || cleanId)) ||
+        (vData && isOrderOwnedByVendor(vData, vendorIds, isUserAdmin, vData.id || cleanId)) ||
+        (passedOrder && isOrderOwnedByVendor(passedOrder, vendorIds, isUserAdmin, passedOrder.id || cleanId));
 
       if (!isAuthorized) {
         toast.error('Unauthorized access');
