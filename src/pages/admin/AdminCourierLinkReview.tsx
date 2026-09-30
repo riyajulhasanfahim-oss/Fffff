@@ -16,6 +16,7 @@ import {
 } from '../../services/courierReviewService';
 import { useAuth } from '../../context/AuthContext';
 import CourierPendingReviewModal from '../../components/admin/CourierPendingReviewModal';
+import { formatAddress } from '../../utils/addressUtils';
 
 export default function AdminCourierLinkReview() {
   const { userData, user } = useAuth();
@@ -932,7 +933,7 @@ export default function AdminCourierLinkReview() {
                   </div>
                   <div className="col-span-2">
                     <span className="text-slate-500 block">ঠিকানা:</span>
-                    <span className="text-slate-700">{selectedItem.customerAddress || 'N/A'}</span>
+                    <span className="text-slate-700">{formatAddress(selectedItem.customerAddress)}</span>
                   </div>
                   <div className="col-span-2">
                     <span className="text-slate-500 block">অর্ডারকৃত পণ্য:</span>

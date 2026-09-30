@@ -28,6 +28,7 @@ import VendorCancelOrderModal from '../../../components/vendor/VendorCancelOrder
 import PaymentMethodSelectionModal from '../../../components/checkout/PaymentMethodSelectionModal';
 import BkashPaymentModal from '../../../components/checkout/BkashPaymentModal';
 import NagadPaymentModal from '../../../components/checkout/NagadPaymentModal';
+import { formatAddress } from '../../../utils/addressUtils';
 import RocketPaymentModal from '../../../components/checkout/RocketPaymentModal';
 import UpayPaymentModal from '../../../components/checkout/UpayPaymentModal';
 import PaymentSuccessModal from '../../../components/payment/PaymentSuccessModal';
@@ -137,12 +138,15 @@ export function resolveCustomerOrderDetails(order: any): ResolvedOrderDetails {
     '';
 
   // Full address
-  const fullAddress = 
+  const rawAddressSource = 
     order?.fullAddress || 
     order?.shippingAddress?.fullAddress || 
     order?.shippingAddress?.street || 
     order?.shippingSnapshot?.customerDeliveryLocation?.address || 
+    order?.customerAddress ||
+    order?.shippingAddress ||
     '';
+  const fullAddress = formatAddress(rawAddressSource, '');
 
   // Additional notes or landmark
   const additionalNotes = 
@@ -569,7 +573,7 @@ export default function OrderDetails() {
         district: vData?.district || mData?.district || mData?.shippingAddress?.district || vData?.shippingAddress?.district || '',
         upazila: vData?.upazila || mData?.upazila || mData?.shippingAddress?.upazila || vData?.shippingAddress?.upazila || '',
         area: vData?.area || mData?.area || mData?.shippingAddress?.area || vData?.shippingAddress?.area || '',
-        fullAddress: vData?.fullAddress || mData?.fullAddress || mData?.shippingAddress?.fullAddress || mData?.shippingAddress?.street || rData?.customerAddress || '',
+        fullAddress: formatAddress(vData?.fullAddress || mData?.fullAddress || mData?.shippingAddress?.fullAddress || mData?.shippingAddress?.street || mData?.shippingAddress || rData?.customerAddress || '', ''),
         additionalNotes: vData?.additionalNotes || mData?.additionalNotes || mData?.shippingAddress?.additionalNotes || '',
         items: displayItems,
         itemsCount: displayItems.length || 1,
@@ -2128,7 +2132,7 @@ export default function OrderDetails() {
                   )}
                 </div>
                 <p className="text-gray-800 font-medium bg-slate-50 p-2.5 rounded-xl border border-slate-200 leading-relaxed text-xs sm:text-sm">
-                  {resolved.fullAddress || 'ঠিকানা পাওয়া যায়নি'}
+                  {formatAddress(resolved.fullAddress, 'ঠিকানা পাওয়া যায়নি')}
                 </p>
               </div>
 

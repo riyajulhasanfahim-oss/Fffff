@@ -4,6 +4,7 @@ import { Search, Filter, Eye, CheckCircle, XCircle, Users, Activity, BadgeCheck 
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import VerifiedBadge from '../../components/ui/VerifiedBadge';
+import { formatAddress } from '../../utils/addressUtils';
 
 const formatResellerDate = (val: any) => {
   if (!val) return 'N/A';
@@ -74,7 +75,7 @@ export default function AdminResellers() {
                 phone: data.phone || data.mobileNumber || '',
                 paymentMethod: data.paymentMethod || 'N/A',
                 transactionId: data.transactionId || 'N/A',
-                address: data.address || 'N/A',
+                address: formatAddress(data.address),
                 facebookProfile: data.facebookProfile || 'N/A',
                 status: data.status || 'active',
                 totalSales: Number(data.totalSales) || 0,
@@ -472,7 +473,7 @@ export default function AdminResellers() {
                     </div>
                     <div className="flex flex-col py-2 border-b border-slate-50 gap-1">
                       <span className="text-slate-500">Full Address</span>
-                      <span className="font-medium text-slate-900 text-right">{selectedReseller.address || 'N/A'}</span>
+                      <span className="font-medium text-slate-900 text-right">{formatAddress(selectedReseller.address)}</span>
                     </div>
                   </div>
                 </div>

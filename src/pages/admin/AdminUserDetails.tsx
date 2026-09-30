@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import VerifiedBadge from '../../components/ui/VerifiedBadge';
 import { saveStoreToCache } from '../../services/storeCache';
+import { formatAddress } from '../../utils/addressUtils';
 
 const safeFormatDate = (val: any, pattern: string) => {
   if (!val) return 'Unknown';
@@ -345,7 +346,7 @@ export default function AdminUserDetails() {
               </div>
               <div className="flex items-center gap-3 text-slate-600">
                 <MapPin className="w-4 h-4 text-slate-400" />
-                <span className="text-sm">{user.address || 'No address provided'}</span>
+                <span className="text-sm">{formatAddress(user.address, 'No address provided')}</span>
               </div>
               <div className="flex items-center gap-3 text-slate-600">
                 <Calendar className="w-4 h-4 text-slate-400" />

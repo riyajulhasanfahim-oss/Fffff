@@ -6,6 +6,7 @@ import Header from '../../../components/layout/Header';
 import Footer from '../../../components/layout/Footer';
 import { Loader2, Phone, MapPin, Search } from 'lucide-react';
 import ProductCard, { Product } from '../../../components/ui/ProductCard';
+import { formatAddress } from '../../../utils/addressUtils';
 
 interface ResellerShop {
   resellerId: string;
@@ -57,7 +58,7 @@ export default function PublicResellerShop() {
               banner: rVal.banner || '',
               description: rVal.description || '',
               phone: rVal.phone || '',
-              address: rVal.address || '',
+              address: formatAddress(rVal.address, ''),
               shopStatus: rVal.shopStatus || 'active',
               shopProductIds: Array.isArray(rVal.shopProductIds) ? rVal.shopProductIds : []
             };
@@ -192,8 +193,8 @@ export default function PublicResellerShop() {
                   {shop.phone && (
                     <div className="flex items-center gap-1.5"><Phone className="w-4 h-4" /> {shop.phone}</div>
                   )}
-                  {shop.address && (
-                    <div className="flex items-center gap-1.5"><MapPin className="w-4 h-4" /> {shop.address}</div>
+                  {Boolean(formatAddress(shop.address, '')) && (
+                    <div className="flex items-center gap-1.5"><MapPin className="w-4 h-4" /> {formatAddress(shop.address)}</div>
                   )}
                 </div>
               </div>

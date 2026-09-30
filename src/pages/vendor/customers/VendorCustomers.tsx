@@ -15,6 +15,7 @@ import {
   DollarSign
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { formatAddress } from '../../../utils/addressUtils';
 
 interface CustomerRecord {
   id: string;
@@ -85,9 +86,8 @@ export default function VendorCustomers() {
         const phone = order.customerPhone || order.shippingAddress?.phone || order.shippingAddress?.mobile || '';
         const email = order.customerEmail || order.shippingAddress?.email || '';
         const name = order.customerName || order.shippingAddress?.name || 'Customer';
-        const address = order.shippingAddress 
-          ? [order.shippingAddress.address, order.shippingAddress.city, order.shippingAddress.district].filter(Boolean).join(', ')
-          : (order.customerAddress || '');
+        const rawAddr = order.shippingAddress || order.customerAddress;
+        const address = formatAddress(rawAddr, '');
 
         const identifier = phone || email || order.customerId || order.userId || name;
         if (!identifier) return;
@@ -235,7 +235,7 @@ export default function VendorCustomers() {
                     {cust.address && (
                       <div className="flex items-start gap-2">
                         <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
-                        <span className="line-clamp-2 text-gray-500">{cust.address}</span>
+                        <span className="line-clamp-2 text-gray-500">{formatAddress(cust.address, '')}</span>
                       </div>
                     )}
                   </div>

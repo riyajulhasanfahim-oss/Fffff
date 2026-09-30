@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import ResellerOwnProductForm from './ResellerOwnProductForm';
 import { StorageManager } from '../../../services/storage/StorageManager';
 import ShareModal from '../../../components/common/ShareModal';
+import { formatAddress } from '../../../utils/addressUtils';
 
 interface ResellerShop {
   resellerId: string;
@@ -420,7 +421,7 @@ export default function ResellerShopManagement() {
                       </div>
                       <div>
                         <p className="text-[11px] text-slate-400 uppercase font-bold tracking-wider mb-1.5">Address</p>
-                        <p className="text-sm text-slate-700 leading-relaxed">{shop.address || 'N/A'}</p>
+                        <p className="text-sm text-slate-700 leading-relaxed">{formatAddress(shop.address)}</p>
                       </div>
                     </div>
                   </div>
