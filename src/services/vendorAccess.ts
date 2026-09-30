@@ -1,14 +1,10 @@
-import { db } from '../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { rtdbGet } from '../lib/rtdb';
 
 export async function handleVendorAccess(userId?: string) {
   try {
-    const configRef = doc(db, 'settings', 'appConfig');
-    const configSnap = await getDoc(configRef);
+    const data = await rtdbGet<any>('settings/appConfig');
     
-    if (configSnap.exists()) {
-      const data = configSnap.data();
-      
+    if (data) {
       if (!data.vendorEnabled) {
         return {
           type: "redirect",

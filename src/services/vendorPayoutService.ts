@@ -1,6 +1,4 @@
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbRemove } from '../lib/rtdb';
-import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, doc, deleteDoc } from 'firebase/firestore';
 import { safeStorage } from '../utils/storage';
 
 export interface VendorPayoutDispute {
@@ -1084,23 +1082,7 @@ export async function deleteEntireOrder(
       }
     } catch (_) {}
 
-    // 3. Delete from Firestore orders collection
-    for (const key of idCandidates) {
-      try {
-        await deleteDoc(doc(db, 'orders', key));
-      } catch (_) {}
-    }
-    for (const key of idCandidates) {
-      try {
-        const q = query(collection(db, 'orders'), where('orderId', '==', key));
-        const snap = await getDocs(q);
-        for (const d of snap.docs) {
-          await deleteDoc(d.ref);
-        }
-      } catch (_) {}
-    }
-
-    // 4. Clean local storage
+    // 3. Clean local storage
     for (const key of idCandidates) {
       try { safeStorage.removeItem(`pending_order_${key}`); } catch (_) {}
     }

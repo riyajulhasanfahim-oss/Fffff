@@ -1,7 +1,6 @@
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbList, rtdbRemove, rtdbPush } from '../lib/rtdb';
-import { RTDB_BASE_URL as BASE_URL, db } from '../lib/firebase';
+import { RTDB_BASE_URL as BASE_URL } from '../lib/firebase';
 import { normalizeMethod, verifyPaymentAutomatic, VerificationResult } from './automaticPaymentVerificationService';
-import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { safeStorage } from '../utils/storage';
 
 export interface PlatformFeeRecord {
@@ -343,22 +342,7 @@ export async function markCodOrderDelivered(
 
     await Promise.allSettled(rtdbPromises);
 
-    // 5. Update Cloud Firestore
-    try {
-      await setDoc(doc(db, 'orders', cleanId), deliveredUpdate, { merge: true });
-      if (rawOrderId !== cleanId) {
-        await setDoc(doc(db, 'orders', rawOrderId), deliveredUpdate, { merge: true });
-      }
-      const q = query(collection(db, 'orders'), where('orderId', '==', cleanId));
-      const snap = await getDocs(q);
-      for (const d of snap.docs) {
-        await setDoc(d.ref, deliveredUpdate, { merge: true });
-      }
-    } catch (fsErr) {
-      console.warn('[markCodOrderDelivered] Firestore sync warning:', fsErr);
-    }
-
-    // 6. Update LocalStorage cache for immediate instant UI reflection
+    // 5. Update LocalStorage cache for immediate instant UI reflection
     try {
       const pendingKey = `pending_order_${cleanId}`;
       const cached = safeStorage.getItem(pendingKey);

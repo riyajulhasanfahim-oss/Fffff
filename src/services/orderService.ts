@@ -1,6 +1,4 @@
 import { rtdbGet, rtdbSet, rtdbList, rtdbSubscribe } from '../lib/rtdb';
-import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { safeStorage } from '../utils/storage';
 import { calculateMultiVendorShipping } from '../utils/deliveryCalculator';
 
@@ -210,27 +208,13 @@ export async function saveOrderToDatabases(orderId: string, orderData: any): Pro
     console.warn('LocalStorage save order notice:', storageErr);
   }
 
-  // 2. Concurrently save to Realtime Database and Cloud Firestore with a timeout safeguard
-  const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, 5000));
-
-  const rtdbPromise = rtdbSet(`orders/${orderId}`, payload).catch((err) => {
+  // 2. Persist order directly into production Realtime Database (single source of truth)
+  try {
+    await rtdbSet(`orders/${orderId}`, payload);
+  } catch (err) {
     console.warn('RTDB save order warning:', err);
-  });
-
-  const firestorePromise = (async () => {
-    try {
-      const orderDocRef = doc(db, 'orders', orderId);
-      await setDoc(orderDocRef, payload, { merge: true });
-    } catch (fsErr) {
-      console.warn('Firestore save order warning:', fsErr);
-    }
-  })();
-
-  // Await both or timeout to prevent any infinite UI freezing
-  await Promise.race([
-    Promise.allSettled([rtdbPromise, firestorePromise]),
-    timeoutPromise
-  ]);
+    throw err;
+  }
 }
 
 /**
@@ -288,41 +272,7 @@ export async function fetchCustomerOrders(
     console.warn('Error fetching orders from RTDB:', rtdbErr);
   }
 
-  // 2. Fetch from Firestore with strict 2000ms timeout protection
-  try {
-    const fsTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000));
-    const fsFetch = (async () => {
-      try {
-        const q = query(collection(db, 'orders'), where('userId', '==', userId));
-        const querySnapshot = await getDocs(q);
-        querySnapshot.forEach((docSnap) => {
-          const order = { id: docSnap.id, ...docSnap.data() };
-          const key = (order as any).orderId || docSnap.id;
-          if (!ordersMap.has(key) || (order as any).updatedAt > (ordersMap.get(key)?.updatedAt || 0)) {
-            ordersMap.set(key, order);
-          }
-        });
-
-        // Also check customerId field if present
-        const qCustomer = query(collection(db, 'orders'), where('customerId', '==', userId));
-        const custSnapshot = await getDocs(qCustomer);
-        custSnapshot.forEach((docSnap) => {
-          const order = { id: docSnap.id, ...docSnap.data() };
-          const key = (order as any).orderId || docSnap.id;
-          if (!ordersMap.has(key)) {
-            ordersMap.set(key, order);
-          }
-        });
-      } catch (e) {}
-      return true;
-    })();
-
-    await Promise.race([fsFetch, fsTimeout]);
-  } catch (fsErr) {
-    console.warn('Error fetching orders from Firestore:', fsErr);
-  }
-
-  // 3. Fallback / Merge from safeStorage
+  // 2. Fallback / Merge from safeStorage
   try {
     const recentRaw = safeStorage.getItem('user_recent_orders');
     if (recentRaw) {
@@ -531,36 +481,6 @@ export async function fetchOrderById(orderId: string): Promise<any | null> {
     }
   } catch (e) {
     console.warn('Error scanning RTDB orders:', e);
-  }
-
-  // 5. Firestore fallback with strict 1500ms timeout safeguard
-  try {
-    const fsTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
-    const fsFetch = (async () => {
-      try {
-        const docSnap = await getDoc(doc(db, 'orders', cleanId));
-        if (docSnap.exists()) {
-          return { id: docSnap.id, ...docSnap.data() };
-        }
-        if (cleanId !== pureId) {
-          const pureSnap = await getDoc(doc(db, 'orders', pureId));
-          if (pureSnap.exists()) {
-            return { id: pureSnap.id, ...pureSnap.data() };
-          }
-        }
-        const q = query(collection(db, 'orders'), where('orderId', '==', cleanId));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          return { id: snap.docs[0].id, ...snap.docs[0].data() };
-        }
-      } catch (e) {}
-      return null;
-    })();
-
-    const fsResult = await Promise.race([fsFetch, fsTimeout]);
-    if (fsResult) return fsResult;
-  } catch (e) {
-    console.warn('Firestore fallback warning:', e);
   }
 
   return null;

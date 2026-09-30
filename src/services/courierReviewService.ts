@@ -1,6 +1,4 @@
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbList, rtdbSubscribe, rtdbPush } from '../lib/rtdb';
-import { db } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
 import { safeStorage } from '../utils/storage';
 import { sendVendorNotification } from './vendorNotificationService';
 import { getVendorWalletBalances } from './vendorResellerOrderService';
@@ -623,21 +621,7 @@ export async function adminApproveCourierReview(params: {
 
   await Promise.allSettled(updatePromises);
 
-  // 4. Update Firestore doc for complete persistence
-  try {
-    const orderDocRef = doc(db, 'orders', cleanId);
-    await setDoc(orderDocRef, approvePayload, { merge: true });
-    if (cleanId !== pureOrderId) {
-      await setDoc(doc(db, 'orders', pureOrderId), approvePayload, { merge: true });
-    }
-    if (order?.orderId && order.orderId !== cleanId && order.orderId !== pureOrderId) {
-      await setDoc(doc(db, 'orders', order.orderId), approvePayload, { merge: true });
-    }
-  } catch (fsErr) {
-    console.warn('Firestore sync notice:', fsErr);
-  }
-
-  // 5. Update LocalStorage cache for immediate seamless rendering
+  // 4. Update LocalStorage cache for immediate seamless rendering
   try {
     const pendingKey = `pending_order_${cleanId}`;
     const cached = safeStorage.getItem(pendingKey);

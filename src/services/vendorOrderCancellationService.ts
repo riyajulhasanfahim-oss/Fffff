@@ -1,6 +1,4 @@
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList } from '../lib/rtdb';
-import { db } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
 import { isCodOrder } from './vendorPayoutService';
 import { cancelResellerOrderPendingProfit } from './resellerOrderService';
 
@@ -301,17 +299,6 @@ export async function executeVendorOrderCancellation({
         }
       } catch (uwErr) {
         console.warn('user_wallet RTDB update note:', uwErr);
-      }
-
-      // E. Sync Firestore users document
-      try {
-        await setDoc(doc(db, 'users', customerId), {
-          wallet: newBalance,
-          balance: newBalance,
-          updatedAt: now
-        }, { merge: true });
-      } catch (fsErr) {
-        console.warn('Firestore user wallet sync note:', fsErr);
       }
 
       refundProcessed = true;

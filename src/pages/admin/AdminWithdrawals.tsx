@@ -1,7 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { rtdbGet, rtdbList, rtdbUpdate, rtdbPush, rtdbSubscribe } from '../../lib/rtdb';
-import { db } from '../../lib/firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { Search, Filter, CheckCircle, XCircle, Clock, Banknote, Edit, CreditCard, Activity, AlertCircle, Building2 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -182,14 +180,6 @@ export default function AdminWithdrawals() {
                 heldBalance: Math.max(0, curHeld - amount),
                 updatedAt: now
               });
-              // Firestore users sync
-              try {
-                await updateDoc(doc(db, 'users', targetUserId), {
-                  wallet: curWallet + amount,
-                  balance: curWallet + amount,
-                  updatedAt: now
-                });
-              } catch (fErr) {}
             } else if (newStatus === 'Paid') {
               await rtdbUpdate(`users/${targetUserId}`, {
                 heldBalance: Math.max(0, curHeld - amount),
@@ -209,14 +199,6 @@ export default function AdminWithdrawals() {
       // Also update 'withdraw_requests' if present
       await rtdbUpdate(`withdraw_requests/${selectedWithdrawal.id}`, updateData).catch(() => {});
 
-      // Also sync Firestore document if present
-      try {
-        const fireDoc = await getDoc(doc(db, 'withdrawals', selectedWithdrawal.id));
-        if (fireDoc.exists()) {
-          await updateDoc(doc(db, 'withdrawals', selectedWithdrawal.id), updateData);
-        }
-      } catch (fErr) {}
-      
       // Notify Vendor or User
       const targetVendorId = selectedWithdrawal.vendorId || (selectedWithdrawal.accountType === 'Vendor' ? selectedWithdrawal.userId : null);
       if (targetVendorId) {

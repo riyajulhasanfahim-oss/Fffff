@@ -111,49 +111,6 @@ export default function ResellerTracking() {
         });
       } catch (_) {}
 
-      // Check reseller_orders from Firestore with timeout protection
-      try {
-        const roSnap = await Promise.race([
-          getDocs(query(collection(db, 'reseller_orders'), where('resellerId', '==', user.uid))),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
-        ]);
-        if (roSnap) {
-          roSnap.forEach(d => {
-            const data = d.data();
-            const oId = data.orderId || d.id;
-            if (!ordersMap.has(oId)) {
-              const isConfirmed = Boolean(
-                data.vendorOrderStatus === 'CONFIRMED' || 
-                data.profitStatus === 'LOCKED' ||
-                ['Accepted', 'Processing', 'Shipped', 'In Transit', 'Delivered', 'Completed'].includes(data.status || data.orderStatus)
-              );
-              ordersMap.set(oId, {
-                ...data,
-                orderId: oId,
-                customerName: data.customerName || data.shippingAddress?.name || 'Customer',
-                date: data.createdAt || Date.now(),
-                status: data.orderStatus || data.status || 'Pending',
-                profitStatus: data.profitStatus || 'PENDING',
-                vendorOrderStatus: isConfirmed ? 'CONFIRMED' : (data.vendorOrderStatus || 'PENDING'),
-                lockedProfitAmount: data.lockedProfitAmount,
-                reviewStatus: data.reviewStatus || (data.resellerReviewSubmitted ? 'PENDING' : undefined),
-                reviewId: data.reviewId,
-                vendorId: data.vendorId,
-                courierName: data.courierName,
-                trackingNumber: data.trackingNumber || data.consignmentId || data.trackingId,
-                approvedCourierTrackingUrl: data.approvedCourierTrackingUrl || data.trackingUrl || data.courierTrackingUrl,
-                commission: Number(data.lockedProfitAmount ?? data.resellerProfit ?? data.commissionAmount ?? data.resellerCommission ?? 0),
-                items: data.items ? data.items.map((i: any) => i.productName || i.name) : (data.productName ? [data.productName] : ['Catalog Product']),
-                deliveryStatus: data.deliveryStatus || data.orderStatus || data.status || 'Pending',
-                saleAmount: Number(data.customerPaidAmount || data.grandTotal || data.total || data.subtotal || 0),
-                vendorPrice: data.vendorPrice,
-                resellerSellingPrice: data.resellerSellingPrice
-              });
-            }
-          });
-        }
-      } catch (_) {}
-
       // Check reseller_transactions from RTDB first, then Firestore with timeout
       try {
         const rtdbTxs = await rtdbList<any>('reseller_transactions', (t) => t.resellerId === user.uid).catch(() => []);

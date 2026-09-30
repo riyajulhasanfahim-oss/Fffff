@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import { rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
+import { isOrderOwnedByVendor } from '../../../services/vendorResellerOrderService';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Users, 
@@ -72,13 +73,29 @@ export default function VendorCustomers() {
     setLoading(true);
 
     try {
-      // 1. Fetch vendor orders
-      const vOrders = await rtdbList<any>('vendor_orders', (order) => order.vendorId === user.uid);
-      
-      // 2. Also fetch main orders for fallback
-      const allOrders = await rtdbList<any>('orders', (order) => order.vendorId === user.uid);
+      const vendorIds = [user.uid, (user as any).storeId, (user as any).vendorId].filter(Boolean);
 
-      const combined = [...vOrders.map(v => v.data), ...allOrders.map(o => o.data)];
+      // 1. Fetch vendor orders with multi-vendor ownership check
+      const vOrders = await rtdbList<any>('vendor_orders', (order) => isOrderOwnedByVendor(order, vendorIds));
+      
+      // 2. Also fetch master orders for fallback and multi-vendor carts
+      const allOrders = await rtdbList<any>('orders', (order) => isOrderOwnedByVendor(order, vendorIds));
+
+      // 3. Deduplicate orders across vendor_orders and master orders
+      const seenOrderIds = new Set<string>();
+      const combined: any[] = [];
+      [...vOrders, ...allOrders].forEach(item => {
+        const o = item?.data;
+        if (!o) return;
+        const rawId = String(o.orderId || o.id || o.mainOrderId || item.id || '');
+        const normKey = rawId.replace(new RegExp(`_${user.uid}$`, 'i'), '').trim();
+        if (normKey && !seenOrderIds.has(normKey)) {
+          seenOrderIds.add(normKey);
+          combined.push(o);
+        } else if (!normKey) {
+          combined.push(o);
+        }
+      });
       
       const customerMap = new Map<string, CustomerRecord>();
 
@@ -92,7 +109,27 @@ export default function VendorCustomers() {
         const identifier = phone || email || order.customerId || order.userId || name;
         if (!identifier) return;
 
-        const orderTotal = Number(order.subtotal || order.total || order.grandTotal || 0);
+        // Calculate order total specific to this vendor in multi-vendor orders
+        let orderTotal = 0;
+        if (Array.isArray(order.items) && order.items.length > 0) {
+          const vendorItems = order.items.filter((it: any) => 
+            it && (
+              it.vendorId === user.uid ||
+              it.sellerId === user.uid ||
+              it.storeId === user.uid ||
+              it.userId === user.uid ||
+              it.vendor?.id === user.uid
+            )
+          );
+          if (vendorItems.length > 0 && vendorItems.length < order.items.length) {
+            orderTotal = vendorItems.reduce((sum: number, it: any) => sum + (Number(it.price || it.salePrice || it.regularPrice || 0) * Number(it.quantity || 1)), 0);
+          } else {
+            orderTotal = Number(order.subtotal || order.total || order.grandTotal || 0);
+          }
+        } else {
+          orderTotal = Number(order.subtotal || order.total || order.grandTotal || 0);
+        }
+
         const orderDate = Number(order.createdAt || order.orderDate || Date.now());
 
         if (customerMap.has(identifier)) {

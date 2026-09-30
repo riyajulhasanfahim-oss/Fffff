@@ -137,19 +137,6 @@ export async function isProductDeliveredToUser(
       return false;
     });
 
-    // Supplementary check: Firestore orders
-    try {
-      const qOrders = query(collection(db, 'orders'), where('userId', '==', userId));
-      const fSnap = await getDocs(qOrders);
-      fSnap.docs.forEach(d => {
-        if (!userOrders.some(o => o.id === d.id || o.orderId === d.id)) {
-          userOrders.push({ id: d.id, orderId: d.id, ...d.data() });
-        }
-      });
-    } catch (fErr) {
-      console.warn('Notice checking Firestore orders for review check:', fErr);
-    }
-
     // Find all user orders that contain this productId
     const matchingOrders: { order: any; item: any }[] = [];
     for (const order of userOrders) {
@@ -322,30 +309,6 @@ export async function hasUserReviewedProduct(
       }
     } catch {}
 
-    // 5. Check Firestore order's reviewedItems if orderId provided
-    if (orderIdStr) {
-      try {
-        const fDoc = await getDoc(doc(db, 'orders', cleanOrderId));
-        if (fDoc.exists()) {
-          const fData = fDoc.data();
-          if (fData?.reviewedItems && (fData.reviewedItems[prodIdStr] || fData.reviewedItems[productId])) {
-            return true;
-          }
-        }
-      } catch {}
-      if (cleanOrderId !== orderIdStr) {
-        try {
-          const fDoc = await getDoc(doc(db, 'orders', orderIdStr));
-          if (fDoc.exists()) {
-            const fData = fDoc.data();
-            if (fData?.reviewedItems && (fData.reviewedItems[prodIdStr] || fData.reviewedItems[productId])) {
-              return true;
-            }
-          }
-        } catch {}
-      }
-    }
-
     return false;
   } catch (err) {
     console.warn('Error checking existing reviews:', err);
@@ -416,19 +379,6 @@ export async function getDeliveredUnreviewedItems(
       }
     } catch (err) {
       console.warn('Error fetching orders from RTDB:', err);
-    }
-
-    // Supplement with Firestore orders
-    try {
-      const fSnap = await getDocs(query(collection(db, 'orders'), where('userId', '==', userId)));
-      fSnap.docs.forEach(d => {
-        const data = d.data();
-        if (!allOrders.some(o => o.id === d.id || o.orderId === d.id)) {
-          allOrders.push({ id: d.id, orderId: d.id, ...data });
-        }
-      });
-    } catch (err) {
-      console.warn('Error fetching orders from Firestore:', err);
     }
 
     // Filter only user's orders that are DELIVERED
@@ -698,35 +648,6 @@ export async function submitProductReview(reviewData: {
     }
 
     if (!isDelivered) {
-      // Fallback check Firestore
-      try {
-        let orderDoc = await getDoc(doc(db, 'orders', orderId));
-        if (!orderDoc.exists() && cleanOrderId !== orderId) {
-          orderDoc = await getDoc(doc(db, 'orders', cleanOrderId));
-        }
-        if (orderDoc.exists()) {
-          const docData = orderDoc.data();
-          const isCod = isCodOrder(docData) || isCodPayment(docData?.paymentMethod);
-          if (
-            isDeliveredStatus(docData?.status) || 
-            docData?.courierAdminApproved || 
-            docData?.courierReviewStatus === 'approved' || 
-            docData?.courierVerificationStatus === 'Verified' ||
-            docData?.status === 'Shipped' ||
-            docData?.status === 'In Transit' ||
-            docData?.status === 'Out for Delivery' ||
-            isCod
-          ) {
-            isDelivered = true;
-            if (!orderInRtdb) orderInRtdb = docData;
-          }
-        }
-      } catch (e) {
-        console.warn('Could not verify order status in Firestore:', e);
-      }
-    }
-
-    if (!isDelivered) {
       return {
         success: false,
         error: 'রিভিউ শুধুমাত্র প্রোডাক্ট সফলভাবে ডেলিভারি হওয়ার পর দেওয়া যাবে। (Reviews are only allowed after successful delivery).'
@@ -928,21 +849,6 @@ export async function submitProductReview(reviewData: {
       console.warn('Notice updating order reviewed status in RTDB:', updErr);
     }
 
-    try {
-      await updateDoc(doc(db, 'orders', orderId), {
-        ...orderReviewedUpdate,
-        [`reviewedItems/${productId}`]: reviewedItemPayload
-      });
-    } catch {}
-    if (cleanOrderId !== orderId) {
-      try {
-        await updateDoc(doc(db, 'orders', cleanOrderId), {
-          ...orderReviewedUpdate,
-          [`reviewedItems/${productId}`]: reviewedItemPayload
-        });
-      } catch {}
-    }
-
     // 5. Recalculate and update product aggregate rating in RTDB and Firestore
     try {
       await updateProductAggregateRating(String(productId));
@@ -1014,23 +920,6 @@ export async function updateVendorStoreRating(vendorId: string) {
         reviewsCount: count
       }).catch(() => null)
     ]);
-
-    // Update in Firestore
-    try {
-      await updateDoc(doc(db, 'vendors', vendorId), {
-        rating: avgRating,
-        reviews: count,
-        reviewsCount: count
-      }).catch(() => null);
-    } catch {}
-
-    try {
-      await updateDoc(doc(db, 'users', vendorId), {
-        rating: avgRating,
-        reviews: count,
-        reviewsCount: count
-      }).catch(() => null);
-    } catch {}
   } catch (err) {
     console.warn('Error updating vendor store rating:', err);
   }
@@ -1063,18 +952,6 @@ export async function fetchVendorReviews(vendorId: string): Promise<ProductRevie
         }
       });
     }
-
-    // 3. Also check Firestore reviews
-    try {
-      const q = query(collection(db, 'reviews'), where('vendorId', '==', vendorId));
-      const snap = await getDocs(q);
-      snap.docs.forEach((d) => {
-        const data = d.data() as any;
-        if (!reviewsMap.has(d.id)) {
-          reviewsMap.set(d.id, { id: d.id, reviewId: d.id, ...data });
-        }
-      });
-    } catch {}
 
     // If still 0, also check if any reviews match vendor's products
     if (reviewsMap.size === 0 && allRevs && typeof allRevs === 'object') {

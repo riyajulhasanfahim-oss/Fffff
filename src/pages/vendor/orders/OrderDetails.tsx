@@ -3,8 +3,6 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
 import { useVendorStore } from '../../../context/VendorStoreContext';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
-import { db } from '../../../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   ArrowLeft, Clock, CheckCircle, Package, Truck, CheckCircle2, 
