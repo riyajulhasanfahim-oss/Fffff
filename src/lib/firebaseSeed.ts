@@ -566,24 +566,6 @@ export async function seedAllCollections(force: boolean = false): Promise<{ succ
 }
 
 export async function seedFirestoreInitialData() {
-  if (isSeeded) return;
-  try {
-    if (typeof window !== 'undefined' && localStorage.getItem('rj_seeded_done') === 'true') {
-      isSeeded = true;
-      return;
-    }
-  } catch {}
-  isSeeded = true;
-
-  // Run in background without blocking initial application render
-  setTimeout(async () => {
-    try {
-      await seedAllCollections(false);
-      try {
-        localStorage.setItem('rj_seeded_done', 'true');
-      } catch {}
-    } catch (e) {
-      console.warn('Seed background notice:', e);
-    }
-  }, 3000);
+  // Production safeguard: Do not inject demo/mock data into live production Firebase Realtime Database
+  return;
 }

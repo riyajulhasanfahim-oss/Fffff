@@ -1182,7 +1182,7 @@ app.use((req, res, next) => {
     }
   });
 
-  // Reseller Order Confirmation with Strict Backend Balance & Eligibility Validation (Step 4)
+  // Order Confirmation with Strict Backend Balance & Eligibility Validation (Supports both Reseller and Standard Orders)
   app.post('/api/vendor/orders/confirm-reseller-order', async (req, res) => {
     try {
       const { orderId, vendorId } = req.body || {};
@@ -1191,101 +1191,129 @@ app.use((req, res, next) => {
       }
 
       const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+      const cleanOrderId = String(orderId).trim().replace(/^#/, '');
+      const pureOrderId = (cleanOrderId.includes('_') ? cleanOrderId.split('_')[0] : cleanOrderId).trim();
 
-      // 1. Fetch vendor order from RTDB
-      let order: any = null;
+      // 1. Fetch order from RTDB across orders, reseller_orders, and vendor_orders
+      let mainOrder: any = null;
+      let resellerOrder: any = null;
+      let vendorOrder: any = null;
+
       try {
-        const resp = await fetch(`${rtdbBase}/vendor_orders/${orderId}.json`, { signal: AbortSignal.timeout(4000) });
-        if (resp.ok) {
-          order = await resp.json();
-          if (order) order._rtdbKey = orderId;
+        const respM = await fetch(`${rtdbBase}/orders/${cleanOrderId}.json`, { signal: AbortSignal.timeout(4000) });
+        if (respM.ok) mainOrder = await respM.json();
+        if (!mainOrder && pureOrderId !== cleanOrderId) {
+          const respMPure = await fetch(`${rtdbBase}/orders/${pureOrderId}.json`, { signal: AbortSignal.timeout(4000) });
+          if (respMPure.ok) mainOrder = await respMPure.json();
         }
       } catch (_) {}
 
-      // Fallback search if order was keyed differently
-      if (!order) {
-        try {
-          const respList = await fetch(`${rtdbBase}/vendor_orders.json?orderBy="vendorId"&equalTo="${vendorId}"`, { signal: AbortSignal.timeout(4000) });
-          if (respList.ok) {
-            const list = await respList.json();
-            if (list && typeof list === 'object') {
-              for (const [k, v] of Object.entries<any>(list)) {
-                if (v && (v.id === orderId || v.orderId === orderId || v.mainOrderId === orderId || k === orderId)) {
-                  order = { ...v, _rtdbKey: k };
-                  break;
-                }
-              }
-            }
-          }
-        } catch (_) {}
-      }
+      try {
+        const respR = await fetch(`${rtdbBase}/reseller_orders/${cleanOrderId}.json`, { signal: AbortSignal.timeout(4000) });
+        if (respR.ok) resellerOrder = await respR.json();
+        if (!resellerOrder && pureOrderId !== cleanOrderId) {
+          const respRPure = await fetch(`${rtdbBase}/reseller_orders/${pureOrderId}.json`, { signal: AbortSignal.timeout(4000) });
+          if (respRPure.ok) resellerOrder = await respRPure.json();
+        }
+      } catch (_) {}
 
-      if (!order) {
+      try {
+        const respV = await fetch(`${rtdbBase}/vendor_orders/${cleanOrderId}.json`, { signal: AbortSignal.timeout(4000) });
+        if (respV.ok) vendorOrder = await respV.json();
+        if (!vendorOrder && pureOrderId !== cleanOrderId) {
+          const respVPure = await fetch(`${rtdbBase}/vendor_orders/${pureOrderId}_${vendorId}.json`, { signal: AbortSignal.timeout(4000) });
+          if (respVPure.ok) vendorOrder = await respVPure.json();
+        }
+      } catch (_) {}
+
+      const order = { ...(resellerOrder || {}), ...(mainOrder || {}), ...(vendorOrder || {}) };
+      if (!mainOrder && !resellerOrder && !vendorOrder) {
         return res.status(404).json({ success: false, error: 'Order not found' });
       }
 
-      // Verify vendor ownership
-      if (order.vendorId && order.vendorId !== vendorId) {
+      // Check vendor ownership
+      const orderVendorId = String(order.vendorId || order.userId || order.storeId || '').trim();
+      const hasItemOwnership = Array.isArray(order.items) && order.items.some((it: any) => 
+        String(it?.vendorId || it?.storeId || it?.sellerId || it?.userId || '').trim() === String(vendorId).trim()
+      );
+      if (orderVendorId && orderVendorId !== String(vendorId).trim() && !hasItemOwnership) {
         return res.status(403).json({ success: false, error: 'Unauthorized vendor access' });
       }
 
-      // Check 1: Order is truly a Reseller Order
-      const isResellerOrder = Boolean(order.isResellerOrder || order.resellerId || order.profitStatus || order.priceSnapshot?.resellerProfit);
+      const isResellerOrder = Boolean(
+        order.isResellerOrder === true || order.isResellerOrder === 'true' ||
+        resellerOrder ||
+        order.resellerId ||
+        (order.profitStatus && order.profitStatus !== 'null') ||
+        order.priceSnapshot?.resellerProfit ||
+        order.resellerProfit
+      );
+
+      const now = Date.now();
+      const targetMainId = pureOrderId || cleanOrderId;
+
+      // Handle standard non-reseller order confirmation
       if (!isResellerOrder) {
-        return res.status(400).json({ success: false, error: 'This order is not a reseller order' });
+        const standardPayload = {
+          status: 'Accepted',
+          vendorStatus: 'Accepted',
+          acceptedAt: now,
+          updatedAt: now
+        };
+        try {
+          await fetch(`${rtdbBase}/orders/${targetMainId}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(standardPayload)
+          });
+          await fetch(`${rtdbBase}/vendor_orders/${cleanOrderId}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(standardPayload)
+          });
+        } catch (_) {}
+
+        return res.json({
+          success: true,
+          message: 'অর্ডার সফলভাবে কনফার্ম করা হয়েছে।',
+          isResellerOrder: false,
+          requiredResellerProfit: 0,
+          availableBalance: 0,
+          lockedBalance: 0,
+          totalBalance: 0
+        });
       }
 
-      // Check 5: Has the order already been confirmed?
+      // Reseller Order Confirmation:
       const currentStatus = order.status || order.orderStatus || 'Pending';
-      if (['Accepted', 'Processing', 'Shipped', 'In Transit', 'Delivered', 'Completed'].includes(currentStatus)) {
+      if (['Accepted', 'Processing', 'Shipped', 'In Transit', 'Delivered', 'Completed'].includes(currentStatus) && order.profitStatus === 'LOCKED') {
         return res.status(400).json({ success: false, error: 'Order has already been confirmed' });
       }
 
-      // Check 2: Is the order currently eligible to be confirmed? (Must be Pending and not Cancelled/Rejected)
-      if (currentStatus !== 'Pending') {
-        return res.status(400).json({ success: false, error: `Order is not eligible for confirmation (current status: ${currentStatus})` });
-      }
-
-      // Check 3: Determine Required Reseller Profit amount
       let requiredResellerProfit = Number(
         order.resellerProfit ?? 
         order.priceSnapshot?.resellerProfit ?? 
+        order.resellerPriceSnapshot?.resellerProfit ??
+        order.lockedProfitAmount ??
         0
       );
 
-      // If missing on RTDB order object, query Firestore reseller_orders doc
-      if (requiredResellerProfit <= 0) {
-        try {
-          const firestore = getFirestore();
-          const roSnap = await firestore.collection('reseller_orders').doc(orderId).get();
-          if (roSnap.exists) {
-            const roData = roSnap.data();
-            requiredResellerProfit = Number(roData?.resellerProfit ?? roData?.commissionAmount ?? 0);
-          } else {
-            const qSnap = await firestore.collection('reseller_orders').where('orderId', '==', orderId).limit(1).get();
-            if (!qSnap.empty) {
-              const roData = qSnap.docs[0].data();
-              requiredResellerProfit = Number(roData?.resellerProfit ?? roData?.commissionAmount ?? 0);
-            }
-          }
-        } catch (fErr) {
-          console.warn('Firestore reseller_orders check notice:', fErr);
-        }
-      }
-
-      // Check 4: Fetch Vendor Available Wallet Balance
+      // Fetch Vendor Available Wallet Balance
       let wallet: any = null;
       try {
         const wResp = await fetch(`${rtdbBase}/vendor_wallet/${vendorId}.json`, { signal: AbortSignal.timeout(4000) });
         if (wResp.ok) wallet = await wResp.json();
+        if (!wallet) {
+          const wResp2 = await fetch(`${rtdbBase}/wallets/${vendorId}.json`, { signal: AbortSignal.timeout(4000) });
+          if (wResp2.ok) wallet = await wResp2.json();
+        }
       } catch (_) {}
 
       const availableBalance = Number(wallet?.balance ?? wallet?.availableBalance ?? 0);
       const lockedBalance = Number(wallet?.lockedBalance ?? wallet?.resellerProfitReserve ?? 0);
       const totalBalance = availableBalance + lockedBalance;
 
-      // If available balance is less than required reseller profit, reject confirmation!
-      if (availableBalance < requiredResellerProfit) {
+      if (requiredResellerProfit > 0 && availableBalance < requiredResellerProfit) {
         return res.status(400).json({
           success: false,
           error: 'INSUFFICIENT_WALLET_BALANCE',
@@ -1296,14 +1324,13 @@ app.use((req, res, next) => {
         });
       }
 
-      // Validation PASSED!
-      // In Step 4:
-      // Required profit is NOT deducted from wallet, and NOT sent to locked balance (that is Step 5).
-      // We mark order as confirmed (Accepted) and flag as eligible for Step 5 profit reserve.
-      const now = Date.now();
-      const targetKey = order._rtdbKey || order.id || `${order.mainOrderId || order.orderId}_${vendorId}`;
+      // Update Order and lock reseller profit in RTDB
+      const targetKey = cleanOrderId;
       const updatePayload = {
         status: 'Accepted',
+        vendorStatus: 'Accepted',
+        vendorOrderStatus: 'CONFIRMED',
+        profitStatus: 'LOCKED',
         acceptedAt: now,
         resellerReserveEligible: true,
         requiredResellerProfit,
@@ -1311,43 +1338,59 @@ app.use((req, res, next) => {
       };
 
       try {
-        await fetch(`${rtdbBase}/vendor_orders/${targetKey}.json`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatePayload)
-        });
-        if (order.id && order.id !== targetKey) {
-          await fetch(`${rtdbBase}/vendor_orders/${order.id}.json`, {
+        await Promise.allSettled([
+          fetch(`${rtdbBase}/orders/${targetMainId}.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updatePayload)
-          });
-        }
-      } catch (_) {}
-
-      // Update main customer order status in RTDB
-      const mainOrderId = order.mainOrderId || order.orderId || order.id;
-      if (mainOrderId) {
-        try {
-          await fetch(`${rtdbBase}/orders/${mainOrderId}.json`, {
+          }),
+          fetch(`${rtdbBase}/reseller_orders/${targetMainId}.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              status: 'Accepted',
-              vendorStatus: 'Accepted',
-              acceptedAt: now,
+              profitStatus: 'LOCKED',
+              vendorOrderStatus: 'CONFIRMED',
+              orderStatus: 'Accepted',
+              lockedAt: now,
               updatedAt: now
             })
-          });
-        } catch (_) {}
-      }
+          }),
+          fetch(`${rtdbBase}/vendor_orders/${targetKey}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatePayload)
+          }),
+          fetch(`${rtdbBase}/vendor_wallet/${vendorId}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              availableBalance: Math.max(0, availableBalance - requiredResellerProfit),
+              balance: Math.max(0, availableBalance - requiredResellerProfit),
+              lockedBalance: lockedBalance + requiredResellerProfit,
+              updatedAt: now
+            })
+          }),
+          fetch(`${rtdbBase}/reseller_profit_locks/${targetMainId}_RESELLER_PROFIT_LOCK.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              orderId: targetMainId,
+              vendorId,
+              resellerId: order.resellerId || '',
+              requiredResellerProfit,
+              status: 'LOCKED',
+              createdAt: now
+            })
+          })
+        ]);
+      } catch (_) {}
 
       return res.json({
         success: true,
-        message: 'অর্ডার সফলভাবে কনফার্ম করা হয়েছে।',
+        message: 'অর্ডার সফলভাবে কনফার্ম করা হয়েছে এবং রিসেলার প্রফিট লক করা হয়েছে।',
         requiredResellerProfit,
-        availableBalance,
-        lockedBalance,
+        availableBalance: Math.max(0, availableBalance - requiredResellerProfit),
+        lockedBalance: lockedBalance + requiredResellerProfit,
         totalBalance
       });
     } catch (err: any) {

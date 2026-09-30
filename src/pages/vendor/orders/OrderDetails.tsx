@@ -38,6 +38,7 @@ import {
   confirmVendorResellerOrder, 
   isResellerOrderRecord,
   getAuthenticatedVendorIds,
+  getAuthenticatedVendorIdsAsync,
   checkIsAdminUser,
   isOrderOwnedByVendor,
   type VendorWalletBalances,
@@ -174,8 +175,8 @@ export function resolveCustomerOrderDetails(order: any): ResolvedOrderDetails {
 
 export default function OrderDetails() {
   const { id } = useParams<{ id: string }>();
-  const { user, userData } = useAuth();
-  const { vendorInfo } = useVendorStore();
+  const { user, userData, loading: authLoading } = useAuth();
+  const { vendorInfo, loading: vendorStoreLoading } = useVendorStore();
   const navigate = useNavigate();
   const location = useLocation();
   const passedOrder = location.state?.order;
@@ -329,7 +330,7 @@ export default function OrderDetails() {
   };
 
   useEffect(() => {
-    if (id && user) {
+    if (id && user && !authLoading) {
       fetchOrderDetails();
 
       let debounceTimer: any = null;
@@ -346,6 +347,9 @@ export default function OrderDetails() {
       const unsubOrders = rtdbSubscribe('orders', () => {
         debouncedFetch();
       });
+      const unsubROrders = rtdbSubscribe('reseller_orders', () => {
+        debouncedFetch();
+      });
 
       const handleOrderUpdate = () => debouncedFetch();
       window.addEventListener('vendor_order_updated', handleOrderUpdate);
@@ -354,10 +358,11 @@ export default function OrderDetails() {
         if (debounceTimer) clearTimeout(debounceTimer);
         unsubVOrders();
         unsubOrders();
+        unsubROrders();
         window.removeEventListener('vendor_order_updated', handleOrderUpdate);
       };
     }
-  }, [id, user?.uid]);
+  }, [id, user?.uid, authLoading, vendorInfo?.vendorId, vendorInfo?.storeId]);
 
   // Check if an order record belongs to the currently authenticated vendor using unified matcher
   const isOrderAuthorizedForVendor = (orderObj: any, _currentUserId?: string, docId?: string): boolean => {
@@ -373,7 +378,7 @@ export default function OrderDetails() {
       const pureOrderId = (cleanId.includes('_') ? cleanId.split('_')[0] : cleanId).trim();
       const vendorSpecificId = `${pureOrderId}_${user?.uid}`;
 
-      // 1. Fetch Order from RTDB (checking both 'orders' and 'vendor_orders')
+      // 1. Fetch Order from RTDB (checking 'orders', 'reseller_orders', and 'vendor_orders')
       // Note: Orders placed from production website domain rjworldbd.com are stored in the 'orders' node.
       let mData: any = await rtdbGet<any>(`orders/${cleanId}`);
       if (!mData && pureOrderId !== cleanId) {
@@ -381,6 +386,11 @@ export default function OrderDetails() {
       }
       if (!mData && user?.uid) {
         mData = await rtdbGet<any>(`orders/${vendorSpecificId}`);
+      }
+
+      let rData: any = await rtdbGet<any>(`reseller_orders/${cleanId}`);
+      if (!rData && pureOrderId !== cleanId) {
+        rData = await rtdbGet<any>(`reseller_orders/${pureOrderId}`);
       }
 
       let vData: any = await rtdbGet<any>(`vendor_orders/${cleanId}`);
@@ -391,11 +401,11 @@ export default function OrderDetails() {
         vData = await rtdbGet<any>(`vendor_orders/${pureOrderId}`);
       }
 
-      const vendorIds = getAuthenticatedVendorIds(user, userData, vendorInfo);
+      let vendorIds = getAuthenticatedVendorIds(user, userData, vendorInfo);
       const isUserAdmin = checkIsAdminUser(user, userData) || (user as any)?.role === 'Admin';
 
-      // If neither mData nor vData was found directly, search RTDB collections
-      if (!mData && !vData) {
+      // If neither mData nor vData nor rData was found directly, search RTDB collections
+      if (!mData && !vData && !rData) {
         try {
           const allOrders = (await rtdbGet<any>('orders')) || {};
           const foundMKey = Object.keys(allOrders).find(k => {
@@ -409,6 +419,21 @@ export default function OrderDetails() {
           }
         } catch (e) {
           console.warn('Fallback orders scan failed:', e);
+        }
+
+        try {
+          const allResellerOrders = (await rtdbGet<any>('reseller_orders')) || {};
+          const foundRKey = Object.keys(allResellerOrders).find(k => {
+            const item = allResellerOrders[k];
+            if (!item) return false;
+            const matchesId = k === cleanId || k === pureOrderId || item.orderId === cleanId || item.orderId === pureOrderId || k.startsWith(pureOrderId);
+            return matchesId && (vendorIds.size > 0 ? isOrderOwnedByVendor(item, vendorIds, isUserAdmin, k) : true);
+          });
+          if (foundRKey && allResellerOrders[foundRKey]) {
+            rData = { id: foundRKey, ...allResellerOrders[foundRKey] };
+          }
+        } catch (e) {
+          console.warn('Fallback reseller_orders scan failed:', e);
         }
 
         try {
@@ -428,26 +453,40 @@ export default function OrderDetails() {
       }
 
       // Fallback to passed state from OrdersList if RTDB direct query returned empty
-      if (!mData && !vData && passedOrder) {
+      if (!mData && !vData && !rData && passedOrder) {
         if (passedOrder.id === cleanId || passedOrder.id === pureOrderId || passedOrder.orderId === cleanId || passedOrder.orderId === pureOrderId) {
           mData = passedOrder;
         }
       }
 
-      if (!mData && !vData) {
+      if (!mData && !vData && !rData) {
         toast.error('Order not found');
         navigate('/vendor/orders');
         return;
       }
 
       // Verify vendor authorization using consistent ID mapping
-      const isAuthorized = 
+      let isAuthorized = 
         isUserAdmin ||
         (mData && isOrderOwnedByVendor(mData, vendorIds, isUserAdmin, mData.id || cleanId)) ||
+        (rData && isOrderOwnedByVendor(rData, vendorIds, isUserAdmin, rData.id || cleanId)) ||
         (vData && isOrderOwnedByVendor(vData, vendorIds, isUserAdmin, vData.id || cleanId)) ||
         (passedOrder && isOrderOwnedByVendor(passedOrder, vendorIds, isUserAdmin, passedOrder.id || cleanId));
 
       if (!isAuthorized) {
+        vendorIds = await getAuthenticatedVendorIdsAsync(user, userData, vendorInfo);
+        isAuthorized = 
+          isUserAdmin ||
+          (mData && isOrderOwnedByVendor(mData, vendorIds, isUserAdmin, mData.id || cleanId)) ||
+          (rData && isOrderOwnedByVendor(rData, vendorIds, isUserAdmin, rData.id || cleanId)) ||
+          (vData && isOrderOwnedByVendor(vData, vendorIds, isUserAdmin, vData.id || cleanId)) ||
+          (passedOrder && isOrderOwnedByVendor(passedOrder, vendorIds, isUserAdmin, passedOrder.id || cleanId));
+      }
+
+      if (!isAuthorized) {
+        if (authLoading || vendorStoreLoading) {
+          return;
+        }
         toast.error('Unauthorized access');
         navigate('/vendor/orders');
         return;
@@ -475,21 +514,35 @@ export default function OrderDetails() {
       }
 
       // Source data priority:
-      // Merge mData (main order from 'orders') and vData (vendor order from 'vendor_orders')
-      const source = { ...(mData || {}), ...(vData || {}) };
+      // Merge rData (reseller details), mData (main customer order), and vData (vendor order)
+      const source = { ...(rData || {}), ...(mData || {}), ...(vData || {}) };
       const rawItems = Array.isArray(mData?.items) 
         ? mData.items 
         : (mData?.items && typeof mData.items === 'object' 
             ? Object.values(mData.items) 
-            : (Array.isArray(vData?.items) ? vData.items : (vData?.items && typeof vData.items === 'object' ? Object.values(vData.items) : [])));
+            : (Array.isArray(rData?.items) 
+                ? rData.items 
+                : (rData?.items && typeof rData.items === 'object' 
+                    ? Object.values(rData.items) 
+                    : (Array.isArray(vData?.items) ? vData.items : (vData?.items && typeof vData.items === 'object' ? Object.values(vData.items) : [])))));
 
-      const vItems = (user as any)?.role === 'Admin' 
-        ? rawItems 
-        : rawItems.filter((it: any) => !it?.vendorId || it?.vendorId === user?.uid || it?.storeId === user?.uid || it?.sellerId === user?.uid);
+      const isMyItem = (it: any) => 
+        !it?.vendorId || 
+        isUserAdmin || 
+        Array.from(vendorIds).some(vid => 
+          String(it.vendorId).trim() === vid || 
+          String(it.vendorUID).trim() === vid || 
+          String(it.vendorUid).trim() === vid || 
+          String(it.storeId).trim() === vid || 
+          String(it.sellerId).trim() === vid ||
+          String(it.userId).trim() === vid
+        );
+
+      const vItems = isUserAdmin ? rawItems : rawItems.filter(isMyItem);
 
       const displayItems = vItems.length > 0 ? vItems : rawItems;
 
-      const breakdown = calculateOrderPaymentBreakdown(mData || vData);
+      const breakdown = calculateOrderPaymentBreakdown(mData || vData || rData);
 
       const isDelivered = 
         vData?.status === 'Delivered' || 
@@ -503,19 +556,20 @@ export default function OrderDetails() {
 
       let orderData: any = {
         ...source,
-        id: vData?.id || mData?.id || cleanId,
-        orderId: vData?.orderId || mData?.orderId || pureOrderId || cleanId,
+        id: vData?.id || mData?.id || rData?.id || cleanId,
+        orderId: vData?.orderId || mData?.orderId || rData?.orderId || pureOrderId || cleanId,
         mainOrderId: mData?.mainOrderId || mData?.orderId || vData?.mainOrderId || pureOrderId || cleanId,
-        vendorId: user?.uid, // Authorized vendor UID for this view
-        customerId: vData?.customerId || vData?.userId || mData?.userId || mData?.customerId || '',
-        customerName: vData?.customerName || mData?.customerName || mData?.shippingAddress?.name || vData?.shippingAddress?.name || 'Customer',
+        vendorId: mData?.vendorId || vData?.vendorId || rData?.vendorId || user?.uid,
+        isResellerOrder: Boolean(isResellerOrderRecord(source) || rData || source.isResellerOrder),
+        customerId: vData?.customerId || vData?.userId || mData?.userId || mData?.customerId || rData?.customerId || '',
+        customerName: vData?.customerName || mData?.customerName || mData?.shippingAddress?.name || vData?.shippingAddress?.name || rData?.customerName || 'Customer',
         customerEmail: vData?.customerEmail || mData?.customerEmail || mData?.shippingAddress?.email || vData?.shippingAddress?.email || '',
-        customerPhone: vData?.customerPhone || mData?.customerPhone || mData?.shippingAddress?.mobile || mData?.shippingAddress?.phone || vData?.shippingAddress?.mobile || '',
+        customerPhone: vData?.customerPhone || mData?.customerPhone || mData?.shippingAddress?.mobile || mData?.shippingAddress?.phone || vData?.shippingAddress?.mobile || rData?.customerPhone || '',
         customerAltPhone: vData?.customerAltPhone || mData?.customerAltPhone || mData?.shippingAddress?.altPhone || '',
         district: vData?.district || mData?.district || mData?.shippingAddress?.district || vData?.shippingAddress?.district || '',
         upazila: vData?.upazila || mData?.upazila || mData?.shippingAddress?.upazila || vData?.shippingAddress?.upazila || '',
         area: vData?.area || mData?.area || mData?.shippingAddress?.area || vData?.shippingAddress?.area || '',
-        fullAddress: vData?.fullAddress || mData?.fullAddress || mData?.shippingAddress?.fullAddress || mData?.shippingAddress?.street || '',
+        fullAddress: vData?.fullAddress || mData?.fullAddress || mData?.shippingAddress?.fullAddress || mData?.shippingAddress?.street || rData?.customerAddress || '',
         additionalNotes: vData?.additionalNotes || mData?.additionalNotes || mData?.shippingAddress?.additionalNotes || '',
         items: displayItems,
         itemsCount: displayItems.length || 1,
@@ -529,9 +583,9 @@ export default function OrderDetails() {
         codAmount: vData?.codAmount ?? breakdown.codAmount ?? mData?.codAmount ?? 0,
         isFullPayment: vData?.isFullPayment ?? breakdown.isFullPayment ?? mData?.isFullPayment,
         isOnlyDeliveryChargeAdvance: vData?.isOnlyDeliveryChargeAdvance ?? breakdown.isOnlyDeliveryChargeAdvance ?? mData?.isOnlyDeliveryChargeAdvance,
-        paymentMethod: vData?.paymentMethod || mData?.paymentMethod || 'Cash on Delivery',
+        paymentMethod: vData?.paymentMethod || mData?.paymentMethod || rData?.paymentMethod || 'Cash on Delivery',
         paymentStatus: vData?.paymentStatus || mData?.paymentStatus || 'Pending',
-        status: isDelivered ? 'Delivered' : (vData?.status || mData?.status || 'Pending'),
+        status: isDelivered ? 'Delivered' : (vData?.status || mData?.status || rData?.orderStatus || 'Pending'),
         vendorStatus: isDelivered ? 'Delivered' : (vData?.vendorStatus || mData?.vendorStatus || vData?.status || mData?.status || 'Pending'),
         acceptedAt: vData?.acceptedAt || mData?.acceptedAt,
         shippedAt: vData?.shippedAt || mData?.shippedAt,
@@ -547,7 +601,7 @@ export default function OrderDetails() {
         officialTrackingUrl: vData?.officialTrackingUrl || mData?.officialTrackingUrl,
         vendorPayoutStatus: vData?.vendorPayoutStatus || mData?.vendorPayoutStatus || (breakdown.isCod ? 'None' : 'Held'),
         autoReleaseAt: vData?.autoReleaseAt || mData?.autoReleaseAt,
-        createdAt: vData?.createdAt || mData?.createdAt || Date.now(),
+        createdAt: vData?.createdAt || mData?.createdAt || rData?.createdAt || Date.now(),
         shippingAddress: {
           ...(mData?.shippingAddress || {}),
           ...(vData?.shippingAddress || {})
@@ -693,29 +747,42 @@ export default function OrderDetails() {
       const freshResellerOrder = (await rtdbGet<any>(`reseller_orders/${mainOrdId}`)) ||
                                  (await rtdbGet<any>(`reseller_orders/${pureOrderIdToConfirm}`)) ||
                                  (await rtdbGet<any>(`reseller_orders/${orderIdToConfirm}`));
+      const isActualReseller = Boolean(
+        isResellerOrderRecord(order) || 
+        isResellerOrderRecord(freshResellerOrder) || 
+        isResellerOrderRecord(freshOrder) ||
+        freshResellerOrder?.resellerId ||
+        freshOrder?.resellerId ||
+        order?.resellerId ||
+        order?.profitStatus ||
+        freshResellerOrder?.profitStatus
+      );
+
       const mergedOrder = { 
         ...(freshResellerOrder || {}), 
         ...(freshOrder || {}), 
         ...order,
-        isResellerOrder: true
+        isResellerOrder: isActualReseller
       };
 
-      const eligibility = checkResellerOrderEligibility(mergedOrder, currentBalances);
+      if (isActualReseller) {
+        const eligibility = checkResellerOrderEligibility(mergedOrder, currentBalances);
 
-      // 2. Strict Balance Guard: availableBalance must be >= requiredResellerProfit
-      // (Confirmation is ALLOWED if availableBalance >= requiredResellerProfit, even if exactly equal)
-      if (!eligibility.isBalanceSufficient) {
-        toast.error(
-          eligibility.reason ||
-          `Reseller profit reserve করার জন্য Vendor-এর wallet balance যথেষ্ট নয়। (প্রয়োজন: ৳${eligibility.requiredResellerProfit}, বর্তমান ঘাটতি: ৳${eligibility.shortfall})। অনুগ্রহ করে Deposit অপশন ব্যবহার করুন।`,
-          { duration: 6000 }
-        );
-        // Automatically open existing Deposit Modal
-        handleOpenDepositFlow();
-        return;
+        // 2. Strict Balance Guard: availableBalance must be >= requiredResellerProfit
+        // (Confirmation is ALLOWED if availableBalance >= requiredResellerProfit, even if exactly equal)
+        if (!eligibility.isBalanceSufficient) {
+          toast.error(
+            eligibility.reason ||
+            `Reseller profit reserve করার জন্য Vendor-এর wallet balance যথেষ্ট নয়। (প্রয়োজন: ৳${eligibility.requiredResellerProfit}, বর্তমান ঘাটতি: ৳${eligibility.shortfall})। অনুগ্রহ করে Deposit অপশন ব্যবহার করুন।`,
+            { duration: 6000 }
+          );
+          // Automatically open existing Deposit Modal
+          handleOpenDepositFlow();
+          return;
+        }
       }
 
-      // 3. Execute Step 5 Reseller Order Confirmation with atomic Profit Lock
+      // 3. Execute Order Confirmation (with atomic Profit Lock for Reseller orders)
       const res = await confirmVendorResellerOrder(orderIdToConfirm, user.uid, mergedOrder);
       if (!res.success) {
         toast.error(res.message || 'অর্ডার কনফার্ম করা সম্ভব হয়নি।');
@@ -725,7 +792,7 @@ export default function OrderDetails() {
         return;
       }
 
-      toast.success(res.message || 'অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে এবং রিসেলার প্রফিট লক করা হয়েছে!');
+      toast.success(res.message || 'অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে!');
       await refreshWalletAndOrder();
       setShowCourierModal(true);
       try {

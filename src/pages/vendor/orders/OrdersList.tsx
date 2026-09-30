@@ -16,8 +16,10 @@ import {
   confirmVendorResellerOrder, 
   isResellerOrderRecord,
   getAuthenticatedVendorIds,
+  getAuthenticatedVendorIdsAsync,
   checkIsAdminUser,
-  isOrderOwnedByVendor
+  isOrderOwnedByVendor,
+  fetchVendorOrdersUnified
 } from '../../../services/vendorResellerOrderService';
 import CourierVerificationModal from '../../../components/vendor/CourierVerificationModal';
 import VendorCancelOrderModal from '../../../components/vendor/VendorCancelOrderModal';
@@ -152,6 +154,9 @@ export default function OrdersList() {
     const unsubOrders = rtdbSubscribe('orders', () => {
       debouncedFetch();
     });
+    const unsubROrders = rtdbSubscribe('reseller_orders', () => {
+      debouncedFetch();
+    });
 
     const handleVendorOrderEvent = () => debouncedFetch();
     window.addEventListener('vendor_order_updated', handleVendorOrderEvent);
@@ -160,159 +165,17 @@ export default function OrdersList() {
       if (debounceTimer) clearTimeout(debounceTimer);
       unsubVOrders();
       unsubOrders();
+      unsubROrders();
       window.removeEventListener('vendor_order_updated', handleVendorOrderEvent);
     };
   }, [user?.uid, authLoading, vendorInfo?.vendorId, vendorInfo?.storeId]);
 
   const fetchOrders = async () => {
     if (!user) return;
-    const vendorIds = getAuthenticatedVendorIds(user, userData, vendorInfo);
-    const isUserAdmin = checkIsAdminUser(user, userData) || isAdmin;
-
     try {
-      const [vOrdersList, mainOrdersList] = await Promise.all([
-        rtdbList<any>('vendor_orders', (item, id) => isOrderOwnedByVendor(item, vendorIds, isUserAdmin, id)),
-        rtdbList<any>('orders', (item, id) => isOrderOwnedByVendor(item, vendorIds, isUserAdmin, id))
-      ]);
-
-      const items: any[] = [];
-      const seenOrderIds = new Set<string>();
-
-      // Helper to check item ownership
-      const isMyItem = (it: any) => 
-        !it?.vendorId || 
-        isUserAdmin || 
-        Array.from(vendorIds).some(vid => 
-          String(it.vendorId).trim() === vid || 
-          String(it.vendorUID).trim() === vid || 
-          String(it.vendorUid).trim() === vid || 
-          String(it.storeId).trim() === vid || 
-          String(it.sellerId).trim() === vid
-        );
-
-      // 1. Process vendor_orders (if any)
-      vOrdersList.forEach(v => {
-        const vData = { id: v.id, ...v.data };
-        const cleanId = v.id;
-        const pureOrderId = (vData.orderId || vData.mainOrderId || (cleanId.includes('_') ? cleanId.split('_')[0] : cleanId)).trim();
-
-        seenOrderIds.add(cleanId);
-        if (pureOrderId) seenOrderIds.add(pureOrderId);
-
-        const breakdown = calculateOrderPaymentBreakdown(vData);
-        const mainOrder = mainOrdersList.find(m => m.id === pureOrderId || m.id === vData.orderId || m.data?.orderId === pureOrderId || m.data?.orderId === vData.orderId);
-
-        const isDelivered = 
-          vData.status === 'Delivered' || 
-          vData.vendorStatus === 'Delivered' ||
-          mainOrder?.data?.status === 'Delivered' || 
-          mainOrder?.data?.vendorStatus === 'Delivered' ||
-          ((vData.reviewSubmitted || vData.reviewCompleted || mainOrder?.data?.reviewSubmitted || mainOrder?.data?.reviewCompleted) && (breakdown.isCod || mainOrder?.data?.paymentMethod === 'cod'));
-
-        const rawItems = Array.isArray(vData.items) ? vData.items : (vData.items && typeof vData.items === 'object' ? Object.values(vData.items) : (mainOrder?.data?.items ? (Array.isArray(mainOrder.data.items) ? mainOrder.data.items : Object.values(mainOrder.data.items)) : []));
-        const vItems = isUserAdmin ? rawItems : rawItems.filter(isMyItem);
-
-        items.push({
-          ...vData,
-          id: cleanId,
-          orderId: vData.orderId || pureOrderId || cleanId,
-          mainOrderId: vData.mainOrderId || pureOrderId || cleanId,
-          vendorId: vData.vendorId || user.uid,
-          customerId: vData.customerId || vData.userId || mainOrder?.data?.userId || '',
-          customerName: vData.customerName || vData.shippingAddress?.name || mainOrder?.data?.shippingAddress?.name || mainOrder?.data?.customerName || 'Customer',
-          customerEmail: vData.customerEmail || vData.shippingAddress?.email || mainOrder?.data?.shippingAddress?.email || mainOrder?.data?.customerEmail || '',
-          customerPhone: vData.customerPhone || vData.shippingAddress?.mobile || vData.shippingAddress?.phone || mainOrder?.data?.shippingAddress?.mobile || '',
-          itemsCount: vItems.length || rawItems.length || 1,
-          items: vItems.length > 0 ? vItems : rawItems,
-          itemsPrice: vData.itemsPrice || breakdown.itemsPrice,
-          subtotal: vData.subtotal || breakdown.itemsPrice || vData.total,
-          deliveryCharge: vData.deliveryCharge ?? breakdown.deliveryCharge ?? 0,
-          grandTotal: vData.grandTotal || breakdown.grandTotal,
-          advancePaymentAmount: vData.advancePaymentAmount ?? breakdown.advanceAmount ?? 0,
-          paidAmount: vData.paidAmount ?? breakdown.advanceAmount ?? 0,
-          codAmount: vData.codAmount ?? breakdown.codAmount ?? 0,
-          isFullPayment: vData.isFullPayment ?? breakdown.isFullPayment,
-          paymentMethod: vData.paymentMethod || mainOrder?.data?.paymentMethod || 'Cash on Delivery',
-          paymentStatus: vData.paymentStatus || mainOrder?.data?.paymentStatus || 'Pending',
-          status: isDelivered ? 'Delivered' : (vData.status || mainOrder?.data?.status || 'Pending'),
-          vendorStatus: isDelivered ? 'Delivered' : (vData.vendorStatus || mainOrder?.data?.vendorStatus || vData.status || 'Pending'),
-          courierName: vData.courierName || mainOrder?.data?.courierName || '',
-          trackingNumber: vData.trackingNumber || vData.trackingId || mainOrder?.data?.trackingNumber || mainOrder?.data?.trackingId || '',
-          trackingId: vData.trackingNumber || vData.trackingId || mainOrder?.data?.trackingNumber || mainOrder?.data?.trackingId || '',
-          trackingUrl: vData.trackingUrl || mainOrder?.data?.trackingUrl || '',
-          createdAt: vData.createdAt || mainOrder?.data?.createdAt || Date.now(),
-          shippingAddress: vData.shippingAddress || mainOrder?.data?.shippingAddress,
-        });
-      });
-
-      // 2. Process mainOrdersList from 'orders' node
-      mainOrdersList.forEach(({ id: docId, data: oData }) => {
-        const pureOrderId = (oData.orderId || (docId.includes('_') ? docId.split('_')[0] : docId)).trim();
-
-        if (seenOrderIds.has(docId) || seenOrderIds.has(pureOrderId)) {
-          return;
-        }
-        seenOrderIds.add(docId);
-        if (pureOrderId) seenOrderIds.add(pureOrderId);
-
-        const rawItems = Array.isArray(oData.items) ? oData.items : (oData.items && typeof oData.items === 'object' ? Object.values(oData.items) : []);
-        const vItems = isUserAdmin ? rawItems : rawItems.filter(isMyItem);
-        const breakdown = calculateOrderPaymentBreakdown(oData);
-
-        const isDelivered = oData.status === 'Delivered' || oData.vendorStatus === 'Delivered' || ((oData.reviewSubmitted || oData.reviewCompleted) && (breakdown.isCod || oData.paymentGateway === 'Cash on Delivery' || oData.paymentMethod === 'cod'));
-
-        items.push({
-          ...oData,
-          id: docId,
-          orderId: oData.orderId || pureOrderId || docId,
-          mainOrderId: oData.mainOrderId || pureOrderId || docId,
-          vendorId: oData.vendorId || user.uid,
-          customerId: oData.userId || oData.customerId || '',
-          customerName: oData.customerName || oData.shippingAddress?.name || 'Customer',
-          customerEmail: oData.customerEmail || oData.shippingAddress?.email || '',
-          customerPhone: oData.customerPhone || oData.shippingAddress?.mobile || oData.shippingAddress?.phone || '',
-          itemsCount: vItems.length || rawItems.length || 1,
-          items: vItems.length > 0 ? vItems : rawItems,
-          itemsPrice: breakdown.itemsPrice || oData.itemsPrice || oData.subtotal || oData.total,
-          subtotal: breakdown.itemsPrice || oData.subtotal || oData.total,
-          deliveryCharge: breakdown.deliveryCharge ?? oData.deliveryCharge ?? oData.shippingCharge ?? 0,
-          grandTotal: breakdown.grandTotal || oData.grandTotal || oData.total,
-          advancePaymentAmount: breakdown.advanceAmount ?? oData.advancePaymentAmount ?? 0,
-          paidAmount: breakdown.advanceAmount ?? oData.paidAmount ?? 0,
-          codAmount: breakdown.codAmount ?? oData.codAmount ?? 0,
-          isFullPayment: breakdown.isFullPayment ?? oData.isFullPayment,
-          paymentMethod: oData.paymentMethod || 'Cash on Delivery',
-          paymentStatus: oData.paymentStatus || 'Pending',
-          status: isDelivered ? 'Delivered' : (oData.status || 'Pending'),
-          vendorStatus: isDelivered ? 'Delivered' : (oData.vendorStatus || oData.status || 'Pending'),
-          courierName: oData.courierName || '',
-          trackingNumber: oData.trackingNumber || oData.trackingId || '',
-          trackingId: oData.trackingNumber || oData.trackingId || '',
-          trackingUrl: oData.trackingUrl || '',
-          createdAt: oData.createdAt || Date.now(),
-          shippingAddress: oData.shippingAddress,
-          isFromMainOrders: true
-        });
-      });
-
-      setOrders(items);
-      
-      // Calculate stats with normalized status matching
-      const s = {
-        total: items.length,
-        pending: items.filter(i => {
-          const st = String(i.status || 'Pending').trim().toLowerCase();
-          return st === 'pending' || st === 'confirmed' || (!['accepted', 'shipped', 'in transit', 'out for delivery', 'delivered', 'cancelled', 'refunded', 'rejected', 'returned'].includes(st) && !i.acceptedAt);
-        }).length,
-        accepted: items.filter(i => String(i.status || '').trim().toLowerCase() === 'accepted').length,
-        shipped: items.filter(i => String(i.status || '').trim().toLowerCase() === 'shipped').length,
-        inTransit: items.filter(i => String(i.status || '').trim().toLowerCase() === 'in transit').length,
-        outForDelivery: items.filter(i => String(i.status || '').trim().toLowerCase() === 'out for delivery').length,
-        delivered: items.filter(i => String(i.status || '').trim().toLowerCase() === 'delivered').length,
-        rejected: items.filter(i => String(i.status || '').trim().toLowerCase() === 'rejected').length,
-        cancelled: items.filter(i => ['cancelled', 'refunded'].includes(String(i.status || '').trim().toLowerCase())).length,
-      };
-      setStats(s);
+      const res = await fetchVendorOrdersUnified(user, userData, vendorInfo, isAdmin);
+      setOrders(res.orders);
+      setStats(res.stats);
     } catch (error) {
       console.error("Error fetching orders from RTDB", error);
       toast.error('Failed to load orders');

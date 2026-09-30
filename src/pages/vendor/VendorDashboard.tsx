@@ -67,7 +67,10 @@ import {
 import { getVendorPlatformFee } from '../../services/platformFeeService';
 import { format } from 'date-fns';
 import { fetchVendorReviews, replyToCustomerReview, ProductReview } from '../../services/reviewService';
-import { calculateResellerLockedProfitFromOrders } from '../../services/vendorResellerOrderService';
+import { 
+  calculateResellerLockedProfitFromOrders,
+  fetchVendorOrdersUnified
+} from '../../services/vendorResellerOrderService';
 import { 
   getVendorOpenUrl, 
   slugifyVendorName, 
@@ -299,35 +302,17 @@ export default function VendorDashboard() {
           const activeProducts = vendorProducts.filter(p => p.status === 'Published').length;
           const outOfStock = vendorProducts.filter(p => !p.stock || Number(p.stock) <= 0).length;
 
-          // 2. Fetch real Orders from RTDB for this vendor
+          // 2. Fetch real Orders from RTDB for this vendor using unified loader
           let vendorOrders: any[] = [];
           let currentResellerLockedProfit = 0;
           try {
-            const vOrders = await rtdbList('vendor_orders', (o: any) => o?.vendorId === user.uid || o?.userId === user.uid);
-            const mOrders = await rtdbList('orders', (o: any) => o?.vendorId === user.uid || o?.userId === user.uid);
-            const rOrders = await rtdbList('reseller_orders', (o: any) => o?.vendorId === user.uid || o?.userId === user.uid);
-            const orderMap = new Map();
-            vOrders.forEach(item => {
-              const orderData = { id: item.id, ...item.data };
-              orderMap.set(item.id || (item.data as any)?.orderId, orderData);
-            });
-            mOrders.forEach(item => {
-              const k = item.id || (item.data as any)?.orderId;
-              if (!orderMap.has(k)) {
-                orderMap.set(k, { id: item.id, ...item.data });
-              }
-            });
-            vendorOrders = Array.from(orderMap.values());
+            const unifiedRes = await fetchVendorOrdersUnified(user, userData, vendorInfo);
+            vendorOrders = unifiedRes.orders;
 
             // Reseller Locked Profit Calculation:
             // Sum all Reseller Orders where profitStatus is currently 'LOCKED'
             // Exclude RELEASED, CANCELLED, RETURNED, PENDING
-            const allRawOrders = [
-              ...vOrders.map(item => ({ id: item.id, ...item.data })),
-              ...mOrders.map(item => ({ id: item.id, ...item.data })),
-              ...rOrders.map(item => ({ id: item.id, ...item.data }))
-            ];
-            currentResellerLockedProfit = calculateResellerLockedProfitFromOrders(allRawOrders);
+            currentResellerLockedProfit = calculateResellerLockedProfitFromOrders(vendorOrders);
             setResellerLockedProfit(currentResellerLockedProfit);
           } catch (oErr) {
             console.warn('Could not query vendor orders from RTDB:', oErr);
@@ -339,10 +324,13 @@ export default function VendorDashboard() {
           const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
           const totalOrders = vendorOrders.length;
-          const pendingOrders = vendorOrders.filter(o => o.status === 'Pending').length;
-          const processingOrders = vendorOrders.filter(o => ['Accepted', 'Processing', 'In Transit', 'Out for Delivery'].includes(o.status)).length;
-          const completedOrders = vendorOrders.filter(o => o.status === 'Delivered').length;
-          const cancelledOrders = vendorOrders.filter(o => ['Cancelled', 'Rejected', 'Refunded'].includes(o.status)).length;
+          const pendingOrders = vendorOrders.filter(o => {
+            const st = String(o.status || 'Pending').trim().toLowerCase();
+            return st === 'pending' || st === 'confirmed' || (!['accepted', 'shipped', 'in transit', 'out for delivery', 'delivered', 'cancelled', 'refunded', 'rejected', 'returned'].includes(st) && !o.acceptedAt);
+          }).length;
+          const processingOrders = vendorOrders.filter(o => ['accepted', 'processing', 'in transit', 'out for delivery', 'shipped'].includes(String(o.status || '').trim().toLowerCase())).length;
+          const completedOrders = vendorOrders.filter(o => String(o.status || '').trim().toLowerCase() === 'delivered').length;
+          const cancelledOrders = vendorOrders.filter(o => ['cancelled', 'rejected', 'refunded'].includes(String(o.status || '').trim().toLowerCase())).length;
 
           const todaySales = vendorOrders
             .filter(o => (o.createdAt || 0) >= startOfToday && o.status !== 'Cancelled')

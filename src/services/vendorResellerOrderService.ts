@@ -1,4 +1,5 @@
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbTransaction } from '../lib/rtdb';
+import { calculateOrderPaymentBreakdown } from './vendorPayoutService';
 import { 
   verifyAndRecalculateResellerProfit, 
   validateOrderStateTransition, 
@@ -587,8 +588,50 @@ export async function confirmVendorResellerOrder(
     resellerOrderData?.resellerId ||
     resellerOrderData?.profitStatus
   );
+
+  // If this is a standard vendor order (direct customer retail order, not placed via reseller)
+  // smoothly confirm the order without rejecting or demanding reseller wallet profit
   if (!isReseller) {
-    return { success: false, error: 'NOT_RESELLER_ORDER', message: 'This is not a reseller order' };
+    const now = Date.now();
+    const orderUpdates = {
+      status: 'Accepted',
+      vendorStatus: 'Accepted',
+      acceptedAt: now,
+      updatedAt: now
+    };
+    const updatePromises: Promise<any>[] = [];
+    if (resolvedMainOrderId) {
+      updatePromises.push(rtdbUpdate(`orders/${resolvedMainOrderId}`, orderUpdates).catch(() => null));
+    }
+    if (cleanOrderId && cleanOrderId !== resolvedMainOrderId) {
+      updatePromises.push(rtdbUpdate(`orders/${cleanOrderId}`, orderUpdates).catch(() => null));
+    }
+    if (pureOrderId && pureOrderId !== resolvedMainOrderId && pureOrderId !== cleanOrderId) {
+      updatePromises.push(rtdbUpdate(`orders/${pureOrderId}`, orderUpdates).catch(() => null));
+    }
+    updatePromises.push(rtdbUpdate(`vendor_orders/${cleanOrderId}`, orderUpdates).catch(() => null));
+    if (pureOrderId) {
+      updatePromises.push(rtdbUpdate(`vendor_orders/${pureOrderId}_${vendorId}`, orderUpdates).catch(() => null));
+      updatePromises.push(rtdbUpdate(`vendor_orders/${pureOrderId}`, orderUpdates).catch(() => null));
+    }
+    await Promise.allSettled(updatePromises);
+    await rtdbPush('order_status_logs', {
+      orderId: resolvedMainOrderId || pureOrderId || cleanOrderId,
+      previousStatus: order.status || 'Pending',
+      newStatus: 'Accepted',
+      reason: `Standard vendor order confirmed by vendor ${vendorId}`,
+      changedBy: vendorId,
+      timestamp: now
+    }).catch(() => null);
+
+    return {
+      success: true,
+      message: 'অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে।',
+      requiredResellerProfit: 0,
+      availableBalance: 0,
+      lockedBalance: 0,
+      totalBalance: 0
+    };
   }
 
   // Ensure normalized reseller flags
@@ -1042,12 +1085,14 @@ export function getAuthenticatedVendorIds(user: any, userData?: any, vendorInfo?
   if (userData?.storeId) ids.add(String(userData.storeId).trim());
   if (userData?.shopId) ids.add(String(userData.shopId).trim());
   if (userData?.sellerId) ids.add(String(userData.sellerId).trim());
+  if (userData?.shopSlug) ids.add(String(userData.shopSlug).trim());
   if (vendorInfo?.vendorId) ids.add(String(vendorInfo.vendorId).trim());
   if (vendorInfo?.storeId) ids.add(String(vendorInfo.storeId).trim());
   if (vendorInfo?.shopId) ids.add(String(vendorInfo.shopId).trim());
   if (vendorInfo?.sellerId) ids.add(String(vendorInfo.sellerId).trim());
   if (vendorInfo?.userId) ids.add(String(vendorInfo.userId).trim());
   if (vendorInfo?.id) ids.add(String(vendorInfo.id).trim());
+  if (vendorInfo?.shopSlug) ids.add(String(vendorInfo.shopSlug).trim());
 
   // Also read synchronous localStorage caches if available in browser
   // This guarantees valid vendor identity resolution even during initial mount/refresh before async state settles
@@ -1064,9 +1109,44 @@ export function getAuthenticatedVendorIds(user: any, userData?: any, vendorInfo?
             if (parsed.shopId) ids.add(String(parsed.shopId).trim());
             if (parsed.id) ids.add(String(parsed.id).trim());
             if (parsed.userId) ids.add(String(parsed.userId).trim());
+            if (parsed.shopSlug) ids.add(String(parsed.shopSlug).trim());
           }
         }
       }
+    } catch (_) {}
+  }
+  return ids;
+}
+
+/**
+ * Asynchronously returns all possible vendor identifier aliases by querying RTDB if needed.
+ */
+export async function getAuthenticatedVendorIdsAsync(user: any, userData?: any, vendorInfo?: any): Promise<Set<string>> {
+  const ids = getAuthenticatedVendorIds(user, userData, vendorInfo);
+  if (user?.uid) {
+    try {
+      const [sSnap, vSnap, pSnap, uSnap] = await Promise.allSettled([
+        rtdbGet<any>(`stores/${user.uid}`),
+        rtdbGet<any>(`vendors/${user.uid}`),
+        rtdbGet<any>(`vendor_profiles/${user.uid}`),
+        rtdbGet<any>(`users/${user.uid}`)
+      ]);
+      const addFromObj = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (obj.vendorId) ids.add(String(obj.vendorId).trim());
+        if (obj.storeId) ids.add(String(obj.storeId).trim());
+        if (obj.shopId) ids.add(String(obj.shopId).trim());
+        if (obj.sellerId) ids.add(String(obj.sellerId).trim());
+        if (obj.id) ids.add(String(obj.id).trim());
+        if (obj.uid) ids.add(String(obj.uid).trim());
+        if (obj.userId) ids.add(String(obj.userId).trim());
+        if (obj.shopSlug) ids.add(String(obj.shopSlug).trim());
+        if (obj.storeSlug) ids.add(String(obj.storeSlug).trim());
+      };
+      if (sSnap.status === 'fulfilled') addFromObj(sSnap.value);
+      if (vSnap.status === 'fulfilled') addFromObj(vSnap.value);
+      if (pSnap.status === 'fulfilled') addFromObj(pSnap.value);
+      if (uSnap.status === 'fulfilled') addFromObj(uSnap.value);
     } catch (_) {}
   }
   return ids;
@@ -1100,24 +1180,27 @@ export function isOrderOwnedByVendor(
   const ids = vendorIds instanceof Set ? vendorIds : new Set(vendorIds);
   if (ids.size === 0) return false;
 
-  // 1. Direct vendorId / vendorUID / vendorUid / sellerId / sellerUID / storeId / storeUID / userId / customerId
+  // 1. Direct vendorId / vendorUID / vendorUid / sellerId / sellerUID / storeId / storeUID / userId / customerId / creatorId
   const directFields = [
     order.vendorId,
-    typeof order.vendorId === 'object' ? order.vendorId?.id || order.vendorId?.uid || order.vendorId?.vendorId : null,
+    typeof order.vendorId === 'object' ? order.vendorId?.id || order.vendorId?.uid || order.vendorId?.vendorId || order.vendorId?.storeId : null,
     order.vendorUID,
     order.vendorUid,
     order.sellerId,
     order.sellerUID,
     order.sellerUid,
-    typeof order.seller === 'object' ? order.seller?.id || order.seller?.uid || order.seller?.vendorId : null,
+    typeof order.seller === 'object' ? order.seller?.id || order.seller?.uid || order.seller?.vendorId || order.seller?.storeId : null,
     order.storeId,
     order.storeUID,
     order.storeUid,
-    typeof order.store === 'object' ? order.store?.id || order.store?.storeId : null,
-    typeof order.vendor === 'object' ? order.vendor?.id || order.vendor?.uid : null,
-    order.userId, // Matches vendor/creator user ID as in VendorDashboard & VendorNotifications
+    typeof order.store === 'object' ? order.store?.id || order.store?.storeId || order.store?.vendorId : null,
+    typeof order.vendor === 'object' ? order.vendor?.id || order.vendor?.uid || order.vendor?.vendorId || order.vendor?.storeId : null,
     order.creatorId,
-    order.creatorUID
+    order.creatorUID,
+    order.userId,
+    order.customerId,
+    order.user_id,
+    order.customer_id
   ];
   for (const f of directFields) {
     if (f && ids.has(String(f).trim())) return true;
@@ -1126,7 +1209,13 @@ export function isOrderOwnedByVendor(
   // 2. Document key match (e.g. orderId_vendorId or vendorId prefix or cleanId)
   if (docKey) {
     for (const vId of ids) {
-      if (docKey.endsWith(`_${vId}`) || docKey.includes(vId)) return true;
+      if (
+        docKey === vId || 
+        docKey.endsWith(`_${vId}`) || 
+        docKey.startsWith(`${vId}_`) || 
+        docKey.includes(`_${vId}_`) ||
+        docKey.includes(vId)
+      ) return true;
     }
   }
 
@@ -1154,8 +1243,10 @@ export function isOrderOwnedByVendor(
       (it.sellerUID && ids.has(String(it.sellerUID).trim())) ||
       (it.storeId && ids.has(String(it.storeId).trim())) ||
       (it.storeUID && ids.has(String(it.storeUID).trim())) ||
-      (typeof it.vendor === 'object' && ((it.vendor?.id && ids.has(String(it.vendor.id).trim())) || (it.vendor?.uid && ids.has(String(it.vendor.uid).trim())) || (it.vendor?.vendorId && ids.has(String(it.vendor.vendorId).trim())))) ||
-      (typeof it.seller === 'object' && ((it.seller?.id && ids.has(String(it.seller.id).trim())) || (it.seller?.uid && ids.has(String(it.seller.uid).trim()))))
+      (it.userId && ids.has(String(it.userId).trim())) ||
+      (typeof it.vendor === 'object' && ((it.vendor?.id && ids.has(String(it.vendor.id).trim())) || (it.vendor?.uid && ids.has(String(it.vendor.uid).trim())) || (it.vendor?.vendorId && ids.has(String(it.vendor.vendorId).trim())) || (it.vendor?.storeId && ids.has(String(it.vendor.storeId).trim())))) ||
+      (typeof it.store === 'object' && ((it.store?.id && ids.has(String(it.store.id).trim())) || (it.store?.storeId && ids.has(String(it.store.storeId).trim())) || (it.store?.vendorId && ids.has(String(it.store.vendorId).trim())))) ||
+      (typeof it.seller === 'object' && ((it.seller?.id && ids.has(String(it.seller.id).trim())) || (it.seller?.uid && ids.has(String(it.seller.uid).trim())) || (it.seller?.vendorId && ids.has(String(it.seller.vendorId).trim()))))
     ) {
       return true;
     }
@@ -1168,12 +1259,217 @@ export function isOrderOwnedByVendor(
   if (order.priceSnapshot?.vendorUID && ids.has(String(order.priceSnapshot.vendorUID).trim())) return true;
   if (order.resellerPriceSnapshot?.vendorUID && ids.has(String(order.resellerPriceSnapshot.vendorUID).trim())) return true;
 
-  // 6. Shipping Snapshot vendor packages
+  // 6. Shipping Snapshot vendor packages & direct vendorPackages
   if (order.shippingSnapshot?.vendorPackages && Array.isArray(order.shippingSnapshot.vendorPackages)) {
     for (const pkg of order.shippingSnapshot.vendorPackages) {
       if (pkg?.vendorId && ids.has(String(pkg.vendorId).trim())) return true;
     }
   }
+  if (order.vendorPackages && Array.isArray(order.vendorPackages)) {
+    for (const pkg of order.vendorPackages) {
+      if (pkg?.vendorId && ids.has(String(pkg.vendorId).trim())) return true;
+    }
+  }
 
   return false;
+}
+
+export interface UnifiedVendorOrdersResult {
+  orders: any[];
+  stats: {
+    total: number;
+    pending: number;
+    accepted: number;
+    shipped: number;
+    inTransit: number;
+    outForDelivery: number;
+    delivered: number;
+    rejected: number;
+    cancelled: number;
+  };
+}
+
+/**
+ * Unified loader for vendor orders across RTDB nodes (orders, reseller_orders, vendor_orders).
+ * Guarantees 100% consistency between Vendor Dashboard counters, order lists, and details.
+ */
+export async function fetchVendorOrdersUnified(
+  user: any,
+  userData?: any,
+  vendorInfo?: any,
+  isAdmin = false
+): Promise<UnifiedVendorOrdersResult> {
+  if (!user) {
+    return {
+      orders: [],
+      stats: { total: 0, pending: 0, accepted: 0, shipped: 0, inTransit: 0, outForDelivery: 0, delivered: 0, rejected: 0, cancelled: 0 }
+    };
+  }
+
+  const vendorIds = await getAuthenticatedVendorIdsAsync(user, userData, vendorInfo);
+  const isUserAdmin = checkIsAdminUser(user, userData) || isAdmin;
+
+  const [vOrdersList, mainOrdersList, rOrdersList] = await Promise.all([
+    rtdbList<any>('vendor_orders', (item, id) => isOrderOwnedByVendor(item, vendorIds, isUserAdmin, id)).catch(() => []),
+    rtdbList<any>('orders', (item, id) => isOrderOwnedByVendor(item, vendorIds, isUserAdmin, id)).catch(() => []),
+    rtdbList<any>('reseller_orders', (item, id) => isOrderOwnedByVendor(item, vendorIds, isUserAdmin, id)).catch(() => [])
+  ]);
+
+  const isMyItem = (it: any) => 
+    !it?.vendorId || 
+    isUserAdmin || 
+    Array.from(vendorIds).some(vid => 
+      String(it.vendorId).trim() === vid || 
+      String(it.vendorUID).trim() === vid || 
+      String(it.vendorUid).trim() === vid || 
+      String(it.storeId).trim() === vid || 
+      String(it.sellerId).trim() === vid ||
+      String(it.userId).trim() === vid
+    );
+
+  // Map to consolidate orders by clean pureOrderId
+  const orderMap = new Map<string, any>();
+
+  // 1. Process main customer orders from 'orders'
+  for (const { id: docId, data: oData } of mainOrdersList) {
+    if (!oData) continue;
+    const pureId = (oData.orderId || (docId.includes('_') ? docId.split('_')[0] : docId)).trim().replace(/^#/, '');
+    const breakdown = calculateOrderPaymentBreakdown(oData);
+    const rawItems = Array.isArray(oData.items) ? oData.items : (oData.items && typeof oData.items === 'object' ? Object.values(oData.items) : []);
+    const vItems = isUserAdmin ? rawItems : rawItems.filter(isMyItem);
+
+    const isDelivered = 
+      oData.status === 'Delivered' || 
+      oData.vendorStatus === 'Delivered' || 
+      ((oData.reviewSubmitted || oData.reviewCompleted) && (breakdown.isCod || oData.paymentGateway === 'Cash on Delivery' || oData.paymentMethod === 'cod'));
+
+    orderMap.set(pureId, {
+      ...oData,
+      id: docId,
+      orderId: oData.orderId || pureId || docId,
+      mainOrderId: oData.mainOrderId || pureId || docId,
+      vendorId: oData.vendorId || user.uid,
+      customerId: oData.userId || oData.customerId || '',
+      customerName: oData.customerName || oData.shippingAddress?.name || 'Customer',
+      customerEmail: oData.customerEmail || oData.shippingAddress?.email || '',
+      customerPhone: oData.customerPhone || oData.shippingAddress?.mobile || oData.shippingAddress?.phone || '',
+      customerAltPhone: oData.customerAltPhone || oData.shippingAddress?.altPhone || '',
+      itemsCount: vItems.length || rawItems.length || 1,
+      items: vItems.length > 0 ? vItems : rawItems,
+      itemsPrice: breakdown.itemsPrice || oData.itemsPrice || oData.subtotal || oData.total,
+      subtotal: breakdown.itemsPrice || oData.subtotal || oData.total,
+      deliveryCharge: breakdown.deliveryCharge ?? oData.deliveryCharge ?? oData.shippingCharge ?? 0,
+      shippingCharge: breakdown.deliveryCharge ?? oData.deliveryCharge ?? oData.shippingCharge ?? 0,
+      grandTotal: breakdown.grandTotal || oData.grandTotal || oData.total,
+      advancePaymentAmount: breakdown.advanceAmount ?? oData.advancePaymentAmount ?? 0,
+      paidAmount: breakdown.advanceAmount ?? oData.paidAmount ?? 0,
+      codAmount: breakdown.codAmount ?? oData.codAmount ?? 0,
+      isFullPayment: breakdown.isFullPayment ?? oData.isFullPayment,
+      paymentMethod: oData.paymentMethod || 'Cash on Delivery',
+      paymentStatus: oData.paymentStatus || 'Pending',
+      status: isDelivered ? 'Delivered' : (oData.status || 'Pending'),
+      vendorStatus: isDelivered ? 'Delivered' : (oData.vendorStatus || oData.status || 'Pending'),
+      courierName: oData.courierName || '',
+      trackingNumber: oData.trackingNumber || oData.trackingId || '',
+      trackingId: oData.trackingNumber || oData.trackingId || '',
+      trackingUrl: oData.trackingUrl || '',
+      createdAt: oData.createdAt || Date.now(),
+      shippingAddress: oData.shippingAddress,
+      isFromMainOrders: true
+    });
+  }
+
+  // 2. Enrich/Insert reseller orders from 'reseller_orders'
+  for (const { id: docId, data: rData } of rOrdersList) {
+    if (!rData) continue;
+    const pureId = (rData.orderId || (docId.includes('_') ? docId.split('_')[0] : docId)).trim().replace(/^#/, '');
+    const existing = orderMap.get(pureId);
+    if (existing) {
+      existing.isResellerOrder = true;
+      existing.resellerId = rData.resellerId || existing.resellerId;
+      existing.profitStatus = rData.profitStatus || existing.profitStatus;
+      existing.resellerProfit = rData.resellerProfit ?? existing.resellerProfit;
+      existing.resellerPriceSnapshot = rData.items || existing.resellerPriceSnapshot;
+      if (rData.vendorOrderStatus) existing.vendorOrderStatus = rData.vendorOrderStatus;
+    } else {
+      const breakdown = calculateOrderPaymentBreakdown(rData);
+      const rawItems = Array.isArray(rData.items) ? rData.items : (rData.items && typeof rData.items === 'object' ? Object.values(rData.items) : []);
+      orderMap.set(pureId, {
+        ...rData,
+        id: docId,
+        orderId: rData.orderId || pureId,
+        mainOrderId: rData.orderId || pureId,
+        isResellerOrder: true,
+        vendorId: rData.vendorId || user.uid,
+        customerId: rData.customerId || '',
+        customerName: rData.customerName || 'Customer',
+        customerPhone: rData.customerPhone || '',
+        itemsCount: rawItems.length || 1,
+        items: rawItems,
+        grandTotal: rData.customerPaidAmount || breakdown.grandTotal,
+        subtotal: rData.vendorPrice || breakdown.itemsPrice,
+        status: rData.orderStatus || 'Pending',
+        vendorStatus: rData.orderStatus || 'Pending',
+        createdAt: rData.createdAt || Date.now(),
+        isFromResellerOrders: true
+      });
+    }
+  }
+
+  // 3. Enrich/Insert vendor-specific records from 'vendor_orders'
+  for (const { id: docId, data: vData } of vOrdersList) {
+    if (!vData) continue;
+    const pureId = (vData.orderId || vData.mainOrderId || (docId.includes('_') ? docId.split('_')[0] : docId)).trim().replace(/^#/, '');
+    const existing = orderMap.get(pureId);
+    if (existing) {
+      if (vData.status) existing.status = vData.status;
+      if (vData.vendorStatus) existing.vendorStatus = vData.vendorStatus;
+      if (vData.trackingNumber) existing.trackingNumber = vData.trackingNumber;
+      if (vData.courierName) existing.courierName = vData.courierName;
+      if (vData.trackingUrl) existing.trackingUrl = vData.trackingUrl;
+      if (vData.acceptedAt) existing.acceptedAt = vData.acceptedAt;
+      if (vData.vendorOrderStatus) existing.vendorOrderStatus = vData.vendorOrderStatus;
+      if (vData.profitStatus) existing.profitStatus = vData.profitStatus;
+    } else {
+      const breakdown = calculateOrderPaymentBreakdown(vData);
+      const rawItems = Array.isArray(vData.items) ? vData.items : (vData.items && typeof vData.items === 'object' ? Object.values(vData.items) : []);
+      orderMap.set(pureId, {
+        ...vData,
+        id: docId,
+        orderId: vData.orderId || pureId,
+        mainOrderId: vData.mainOrderId || pureId,
+        vendorId: vData.vendorId || user.uid,
+        customerId: vData.customerId || vData.userId || '',
+        customerName: vData.customerName || vData.shippingAddress?.name || 'Customer',
+        customerPhone: vData.customerPhone || vData.shippingAddress?.mobile || '',
+        itemsCount: rawItems.length || 1,
+        items: rawItems,
+        grandTotal: vData.grandTotal || breakdown.grandTotal,
+        subtotal: vData.subtotal || breakdown.itemsPrice,
+        status: vData.status || 'Pending',
+        vendorStatus: vData.vendorStatus || vData.status || 'Pending',
+        createdAt: vData.createdAt || Date.now(),
+        isFromVendorOrders: true
+      });
+    }
+  }
+
+  const items = Array.from(orderMap.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  const stats = {
+    total: items.length,
+    pending: items.filter(i => {
+      const st = String(i.status || 'Pending').trim().toLowerCase();
+      return st === 'pending' || st === 'confirmed' || (!['accepted', 'shipped', 'in transit', 'out for delivery', 'delivered', 'cancelled', 'refunded', 'rejected', 'returned'].includes(st) && !i.acceptedAt);
+    }).length,
+    accepted: items.filter(i => String(i.status || '').trim().toLowerCase() === 'accepted').length,
+    shipped: items.filter(i => String(i.status || '').trim().toLowerCase() === 'shipped').length,
+    inTransit: items.filter(i => String(i.status || '').trim().toLowerCase() === 'in transit').length,
+    outForDelivery: items.filter(i => String(i.status || '').trim().toLowerCase() === 'out for delivery').length,
+    delivered: items.filter(i => String(i.status || '').trim().toLowerCase() === 'delivered').length,
+    rejected: items.filter(i => String(i.status || '').trim().toLowerCase() === 'rejected').length,
+    cancelled: items.filter(i => ['cancelled', 'refunded'].includes(String(i.status || '').trim().toLowerCase())).length,
+  };
+
+  return { orders: items, stats };
 }

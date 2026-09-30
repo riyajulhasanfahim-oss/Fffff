@@ -121,6 +121,11 @@
       ".write": "auth != null",
       ".indexOn": ["resellerId", "vendorId", "orderId", "profitStatus", "orderStatus", "createdAt"]
     },
+    "vendor_orders": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["vendorId", "userId", "orderId", "mainOrderId", "status", "vendorStatus", "createdAt"]
+    },
     "reseller_profit_locks": {
       ".indexOn": ["orderId", "vendorId", "resellerId", "status", "createdAt"]
     },
