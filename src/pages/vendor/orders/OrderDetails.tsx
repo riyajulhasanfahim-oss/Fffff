@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import { db } from '../../../lib/firebase';
@@ -171,11 +171,13 @@ export default function OrderDetails() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const passedOrder = location.state?.order;
   
-  const [order, setOrder] = useState<any>(null);
-  const [items, setItems] = useState<any[]>([]);
+  const [order, setOrder] = useState<any>(passedOrder || null);
+  const [items, setItems] = useState<any[]>(passedOrder?.items || []);
   const [logs, setLogs] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!passedOrder);
   const [updating, setUpdating] = useState(false);
   const [releasingPayout, setReleasingPayout] = useState(false);
   const [vendorReplyText, setVendorReplyText] = useState('');
@@ -351,149 +353,211 @@ export default function OrderDetails() {
     }
   }, [id, user?.uid]);
 
+  // Check if an order record belongs to the currently authenticated vendor
+  const isOrderAuthorizedForVendor = (orderObj: any, currentUserId: string, docId?: string): boolean => {
+    if (!orderObj || !currentUserId) return false;
+    if ((user as any)?.role === 'Admin') return true;
+    if (orderObj.vendorId === currentUserId) return true;
+    if (docId && (docId.endsWith(`_${currentUserId}`) || docId.includes(currentUserId))) return true;
+    if (orderObj.storeId === currentUserId || orderObj.sellerId === currentUserId) return true;
+    if (orderObj.vendorIds) {
+      if (Array.isArray(orderObj.vendorIds) && orderObj.vendorIds.includes(currentUserId)) return true;
+      if (typeof orderObj.vendorIds === 'object' && Object.values(orderObj.vendorIds).includes(currentUserId)) return true;
+    }
+    const itemsList = Array.isArray(orderObj.items)
+      ? orderObj.items
+      : (orderObj.items && typeof orderObj.items === 'object' ? Object.values(orderObj.items) : []);
+    if (itemsList.some((i: any) => i && (i.vendorId === currentUserId || i.storeId === currentUserId || i.sellerId === currentUserId))) {
+      return true;
+    }
+    if (orderObj.priceSnapshot?.vendorId === currentUserId || orderObj.resellerPriceSnapshot?.vendorId === currentUserId) {
+      return true;
+    }
+    return false;
+  };
+
   const fetchOrderDetails = async () => {
     try {
-      // 1. Fetch Order from vendor_orders or orders in RTDB
-      let orderData: any = await rtdbGet<any>(`vendor_orders/${id}`);
-      if (!orderData && user) {
-        orderData = await rtdbGet<any>(`vendor_orders/${id}_${user.uid}`);
+      const cleanId = (id || '').trim().replace(/^#/, '');
+      const pureOrderId = (cleanId.includes('_') ? cleanId.split('_')[0] : cleanId).trim();
+      const vendorSpecificId = `${pureOrderId}_${user?.uid}`;
+
+      // 1. Fetch Order from RTDB (checking both 'orders' and 'vendor_orders')
+      // Note: Orders placed from production website domain rjworldbd.com are stored in the 'orders' node.
+      let mData: any = await rtdbGet<any>(`orders/${cleanId}`);
+      if (!mData && pureOrderId !== cleanId) {
+        mData = await rtdbGet<any>(`orders/${pureOrderId}`);
+      }
+      if (!mData && user?.uid) {
+        mData = await rtdbGet<any>(`orders/${vendorSpecificId}`);
       }
 
-      // Fallback search if id is mainOrderId or has partial match (e.g. ORD-178998279679-863)
-      if (!orderData) {
+      let vData: any = await rtdbGet<any>(`vendor_orders/${cleanId}`);
+      if (!vData && user?.uid) {
+        vData = await rtdbGet<any>(`vendor_orders/${vendorSpecificId}`);
+      }
+      if (!vData && pureOrderId !== cleanId) {
+        vData = await rtdbGet<any>(`vendor_orders/${pureOrderId}`);
+      }
+
+      // If neither mData nor vData was found directly, search RTDB collections
+      if (!mData && !vData) {
         try {
-          const allVendorOrders = await rtdbGet<any>('vendor_orders') || {};
-          const cleanId = (id || '').trim();
-          const digitsOnly = cleanId.replace(/\D/g, '');
-          
-          let foundKey = Object.keys(allVendorOrders).find(k => 
-            k === cleanId ||
-            k.startsWith(cleanId) ||
-            allVendorOrders[k]?.orderId === cleanId ||
-            allVendorOrders[k]?.mainOrderId === cleanId
-          );
-
-          if (!foundKey && digitsOnly.length >= 8) {
-            foundKey = Object.keys(allVendorOrders).find(k => {
-              const kDigits = k.replace(/\D/g, '');
-              const oIdDigits = String(allVendorOrders[k]?.orderId || '').replace(/\D/g, '');
-              return (kDigits.length >= 8 && kDigits.includes(digitsOnly.slice(0, 10))) || 
-                     (oIdDigits.length >= 8 && oIdDigits.includes(digitsOnly.slice(0, 10)));
-            });
+          const allOrders = (await rtdbGet<any>('orders')) || {};
+          const foundMKey = Object.keys(allOrders).find(k => {
+            const item = allOrders[k];
+            if (!item) return false;
+            const matchesId = k === cleanId || k === pureOrderId || item.orderId === cleanId || item.orderId === pureOrderId || k.startsWith(pureOrderId);
+            return matchesId && (user?.uid ? isOrderAuthorizedForVendor(item, user.uid, k) : true);
+          });
+          if (foundMKey && allOrders[foundMKey]) {
+            mData = { id: foundMKey, ...allOrders[foundMKey] };
           }
+        } catch (e) {
+          console.warn('Fallback orders scan failed:', e);
+        }
 
-          if (foundKey && allVendorOrders[foundKey]) {
-            orderData = { id: foundKey, ...allVendorOrders[foundKey] };
+        try {
+          const allVendorOrders = (await rtdbGet<any>('vendor_orders')) || {};
+          const foundVKey = Object.keys(allVendorOrders).find(k => {
+            const item = allVendorOrders[k];
+            if (!item) return false;
+            const matchesId = k === cleanId || k === vendorSpecificId || k === pureOrderId || item.orderId === cleanId || item.orderId === pureOrderId || k.startsWith(cleanId);
+            return matchesId && (user?.uid ? isOrderAuthorizedForVendor(item, user.uid, k) : true);
+          });
+          if (foundVKey && allVendorOrders[foundVKey]) {
+            vData = { id: foundVKey, ...allVendorOrders[foundVKey] };
           }
         } catch (e) {
           console.warn('Fallback vendor_orders scan failed:', e);
         }
       }
 
-      if (orderData) {
-        orderData = { id: orderData.id || id, ...orderData };
-        // Merge with main order if available to ensure 100% address accuracy
-        if (orderData.mainOrderId || orderData.orderId) {
-          const mainId = orderData.mainOrderId || orderData.orderId;
-          const mainOrder = await rtdbGet<any>(`orders/${mainId}`);
-          if (mainOrder) {
-            const isDelivered = 
-              orderData.status === 'Delivered' || 
-              orderData.vendorStatus === 'Delivered' ||
-              mainOrder.status === 'Delivered' || 
-              mainOrder.vendorStatus === 'Delivered' ||
-              ((orderData.reviewSubmitted || orderData.reviewCompleted || mainOrder.reviewSubmitted || mainOrder.reviewCompleted) && (orderData.paymentMethod === 'cod' || mainOrder.paymentMethod === 'cod' || mainOrder.paymentGateway === 'Cash on Delivery'));
-
-            orderData = {
-              ...orderData,
-              status: isDelivered ? 'Delivered' : (orderData.status || mainOrder.status || 'Confirmed'),
-              vendorStatus: isDelivered ? 'Delivered' : (orderData.vendorStatus || mainOrder.vendorStatus || orderData.status || 'Confirmed'),
-              deliveredAt: orderData.deliveredAt || mainOrder.deliveredAt,
-              customerName: orderData.customerName || mainOrder.customerName || mainOrder.shippingAddress?.name,
-              customerPhone: orderData.customerPhone || mainOrder.customerPhone || mainOrder.shippingAddress?.mobile,
-              customerAltPhone: orderData.customerAltPhone || mainOrder.customerAltPhone || mainOrder.shippingAddress?.altPhone || '',
-              district: orderData.district || orderData.shippingAddress?.district || mainOrder.district || mainOrder.shippingAddress?.district || '',
-              upazila: orderData.upazila || orderData.shippingAddress?.upazila || mainOrder.upazila || mainOrder.shippingAddress?.upazila || '',
-              area: orderData.area || orderData.shippingAddress?.area || mainOrder.area || mainOrder.shippingAddress?.area || '',
-              fullAddress: orderData.fullAddress || orderData.shippingAddress?.fullAddress || mainOrder.fullAddress || mainOrder.shippingAddress?.fullAddress || '',
-              additionalNotes: orderData.additionalNotes || orderData.shippingAddress?.additionalNotes || mainOrder.additionalNotes || mainOrder.shippingAddress?.additionalNotes || '',
-              deliveryCharge: orderData.deliveryCharge ?? mainOrder.deliveryCharge ?? mainOrder.shippingCharge ?? 0,
-              advancePaymentAmount: orderData.advancePaymentAmount ?? mainOrder.advancePaymentAmount,
-              advancePaymentType: orderData.advancePaymentType ?? mainOrder.advancePaymentType,
-              codAmount: orderData.codAmount ?? mainOrder.codAmount,
-              shippingAddress: {
-                ...(mainOrder.shippingAddress || {}),
-                ...(orderData.shippingAddress || {})
-              }
-            };
-          }
+      // Fallback to passed state from OrdersList if RTDB direct query returned empty
+      if (!mData && !vData && passedOrder) {
+        if (passedOrder.id === cleanId || passedOrder.id === pureOrderId || passedOrder.orderId === cleanId || passedOrder.orderId === pureOrderId) {
+          mData = passedOrder;
         }
       }
 
-      if (!orderData) {
-        let mData = await rtdbGet<any>(`orders/${id}`);
-        if (!mData && id && id.includes('_')) {
-          mData = await rtdbGet<any>(`orders/${id.split('_')[0]}`);
-        }
-        if (!mData && user && id) {
-          mData = await rtdbGet<any>(`orders/${id}_${user.uid}`);
-        }
-        if (mData) {
-          const vItems = (mData.items || []).filter((it: any) => !it.vendorId || it.vendorId === user?.uid);
-          const vSub = vItems.reduce((acc: number, it: any) => acc + ((it.price || 0) * (it.quantity || 1)), 0);
-          const vDelCharge = mData.deliveryCharge || mData.shippingCharge || 0;
-          orderData = {
-            id,
-            orderId: mData.orderId || id,
-            mainOrderId: id,
-            vendorId: mData.vendorId || user?.uid,
-            customerId: mData.userId,
-            customerName: mData.customerName || mData.shippingAddress?.name || 'Customer',
-            customerEmail: mData.customerEmail || mData.shippingAddress?.email || '',
-            customerPhone: mData.customerPhone || mData.shippingAddress?.mobile || '',
-            customerAltPhone: mData.customerAltPhone || mData.shippingAddress?.altPhone || '',
-            district: mData.district || mData.shippingAddress?.district || '',
-            upazila: mData.upazila || mData.shippingAddress?.upazila || '',
-            area: mData.area || mData.shippingAddress?.area || '',
-            fullAddress: mData.fullAddress || mData.shippingAddress?.fullAddress || mData.shippingAddress?.street || '',
-            additionalNotes: mData.additionalNotes || mData.shippingAddress?.additionalNotes || '',
-            items: vItems.length > 0 ? vItems : mData.items,
-            itemsCount: vItems.length || (mData.items || []).length,
-            itemsPrice: vSub || mData.itemsPrice || mData.subtotal || mData.total,
-            subtotal: vSub || mData.subtotal || mData.total,
-            deliveryCharge: vDelCharge,
-            shippingCharge: vDelCharge,
-            grandTotal: mData.grandTotal || mData.total || (vSub + vDelCharge),
-            advancePaymentAmount: mData.advancePaymentAmount,
-            advancePaymentType: mData.advancePaymentType,
-            codAmount: mData.codAmount,
-            paymentMethod: mData.paymentMethod,
-            paymentStatus: mData.paymentStatus,
-            status: (mData.status === 'Delivered' || ((mData.reviewSubmitted || mData.reviewCompleted) && (mData.paymentMethod === 'cod' || mData.paymentGateway === 'Cash on Delivery'))) ? 'Delivered' : (mData.status || 'Pending'),
-            vendorStatus: (mData.status === 'Delivered' || mData.vendorStatus === 'Delivered' || ((mData.reviewSubmitted || mData.reviewCompleted) && (mData.paymentMethod === 'cod' || mData.paymentGateway === 'Cash on Delivery'))) ? 'Delivered' : (mData.vendorStatus || mData.status || 'Pending'),
-            courierName: mData.courierName || '',
-            trackingNumber: mData.trackingNumber || mData.trackingId || '',
-            trackingId: mData.trackingNumber || mData.trackingId || '',
-            trackingUrl: mData.trackingUrl || '',
-            createdAt: mData.createdAt || Date.now(),
-            shippingAddress: mData.shippingAddress,
-            isFromMainOrders: true
-          };
-        }
-      }
-
-      if (!orderData) {
+      if (!mData && !vData) {
         toast.error('Order not found');
         navigate('/vendor/orders');
         return;
       }
-      
-      // Verify owner
-      if (orderData.vendorId !== user?.uid && (user as any)?.role !== 'Admin') {
+
+      // Verify vendor authorization
+      const isAuthorized = 
+        (user as any)?.role === 'Admin' ||
+        (mData && isOrderAuthorizedForVendor(mData, user?.uid || '', mData.id || cleanId)) ||
+        (vData && isOrderAuthorizedForVendor(vData, user?.uid || '', vData.id || cleanId));
+
+      if (!isAuthorized) {
         toast.error('Unauthorized access');
         navigate('/vendor/orders');
         return;
       }
+
+      // If we only have vData and it references main order, load main order for complete customer details
+      if (!mData && vData && (vData.mainOrderId || vData.orderId)) {
+        const mId = vData.mainOrderId || vData.orderId;
+        try {
+          mData = await rtdbGet<any>(`orders/${mId}`);
+          if (!mData && mId.includes('_')) {
+            mData = await rtdbGet<any>(`orders/${mId.split('_')[0]}`);
+          }
+        } catch (_) {}
+      }
+
+      // If we only have mData, check if vendor_orders has vendor-specific record
+      if (!vData && user?.uid) {
+        try {
+          vData = await rtdbGet<any>(`vendor_orders/${vendorSpecificId}`);
+          if (!vData) {
+            vData = await rtdbGet<any>(`vendor_orders/${cleanId}`);
+          }
+        } catch (_) {}
+      }
+
+      // Source data priority:
+      // Merge mData (main order from 'orders') and vData (vendor order from 'vendor_orders')
+      const source = { ...(mData || {}), ...(vData || {}) };
+      const rawItems = Array.isArray(mData?.items) 
+        ? mData.items 
+        : (mData?.items && typeof mData.items === 'object' 
+            ? Object.values(mData.items) 
+            : (Array.isArray(vData?.items) ? vData.items : (vData?.items && typeof vData.items === 'object' ? Object.values(vData.items) : [])));
+
+      const vItems = (user as any)?.role === 'Admin' 
+        ? rawItems 
+        : rawItems.filter((it: any) => !it?.vendorId || it?.vendorId === user?.uid || it?.storeId === user?.uid || it?.sellerId === user?.uid);
+
+      const displayItems = vItems.length > 0 ? vItems : rawItems;
+
+      const breakdown = calculateOrderPaymentBreakdown(mData || vData);
+
+      const isDelivered = 
+        vData?.status === 'Delivered' || 
+        vData?.vendorStatus === 'Delivered' ||
+        mData?.status === 'Delivered' || 
+        mData?.vendorStatus === 'Delivered' ||
+        ((vData?.reviewSubmitted || vData?.reviewCompleted || mData?.reviewSubmitted || mData?.reviewCompleted) && (breakdown.isCod || mData?.paymentMethod === 'cod' || mData?.paymentGateway === 'Cash on Delivery'));
+
+      const vDelCharge = vData?.deliveryCharge ?? mData?.deliveryCharge ?? mData?.shippingCharge ?? breakdown.deliveryCharge ?? 0;
+      const vSub = displayItems.reduce((acc: number, it: any) => acc + (Number(it.price || it.vendorPrice || 0) * Number(it.quantity || 1)), 0);
+
+      let orderData: any = {
+        ...source,
+        id: vData?.id || mData?.id || cleanId,
+        orderId: vData?.orderId || mData?.orderId || pureOrderId || cleanId,
+        mainOrderId: mData?.mainOrderId || mData?.orderId || vData?.mainOrderId || pureOrderId || cleanId,
+        vendorId: user?.uid, // Authorized vendor UID for this view
+        customerId: vData?.customerId || vData?.userId || mData?.userId || mData?.customerId || '',
+        customerName: vData?.customerName || mData?.customerName || mData?.shippingAddress?.name || vData?.shippingAddress?.name || 'Customer',
+        customerEmail: vData?.customerEmail || mData?.customerEmail || mData?.shippingAddress?.email || vData?.shippingAddress?.email || '',
+        customerPhone: vData?.customerPhone || mData?.customerPhone || mData?.shippingAddress?.mobile || mData?.shippingAddress?.phone || vData?.shippingAddress?.mobile || '',
+        customerAltPhone: vData?.customerAltPhone || mData?.customerAltPhone || mData?.shippingAddress?.altPhone || '',
+        district: vData?.district || mData?.district || mData?.shippingAddress?.district || vData?.shippingAddress?.district || '',
+        upazila: vData?.upazila || mData?.upazila || mData?.shippingAddress?.upazila || vData?.shippingAddress?.upazila || '',
+        area: vData?.area || mData?.area || mData?.shippingAddress?.area || vData?.shippingAddress?.area || '',
+        fullAddress: vData?.fullAddress || mData?.fullAddress || mData?.shippingAddress?.fullAddress || mData?.shippingAddress?.street || '',
+        additionalNotes: vData?.additionalNotes || mData?.additionalNotes || mData?.shippingAddress?.additionalNotes || '',
+        items: displayItems,
+        itemsCount: displayItems.length || 1,
+        itemsPrice: vData?.itemsPrice || breakdown.itemsPrice || (vSub > 0 ? vSub : mData?.itemsPrice || mData?.subtotal || mData?.total || 0),
+        subtotal: vData?.subtotal || breakdown.itemsPrice || (vSub > 0 ? vSub : mData?.subtotal || mData?.total || 0),
+        deliveryCharge: vDelCharge,
+        shippingCharge: vDelCharge,
+        grandTotal: vData?.grandTotal || mData?.grandTotal || breakdown.grandTotal || mData?.total || ((vSub > 0 ? vSub : 0) + vDelCharge),
+        advancePaymentAmount: vData?.advancePaymentAmount ?? breakdown.advanceAmount ?? mData?.advancePaymentAmount ?? 0,
+        paidAmount: vData?.paidAmount ?? breakdown.advanceAmount ?? mData?.paidAmount ?? 0,
+        codAmount: vData?.codAmount ?? breakdown.codAmount ?? mData?.codAmount ?? 0,
+        isFullPayment: vData?.isFullPayment ?? breakdown.isFullPayment ?? mData?.isFullPayment,
+        isOnlyDeliveryChargeAdvance: vData?.isOnlyDeliveryChargeAdvance ?? breakdown.isOnlyDeliveryChargeAdvance ?? mData?.isOnlyDeliveryChargeAdvance,
+        paymentMethod: vData?.paymentMethod || mData?.paymentMethod || 'Cash on Delivery',
+        paymentStatus: vData?.paymentStatus || mData?.paymentStatus || 'Pending',
+        status: isDelivered ? 'Delivered' : (vData?.status || mData?.status || 'Pending'),
+        vendorStatus: isDelivered ? 'Delivered' : (vData?.vendorStatus || mData?.vendorStatus || vData?.status || mData?.status || 'Pending'),
+        acceptedAt: vData?.acceptedAt || mData?.acceptedAt,
+        shippedAt: vData?.shippedAt || mData?.shippedAt,
+        inTransitAt: vData?.inTransitAt || mData?.inTransitAt,
+        outForDeliveryAt: vData?.outForDeliveryAt || mData?.outForDeliveryAt,
+        deliveredAt: vData?.deliveredAt || mData?.deliveredAt,
+        courierName: vData?.courierName || mData?.courierName || '',
+        trackingNumber: vData?.trackingNumber || vData?.trackingId || mData?.trackingNumber || mData?.trackingId || '',
+        trackingId: vData?.trackingNumber || vData?.trackingId || mData?.trackingNumber || mData?.trackingId || '',
+        trackingUrl: vData?.trackingUrl || mData?.trackingUrl || '',
+        courierVerificationStatus: vData?.courierVerificationStatus || mData?.courierVerificationStatus,
+        courierAdminApproved: vData?.courierAdminApproved ?? mData?.courierAdminApproved,
+        officialTrackingUrl: vData?.officialTrackingUrl || mData?.officialTrackingUrl,
+        vendorPayoutStatus: vData?.vendorPayoutStatus || mData?.vendorPayoutStatus || (breakdown.isCod ? 'None' : 'Held'),
+        autoReleaseAt: vData?.autoReleaseAt || mData?.autoReleaseAt,
+        createdAt: vData?.createdAt || mData?.createdAt || Date.now(),
+        shippingAddress: {
+          ...(mData?.shippingAddress || {}),
+          ...(vData?.shippingAddress || {})
+        }
+      };
 
       // Check auto release if in Release Pending state
       if (orderData.vendorPayoutStatus === 'Release Pending' && !orderData.dispute) {
@@ -505,9 +569,9 @@ export default function OrderDetails() {
       }
 
       // Enrich with Reseller Order metadata if applicable from RTDB
-      const mainOrdId = String(orderData.orderId || orderData.mainOrderId || id).replace(/^#/, '');
+      const mainOrdId = String(orderData.orderId || orderData.mainOrderId || pureOrderId || cleanId).replace(/^#/, '');
       try {
-        const roData = (await rtdbGet<any>(`reseller_orders/${mainOrdId}`)) || orderData.priceSnapshot || orderData.resellerPriceSnapshot;
+        const roData = (await rtdbGet<any>(`reseller_orders/${mainOrdId}`)) || (await rtdbGet<any>(`reseller_orders/${cleanId}`)) || orderData.priceSnapshot || orderData.resellerPriceSnapshot;
         if (roData) {
           orderData.isResellerOrder = true;
           orderData.resellerId = orderData.resellerId || roData.resellerId;
@@ -553,12 +617,17 @@ export default function OrderDetails() {
       if (orderData.items && Array.isArray(orderData.items) && orderData.items.length > 0) {
         setItems(orderData.items);
       } else {
-        const itemsList = await rtdbList<any>('order_items', (it) => it.orderId === id);
+        const itemsList = await rtdbList<any>('order_items', (it) => it.orderId === cleanId || it.orderId === pureOrderId);
         setItems(itemsList.map(d => ({ id: d.id, ...d.data })));
       }
 
       // 3. Fetch Logs
-      const logsList = await rtdbList<any>('order_status_logs', (l) => l.orderId === id || l.mainOrderId === id);
+      const logsList = await rtdbList<any>('order_status_logs', (l) => 
+        l.orderId === cleanId || 
+        l.orderId === pureOrderId || 
+        l.mainOrderId === cleanId || 
+        l.mainOrderId === pureOrderId
+      );
       const logsData = logsList.map(d => ({ id: d.id, ...d.data }));
       logsData.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
       setLogs(logsData);
@@ -879,15 +948,23 @@ export default function OrderDetails() {
       }
 
       await rtdbUpdate(`vendor_orders/${order.id}`, updateData);
+      const vendorDocId = `${order.mainOrderId || order.orderId}_${user?.uid}`;
+      if (vendorDocId !== order.id) {
+        await rtdbUpdate(`vendor_orders/${vendorDocId}`, updateData).catch(() => {});
+      }
 
       // Sync status to main orders collection so Customer's My Orders updates
       const mainOrderId = order.mainOrderId || order.orderId || order.id;
+      const pureId = (String(mainOrderId).includes('_') ? String(mainOrderId).split('_')[0] : String(mainOrderId)).trim();
       try {
         const mainOrderUpdate: any = {
           ...updateData,
           vendorStatus: newStatus,
         };
         await rtdbUpdate(`orders/${mainOrderId}`, mainOrderUpdate);
+        if (pureId && pureId !== mainOrderId) {
+          await rtdbUpdate(`orders/${pureId}`, mainOrderUpdate).catch(() => {});
+        }
       } catch (err) {
         console.warn("Error updating main orders doc in RTDB", err);
       }
@@ -1128,6 +1205,7 @@ export default function OrderDetails() {
 
       // Update main orders collection for Customer's My Orders
       const mainOrderId = order.mainOrderId || order.orderId || order.id;
+      const pureId = (String(mainOrderId).includes('_') ? String(mainOrderId).split('_')[0] : String(mainOrderId)).trim();
       try {
         await rtdbUpdate(`orders/${mainOrderId}`, {
           status: targetStatus,
@@ -1135,6 +1213,14 @@ export default function OrderDetails() {
           acceptedAt: targetStatus === 'Accepted' ? Date.now() : undefined,
           updatedAt: Date.now()
         });
+        if (pureId && pureId !== mainOrderId) {
+          await rtdbUpdate(`orders/${pureId}`, {
+            status: targetStatus,
+            vendorStatus: targetStatus,
+            acceptedAt: targetStatus === 'Accepted' ? Date.now() : undefined,
+            updatedAt: Date.now()
+          }).catch(() => {});
+        }
       } catch (err) {
         console.warn("Error updating main orders doc in RTDB", err);
       }

@@ -317,7 +317,7 @@ export default function OrdersList() {
     const isConfirmed = order.vendorOrderStatus === 'CONFIRMED' || order.profitStatus === 'LOCKED';
     if (isReseller && !isConfirmed) {
       toast.error('রিসেলার অর্ডারের ক্ষেত্রে ট্র্যাকিং লিংক দেওয়ার পূর্বে অবশ্যই অর্ডার কনফার্ম করতে হবে।');
-      navigate(`/vendor/orders/${order.id}`);
+      navigate(`/vendor/orders/${order.id}`, { state: { order } });
       return;
     }
     setSelectedOrder(order);
@@ -337,7 +337,7 @@ export default function OrdersList() {
         if (!res.success) {
           toast.error(res.message || 'অর্ডার কনফার্ম করা সম্ভব হয়নি।');
           if (res.error === 'INSUFFICIENT_WALLET_BALANCE') {
-            navigate(`/vendor/orders/${order.id}`);
+            navigate(`/vendor/orders/${order.id}`, { state: { order } });
           }
           return;
         }
@@ -770,6 +770,7 @@ export default function OrdersList() {
 
                       <Link 
                         to={`/vendor/orders/${order.id}`}
+                        state={{ order }}
                         className="inline-flex items-center gap-1 px-2.5 py-1 bg-gray-100 text-gray-700 hover:bg-primary-main hover:text-white text-xs font-semibold rounded-lg transition-colors"
                       >
                         <Eye className="w-3.5 h-3.5" />
@@ -1008,6 +1009,7 @@ export default function OrdersList() {
                           )}
                           <Link 
                             to={`/vendor/orders/${order.id}`}
+                            state={{ order }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 bg-gray-100 hover:bg-primary-main hover:text-white text-gray-700 rounded-lg transition-colors"
                           >
                             <Eye className="w-3.5 h-3.5" />
