@@ -10,7 +10,7 @@ import {
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { getCourierTrackingUrl, calculateOrderPaymentBreakdown } from '../../../services/vendorPayoutService';
-import { getVendorWalletBalances, confirmVendorResellerOrder } from '../../../services/vendorResellerOrderService';
+import { getVendorWalletBalances, confirmVendorResellerOrder, isResellerOrderRecord } from '../../../services/vendorResellerOrderService';
 import CourierVerificationModal from '../../../components/vendor/CourierVerificationModal';
 import VendorCancelOrderModal from '../../../components/vendor/VendorCancelOrderModal';
 
@@ -313,7 +313,7 @@ export default function OrdersList() {
 
   const openCourierModal = (order: any, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    const isReseller = Boolean(order.isResellerOrder || order.resellerId || order.profitStatus || order.priceSnapshot?.resellerProfit);
+    const isReseller = isResellerOrderRecord(order) || Boolean(order.isResellerOrder || order.resellerId || order.profitStatus || order.priceSnapshot?.resellerProfit);
     const isConfirmed = order.vendorOrderStatus === 'CONFIRMED' || order.profitStatus === 'LOCKED';
     if (isReseller && !isConfirmed) {
       toast.error('রিসেলার অর্ডারের ক্ষেত্রে ট্র্যাকিং লিংক দেওয়ার পূর্বে অবশ্যই অর্ডার কনফার্ম করতে হবে।');
@@ -329,11 +329,11 @@ export default function OrdersList() {
     if (!order || !user) return;
 
     // Reseller Order Eligibility Check & Atomic Confirmation with Profit Lock
-    const isReseller = Boolean(order.isResellerOrder || order.resellerId || order.profitStatus || order.priceSnapshot?.resellerProfit);
+    const isReseller = isResellerOrderRecord(order) || Boolean(order.isResellerOrder || order.resellerId || order.profitStatus || order.priceSnapshot?.resellerProfit);
     if (isReseller) {
       setProcessingId(order.id);
       try {
-        const res = await confirmVendorResellerOrder(order.id, user.uid);
+        const res = await confirmVendorResellerOrder(order.id, user.uid, order);
         if (!res.success) {
           toast.error(res.message || 'অর্ডার কনফার্ম করা সম্ভব হয়নি।');
           if (res.error === 'INSUFFICIENT_WALLET_BALANCE') {

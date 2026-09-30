@@ -35,6 +35,7 @@ import {
   getVendorWalletBalances, 
   checkResellerOrderEligibility, 
   confirmVendorResellerOrder, 
+  isResellerOrderRecord,
   type VendorWalletBalances,
   type ResellerOrderEligibilityResult
 } from '../../../services/vendorResellerOrderService';
@@ -659,7 +660,7 @@ export default function OrderDetails() {
 
   // Determine if this order is a Reseller Order and whether it has been Confirmed (Step 5 profit locked)
   const isResellerOrder = useMemo(() => {
-    return Boolean(
+    return isResellerOrderRecord(order) || Boolean(
       order?.isResellerOrder || 
       order?.resellerId || 
       order?.profitStatus || 
@@ -686,11 +687,24 @@ export default function OrderDetails() {
 
       // Also ensure we have latest order data directly from RTDB
       const orderIdToConfirm = String(order.id || id).replace(/^#/, '');
+      const pureOrderIdToConfirm = (orderIdToConfirm.includes('_') ? orderIdToConfirm.split('_')[0] : orderIdToConfirm).trim();
+      const mainOrdId = String(order.mainOrderId || order.orderId || pureOrderIdToConfirm || orderIdToConfirm).trim().replace(/^#/, '');
+
       const freshOrder = (await rtdbGet<any>(`vendor_orders/${orderIdToConfirm}`)) ||
+                          (await rtdbGet<any>(`vendor_orders/${pureOrderIdToConfirm}_${user.uid}`)) ||
+                          (await rtdbGet<any>(`orders/${mainOrdId}`)) ||
+                          (await rtdbGet<any>(`orders/${pureOrderIdToConfirm}`)) ||
                           (await rtdbGet<any>(`orders/${orderIdToConfirm}`)) ||
                           order;
-      const freshResellerOrder = await rtdbGet<any>(`reseller_orders/${orderIdToConfirm}`);
-      const mergedOrder = { ...(freshResellerOrder || {}), ...(freshOrder || {}), ...order };
+      const freshResellerOrder = (await rtdbGet<any>(`reseller_orders/${mainOrdId}`)) ||
+                                 (await rtdbGet<any>(`reseller_orders/${pureOrderIdToConfirm}`)) ||
+                                 (await rtdbGet<any>(`reseller_orders/${orderIdToConfirm}`));
+      const mergedOrder = { 
+        ...(freshResellerOrder || {}), 
+        ...(freshOrder || {}), 
+        ...order,
+        isResellerOrder: true
+      };
 
       const eligibility = checkResellerOrderEligibility(mergedOrder, currentBalances);
 
@@ -708,7 +722,7 @@ export default function OrderDetails() {
       }
 
       // 3. Execute Step 5 Reseller Order Confirmation with atomic Profit Lock
-      const res = await confirmVendorResellerOrder(orderIdToConfirm, user.uid);
+      const res = await confirmVendorResellerOrder(orderIdToConfirm, user.uid, mergedOrder);
       if (!res.success) {
         toast.error(res.message || 'অর্ডার কনফার্ম করা সম্ভব হয়নি।');
         if (res.error === 'INSUFFICIENT_WALLET_BALANCE') {

@@ -107,19 +107,107 @@ export async function getVendorWalletBalances(vendorId: string): Promise<VendorW
 }
 
 /**
+ * Checks whether an order object represents a valid Reseller Order.
+ * Correctly identifies all existing reseller structures across Firebase RTDB nodes (orders, vendor_orders, reseller_orders):
+ * - Direct boolean / string boolean indicators (isResellerOrder, isReseller, resellerOrder)
+ * - Reseller ID fields (resellerId, resellerUID, resellerUid, resellerUserId, reseller_id)
+ * - Profit status flags (profitStatus, resellerProfitStatus)
+ * - Order type and channel indicators (orderType, type, channel, source)
+ * - Price snapshot profit records and line items reseller profit
+ */
+export function isResellerOrderRecord(order: any): boolean {
+  if (!order || typeof order !== 'object') return false;
+
+  // 1. Direct boolean flags (handling boolean true and string "true")
+  if (
+    order.isResellerOrder === true || order.isResellerOrder === 'true' ||
+    order.isReseller === true || order.isReseller === 'true' ||
+    order.resellerOrder === true || order.resellerOrder === 'true' ||
+    order.reseller_order === true || order.reseller_order === 'true'
+  ) {
+    return true;
+  }
+
+  // 2. Reseller ID fields (resellerId, resellerUID, resellerUid, resellerUserId, reseller_id)
+  const resellerId = 
+    order.resellerId || 
+    order.resellerUID || 
+    order.resellerUid || 
+    order.resellerUserId || 
+    order.reseller_id || 
+    order.priceSnapshot?.resellerId || 
+    order.resellerPriceSnapshot?.resellerId;
+  if (
+    resellerId && 
+    typeof resellerId === 'string' && 
+    resellerId.trim().length > 0 && 
+    resellerId !== 'null' && 
+    resellerId !== 'undefined'
+  ) {
+    return true;
+  }
+
+  // 3. Profit status flags (e.g. 'PENDING', 'LOCKED', 'RELEASED')
+  if (
+    order.profitStatus && 
+    typeof order.profitStatus === 'string' && 
+    order.profitStatus.trim().length > 0 && 
+    order.profitStatus !== 'null' && 
+    order.profitStatus !== 'undefined'
+  ) {
+    return true;
+  }
+
+  // 4. Order type / source / channel indicators
+  const orderType = String(order.orderType || order.type || order.channel || order.source || '').toLowerCase();
+  if (orderType === 'reseller' || orderType.includes('reseller')) {
+    return true;
+  }
+
+  // 5. Stored price snapshot reseller profit
+  const snapshotProfit = 
+    order.priceSnapshot?.resellerProfit ?? 
+    order.resellerPriceSnapshot?.resellerProfit ?? 
+    order.priceSnapshot?.resellerProfitAmount ?? 
+    order.resellerPriceSnapshot?.resellerProfitAmount ?? 
+    order.lockedProfitAmount;
+  if (snapshotProfit !== undefined && snapshotProfit !== null && Number(snapshotProfit) > 0) {
+    return true;
+  }
+
+  // 6. Direct resellerProfit field > 0
+  if (order.resellerProfit !== undefined && order.resellerProfit !== null && Number(order.resellerProfit) > 0) {
+    return true;
+  }
+
+  // 7. Line items containing reseller profit or reseller indicators
+  const items = Array.isArray(order.items) 
+    ? order.items 
+    : (order.items && typeof order.items === 'object' ? Object.values(order.items) : []);
+  if (items.some((it: any) => 
+    it && (
+      it.isReseller === true || it.isReseller === 'true' ||
+      it.isResellerOrder === true || it.isResellerOrder === 'true' ||
+      (it.resellerProfit !== undefined && it.resellerProfit !== null && Number(it.resellerProfit) > 0) ||
+      (it.resellerItemProfit !== undefined && it.resellerItemProfit !== null && Number(it.resellerItemProfit) > 0) ||
+      (it.resellerSellingPrice !== undefined && it.resellerSellingPrice !== null && Number(it.resellerSellingPrice) > 0 && it.vendorPrice !== undefined) ||
+      (it.resellerId && typeof it.resellerId === 'string' && it.resellerId.trim().length > 0 && it.resellerId !== 'null')
+    )
+  )) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Computes eligibility for confirming a reseller order based on required profit reserve
  */
 export function checkResellerOrderEligibility(
   order: any,
   balances: VendorWalletBalances
 ): ResellerOrderEligibilityResult {
-  const isReseller = Boolean(
-    order?.isResellerOrder || 
-    order?.resellerId || 
-    order?.profitStatus || 
-    order?.priceSnapshot?.resellerProfit ||
-    order?.resellerPriceSnapshot?.resellerProfit
-  );
+  const isReseller = isResellerOrderRecord(order);
 
   const rawProfit = 
     order?.resellerProfit ?? 
@@ -322,7 +410,8 @@ export async function creditVendorWalletDeposit(params: VendorDepositParams): Pr
  */
 export async function confirmVendorResellerOrder(
   orderId: string,
-  vendorId: string
+  vendorId: string,
+  existingOrderData?: any
 ): Promise<{
   success: boolean;
   message: string;
@@ -338,67 +427,152 @@ export async function confirmVendorResellerOrder(
     throw new Error('Missing orderId or vendorId');
   }
 
-  const cleanOrderId = String(orderId).replace(/^#/, '');
+  const cleanOrderId = String(orderId || existingOrderData?.id || '').trim().replace(/^#/, '');
+  const pureOrderId = (cleanOrderId.includes('_') ? cleanOrderId.split('_')[0] : cleanOrderId).trim();
+  const existingOrderMainId = String(existingOrderData?.orderId || existingOrderData?.mainOrderId || '').trim().replace(/^#/, '');
+  const mainOrderIdCandidate = existingOrderMainId || pureOrderId || cleanOrderId;
 
   // 1. Strict Fetch from RTDB across vendor_orders, orders, and reseller_orders
-  let order = await rtdbGet<any>(`vendor_orders/${orderId}`);
-  let vendorOrderKey = `vendor_orders/${orderId}`;
+  let order: any = null;
+  let vendorOrderKey = `vendor_orders/${cleanOrderId}`;
+
+  // Start with existingOrderData if available
+  if (existingOrderData && typeof existingOrderData === 'object') {
+    order = { ...existingOrderData };
+    if (existingOrderData.id) {
+      vendorOrderKey = `vendor_orders/${existingOrderData.id}`;
+    }
+  }
+
+  // Fetch from vendor_orders with various key formats
+  if (!order) {
+    order = await rtdbGet<any>(`vendor_orders/${orderId}`);
+    if (order) vendorOrderKey = `vendor_orders/${orderId}`;
+  }
   if (!order) {
     order = await rtdbGet<any>(`vendor_orders/${cleanOrderId}`);
-    vendorOrderKey = `vendor_orders/${cleanOrderId}`;
+    if (order) vendorOrderKey = `vendor_orders/${cleanOrderId}`;
   }
   if (!order && vendorId) {
     order = await rtdbGet<any>(`vendor_orders/${cleanOrderId}_${vendorId}`);
-    if (order) {
-      vendorOrderKey = `vendor_orders/${cleanOrderId}_${vendorId}`;
-    }
+    if (order) vendorOrderKey = `vendor_orders/${cleanOrderId}_${vendorId}`;
   }
-  if (!order) {
-    order = await rtdbGet<any>(`orders/${cleanOrderId}`);
-    if (order) {
-      vendorOrderKey = `vendor_orders/${cleanOrderId}`;
-    }
+  if (!order && pureOrderId && pureOrderId !== cleanOrderId && vendorId) {
+    order = await rtdbGet<any>(`vendor_orders/${pureOrderId}_${vendorId}`);
+    if (order) vendorOrderKey = `vendor_orders/${pureOrderId}_${vendorId}`;
   }
+  if (!order && pureOrderId && pureOrderId !== cleanOrderId) {
+    order = await rtdbGet<any>(`vendor_orders/${pureOrderId}`);
+    if (order) vendorOrderKey = `vendor_orders/${pureOrderId}`;
+  }
+
+  // Fetch from RTDB 'orders' collection (where production orders placed on rjworldbd.com reside)
+  let mainOrderData: any = null;
+  if (cleanOrderId) {
+    mainOrderData = await rtdbGet<any>(`orders/${cleanOrderId}`);
+  }
+  if (!mainOrderData && pureOrderId && pureOrderId !== cleanOrderId) {
+    mainOrderData = await rtdbGet<any>(`orders/${pureOrderId}`);
+  }
+  if (!mainOrderData && mainOrderIdCandidate && mainOrderIdCandidate !== cleanOrderId && mainOrderIdCandidate !== pureOrderId) {
+    mainOrderData = await rtdbGet<any>(`orders/${mainOrderIdCandidate}`);
+  }
+
+  if (!order && mainOrderData) {
+    order = { ...mainOrderData };
+    vendorOrderKey = `vendor_orders/${pureOrderId || cleanOrderId}_${vendorId}`;
+  }
+
+  // Fetch from RTDB 'reseller_orders' collection
+  let resellerOrderData: any = null;
+  if (mainOrderIdCandidate) {
+    resellerOrderData = await rtdbGet<any>(`reseller_orders/${mainOrderIdCandidate}`);
+  }
+  if (!resellerOrderData && pureOrderId && pureOrderId !== mainOrderIdCandidate) {
+    resellerOrderData = await rtdbGet<any>(`reseller_orders/${pureOrderId}`);
+  }
+  if (!resellerOrderData && cleanOrderId && cleanOrderId !== mainOrderIdCandidate && cleanOrderId !== pureOrderId) {
+    resellerOrderData = await rtdbGet<any>(`reseller_orders/${cleanOrderId}`);
+  }
+
+  if (!order && resellerOrderData) {
+    order = { ...resellerOrderData };
+    vendorOrderKey = `vendor_orders/${pureOrderId || cleanOrderId}_${vendorId}`;
+  }
+
+  // Fallback search across RTDB if order is still null
   if (!order) {
-    order = await rtdbGet<any>(`reseller_orders/${cleanOrderId}`);
-    if (order) {
-      vendorOrderKey = `vendor_orders/${cleanOrderId}`;
-    }
+    try {
+      const allOrders = (await rtdbGet<any>('orders')) || {};
+      const foundMKey = Object.keys(allOrders).find(k => {
+        const item = allOrders[k];
+        if (!item) return false;
+        return k === cleanOrderId || k === pureOrderId || k === mainOrderIdCandidate ||
+               item.orderId === cleanOrderId || item.orderId === pureOrderId || item.orderId === mainOrderIdCandidate;
+      });
+      if (foundMKey && allOrders[foundMKey]) {
+        mainOrderData = { id: foundMKey, ...allOrders[foundMKey] };
+        order = { ...mainOrderData };
+        vendorOrderKey = `vendor_orders/${pureOrderId || cleanOrderId}_${vendorId}`;
+      }
+    } catch (_) {}
   }
 
   if (!order) {
     return { success: false, error: 'ORDER_NOT_FOUND', message: 'Order not found in RTDB' };
   }
 
-  // Enrich order from reseller_orders or orders if available
-  const resellerOrderData = await rtdbGet<any>(`reseller_orders/${cleanOrderId}`);
-  if (resellerOrderData) {
-    order = { ...resellerOrderData, ...order };
-  }
-  const mainOrderData = await rtdbGet<any>(`orders/${cleanOrderId}`);
-  if (mainOrderData) {
-    order = { ...mainOrderData, ...order };
-  }
+  // Derive resolved pure and main order IDs for consistent keys
+  const resolvedMainOrderId = String(
+    order?.mainOrderId || 
+    order?.orderId || 
+    mainOrderData?.mainOrderId || 
+    mainOrderData?.orderId || 
+    resellerOrderData?.mainOrderId || 
+    resellerOrderData?.orderId || 
+    existingOrderData?.mainOrderId || 
+    existingOrderData?.orderId || 
+    pureOrderId || 
+    cleanOrderId
+  ).trim().replace(/^#/, '');
 
-  // 2. Reseller Order Verification
+  // Enrich order from all available sources
+  order = {
+    ...(mainOrderData || {}),
+    ...(resellerOrderData || {}),
+    ...(order || {}),
+    ...(existingOrderData || {})
+  };
+
+  // 2. Reseller Order Verification (Using the same identification logic as Order Details page)
   const isReseller = Boolean(
-    order.isResellerOrder || 
-    order.resellerId || 
-    order.profitStatus || 
-    order.priceSnapshot?.resellerProfit ||
-    order.resellerPriceSnapshot?.resellerProfit
+    isResellerOrderRecord(order) ||
+    isResellerOrderRecord(existingOrderData) ||
+    isResellerOrderRecord(resellerOrderData) ||
+    isResellerOrderRecord(mainOrderData)
   );
   if (!isReseller) {
     return { success: false, error: 'NOT_RESELLER_ORDER', message: 'This is not a reseller order' };
   }
 
+  // Ensure normalized reseller flags
+  order.isResellerOrder = true;
+  if (!order.profitStatus || order.profitStatus === 'null') {
+    order.profitStatus = 'PENDING';
+  }
+  if (!order.resellerId) {
+    order.resellerId = resellerOrderData?.resellerId || mainOrderData?.resellerId || existingOrderData?.resellerId || order.resellerUID || order.resellerUid || '';
+  }
+
   // 3. Duplicate Confirmation & Lock Prevention
   const transactionType = 'RESELLER_PROFIT_LOCK';
-  const lockKey = `${cleanOrderId}_${transactionType}`;
+  const lockTargetId = resolvedMainOrderId || pureOrderId || cleanOrderId;
+  const lockKey = `${lockTargetId}_${transactionType}`;
 
   // Check 3A: Idempotency Check (orderId + transactionType)
-  const idempCheck = await checkFinancialIdempotency(cleanOrderId, transactionType);
-  if (idempCheck.isDuplicate) {
+  const idempCheck = (await checkFinancialIdempotency(lockTargetId, transactionType)) ||
+                     (await checkFinancialIdempotency(cleanOrderId, transactionType));
+  if (idempCheck?.isDuplicate) {
     return {
       success: false,
       error: 'DUPLICATE_LOCK_PREVENTED',
@@ -426,7 +600,8 @@ export async function confirmVendorResellerOrder(
   }
 
   // Check 3C: Duplicate Lock Registry check in RTDB (orderId + transactionType)
-  const existingLock = await rtdbGet<any>(`reseller_profit_locks/${lockKey}`);
+  const existingLock = (await rtdbGet<any>(`reseller_profit_locks/${lockKey}`)) ||
+                       (await rtdbGet<any>(`reseller_profit_locks/${cleanOrderId}_${transactionType}`));
   if (existingLock) {
     return {
       success: false,
@@ -440,6 +615,8 @@ export async function confirmVendorResellerOrder(
     order.resellerProfit ?? 
     order.priceSnapshot?.resellerProfit ?? 
     order.resellerPriceSnapshot?.resellerProfit ??
+    order.priceSnapshot?.resellerProfitAmount ??
+    order.resellerPriceSnapshot?.resellerProfitAmount ??
     order.lockedProfitAmount ??
     0;
   let requiredResellerProfit = Math.round(parseNumericAmount(rawProfit) * 100) / 100;
@@ -637,27 +814,58 @@ export async function confirmVendorResellerOrder(
       await rtdbUpdate(`vendor_orders/${cleanOrderId}`, orderUpdates);
     } catch (_) {}
   }
+  if (pureOrderId && vendorOrderKey !== `vendor_orders/${pureOrderId}_${vendorId}`) {
+    try {
+      await rtdbUpdate(`vendor_orders/${pureOrderId}_${vendorId}`, orderUpdates);
+    } catch (_) {}
+  }
+  if (pureOrderId && vendorOrderKey !== `vendor_orders/${pureOrderId}`) {
+    try {
+      await rtdbUpdate(`vendor_orders/${pureOrderId}`, orderUpdates);
+    } catch (_) {}
+  }
 
-  // Update main orders collection if present
-  const mainOrderId = order.mainOrderId || order.orderId || cleanOrderId;
+  // Update main orders collection if present (where production rjworldbd.com orders live)
+  const mainOrderId = resolvedMainOrderId || order.mainOrderId || order.orderId || cleanOrderId;
   if (mainOrderId) {
     try {
       await rtdbUpdate(`orders/${mainOrderId}`, orderUpdates);
     } catch (_) {}
   }
+  if (cleanOrderId && cleanOrderId !== mainOrderId) {
+    try {
+      await rtdbUpdate(`orders/${cleanOrderId}`, orderUpdates);
+    } catch (_) {}
+  }
+  if (pureOrderId && pureOrderId !== mainOrderId && pureOrderId !== cleanOrderId) {
+    try {
+      await rtdbUpdate(`orders/${pureOrderId}`, orderUpdates);
+    } catch (_) {}
+  }
 
   // Sync reseller_orders record in RTDB
+  const roUpdates = {
+    orderStatus: 'CONFIRMED',
+    vendorOrderStatus: 'CONFIRMED',
+    profitStatus: 'LOCKED',
+    settlementStatus: 'LOCKED',
+    lockedProfitAmount: requiredResellerProfit,
+    lockTransactionId: transactionId,
+    updatedAt: now
+  };
   try {
-    await rtdbUpdate(`reseller_orders/${cleanOrderId}`, {
-      orderStatus: 'CONFIRMED',
-      vendorOrderStatus: 'CONFIRMED',
-      profitStatus: 'LOCKED',
-      settlementStatus: 'LOCKED',
-      lockedProfitAmount: requiredResellerProfit,
-      lockTransactionId: transactionId,
-      updatedAt: now
-    });
+    await rtdbUpdate(`reseller_orders/${cleanOrderId}`, roUpdates);
   } catch (_) {}
+  if (mainOrderId && mainOrderId !== cleanOrderId) {
+    try {
+      await rtdbUpdate(`reseller_orders/${mainOrderId}`, roUpdates);
+    } catch (_) {}
+  }
+  if (pureOrderId && pureOrderId !== cleanOrderId && pureOrderId !== mainOrderId) {
+    try {
+      await rtdbUpdate(`reseller_orders/${pureOrderId}`, roUpdates);
+    } catch (_) {}
+  }
 
   // 10. Record status log in RTDB
   try {
@@ -679,7 +887,7 @@ export async function confirmVendorResellerOrder(
   } catch (_) {}
 
   // 11. Record financial idempotency
-  await recordFinancialIdempotency(cleanOrderId, 'RESELLER_PROFIT_LOCK', {
+  await recordFinancialIdempotency(lockTargetId, 'RESELLER_PROFIT_LOCK', {
     transactionId,
     vendorId,
     resellerId: order.resellerId || '',
@@ -687,6 +895,18 @@ export async function confirmVendorResellerOrder(
     executedBy: vendorId,
     details: `Order #${cleanOrderId} profit locked by vendor.`
   });
+  if (cleanOrderId !== lockTargetId) {
+    try {
+      await recordFinancialIdempotency(cleanOrderId, 'RESELLER_PROFIT_LOCK', {
+        transactionId,
+        vendorId,
+        resellerId: order.resellerId || '',
+        amount: requiredResellerProfit,
+        executedBy: vendorId,
+        details: `Order #${cleanOrderId} profit locked by vendor.`
+      });
+    } catch (_) {}
+  }
 
   // IMPORTANT:
   // Reseller-এর pendingProfit এই ধাপে অপরিবর্তিত থাকবে।
