@@ -2930,18 +2930,28 @@ app.use((req, res, next) => {
   app.get('/api/downloads/sms-reader-apk', serveApkDownload);
 
   // Firebase Auth Custom Domain Handler Proxy
-  // Transparently proxies /__/auth/* to Firebase Hosting (https://${CURRENT_FIREBASE_PROJECT_ID}.web.app/__/auth/*)
+  // Transparently proxies /__/auth/* to Firebase Hosting
   // so OAuth sign-in popups and redirects reliably load the Google OAuth widget
   app.use('/__/auth', async (req, res) => {
     try {
-      const targetUrl = `https://${CURRENT_FIREBASE_PROJECT_ID}.web.app/__/auth${req.url}`;
-      const response = await fetch(targetUrl, {
+      let targetUrl = `https://${CURRENT_FIREBASE_PROJECT_ID}.firebaseapp.com/__/auth${req.url}`;
+      let response = await fetch(targetUrl, {
         method: req.method,
         headers: {
           'User-Agent': (req.headers['user-agent'] as string) || 'Mozilla/5.0',
           'Accept': (req.headers['accept'] as string) || '*/*'
         }
       });
+      if (!response.ok) {
+        targetUrl = `https://${CURRENT_FIREBASE_PROJECT_ID}.web.app/__/auth${req.url}`;
+        response = await fetch(targetUrl, {
+          method: req.method,
+          headers: {
+            'User-Agent': (req.headers['user-agent'] as string) || 'Mozilla/5.0',
+            'Accept': (req.headers['accept'] as string) || '*/*'
+          }
+        });
+      }
       res.status(response.status);
       response.headers.forEach((value, name) => {
         if (!['content-encoding', 'transfer-encoding', 'content-length'].includes(name.toLowerCase())) {

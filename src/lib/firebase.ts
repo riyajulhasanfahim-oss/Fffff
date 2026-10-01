@@ -6,11 +6,15 @@ import { getDatabase } from "firebase/database";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import config from "../../firebase-applet-config.json";
 
-// Resolve optimal authDomain: on production domain (rjworldbd.com), use rjworldbd.com so Google Sign-In displays "to continue to rjworldbd.com"
+// Resolve optimal authDomain: on production domain (www.rjworldbd.com or rjworldbd.com),
+// match the exact origin being used so Google OAuth origin and redirect URIs match perfectly.
 const resolveAuthDomain = () => {
   if (typeof window !== 'undefined') {
     const host = window.location.hostname.toLowerCase();
-    if (host === 'rjworldbd.com' || host === 'www.rjworldbd.com') {
+    if (host === 'www.rjworldbd.com') {
+      return 'www.rjworldbd.com';
+    }
+    if (host === 'rjworldbd.com') {
       return 'rjworldbd.com';
     }
   }

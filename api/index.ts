@@ -48,14 +48,25 @@ export default async function handler(req: any, res: any) {
   // Firebase Auth Custom Domain Handler Proxy for Vercel/Serverless
   if (pathPart.startsWith('/__/auth')) {
     try {
-      const targetUrl = `https://${(config as any).projectId || 'gen-lang-client-0902472299'}.web.app${rawUrl}`;
-      const proxyRes = await fetch(targetUrl, {
+      const proj = (config as any).projectId || 'gen-lang-client-0902472299';
+      let targetUrl = `https://${proj}.firebaseapp.com${rawUrl}`;
+      let proxyRes = await fetch(targetUrl, {
         method: req.method,
         headers: {
           'User-Agent': (req.headers && req.headers['user-agent']) || 'Mozilla/5.0',
           'Accept': (req.headers && req.headers['accept']) || '*/*'
         }
       });
+      if (!proxyRes.ok) {
+        targetUrl = `https://${proj}.web.app${rawUrl}`;
+        proxyRes = await fetch(targetUrl, {
+          method: req.method,
+          headers: {
+            'User-Agent': (req.headers && req.headers['user-agent']) || 'Mozilla/5.0',
+            'Accept': (req.headers && req.headers['accept']) || '*/*'
+          }
+        });
+      }
       res.writeHead(proxyRes.status, {
         'Content-Type': proxyRes.headers.get('content-type') || 'text/html; charset=utf-8'
       });
