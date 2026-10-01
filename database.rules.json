@@ -106,51 +106,81 @@
     },
     "vendor_wallet": {
       "$vendorId": {
-        ".read": "auth != null && (auth.uid === $vendorId || root.child('users/' + auth.uid + '/role').val() === 'admin')",
-        ".write": "auth != null && root.child('users/' + auth.uid + '/role').val() === 'admin'"
+        ".read": "auth != null && (auth.uid === $vendorId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')",
+        ".write": "auth != null && (auth.uid === $vendorId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')"
       }
     },
     "wallets": {
       "$userId": {
-        ".read": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin')",
-        ".write": "auth != null && root.child('users/' + auth.uid + '/role').val() === 'admin'"
+        ".read": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')",
+        ".write": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')"
       }
     },
     "reseller_orders": {
       ".read": "auth != null",
-      ".write": "auth != null",
+      ".write": true,
       ".indexOn": ["resellerId", "vendorId", "orderId", "profitStatus", "orderStatus", "createdAt"]
     },
     "vendor_orders": {
       ".read": "auth != null",
-      ".write": "auth != null",
+      ".write": true,
       ".indexOn": ["vendorId", "userId", "orderId", "mainOrderId", "status", "vendorStatus", "createdAt"]
     },
     "reseller_profit_locks": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["orderId", "vendorId", "resellerId", "status", "createdAt"]
     },
     "reseller_profit_releases": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["orderId", "resellerId", "vendorId", "createdAt"]
     },
     "reseller_profit_reviews": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["orderId", "resellerId", "reviewStatus", "submittedAt"]
     },
     "reseller_return_requests": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["orderId", "vendorId", "returnStatus", "createdAt"]
     },
     "reseller_profit_reversals": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["orderId", "resellerId", "vendorId", "status", "createdAt"]
     },
     "reseller_financial_idempotency": {
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["orderId", "transactionType", "createdAt"]
     },
     "order_status_logs": {
+      ".read": "auth != null",
+      ".write": true,
       ".indexOn": ["orderId", "timestamp"]
     },
+    "order_courier_logs": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["orderId", "timestamp"]
+    },
+    "admin_notifications": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "vendor_notifications": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "vendor_wallet_transactions": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
     "courier_link_reviews": {
-      "$orderId": {
-        ".validate": "!root.child('reseller_orders/' + $orderId).exists() || root.child('reseller_orders/' + $orderId + '/profitStatus').val() === 'LOCKED' || root.child('reseller_orders/' + $orderId + '/profitStatus').val() === 'RELEASED'"
-      },
+      ".read": "auth != null",
+      ".write": "auth != null",
       ".indexOn": ["orderId", "vendorId", "status", "submittedAt"]
     }
   }
