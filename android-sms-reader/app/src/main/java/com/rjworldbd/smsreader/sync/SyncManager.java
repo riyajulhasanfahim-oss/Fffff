@@ -76,9 +76,8 @@ public class SyncManager {
     public static List<String> getCandidateEndpoints(Context context) {
         List<String> list = new ArrayList<>();
         
-        // 1. Production domain HTTPS endpoints for RJ World BD
+        // 1. Production domain HTTPS endpoint for RJ World BD
         list.add("https://rjworldbd.com/api/payment/sms-sync");
-        list.add("https://www.rjworldbd.com/api/payment/sms-sync");
 
         // 3. Optional user-configured server URL from SharedPreferences
         if (context != null) {

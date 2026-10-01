@@ -14,6 +14,18 @@
     <!-- Canonical URL -->
     <link rel="canonical" href="https://rjworldbd.com/" />
 
+    <!-- Enforce non-www production domain (https://rjworldbd.com) -->
+    <script data-cfasync="false">
+      (function() {
+        try {
+          var h = (window.location.hostname || '').toLowerCase();
+          if (h === 'www.rjworldbd.com') {
+            window.location.replace('https://rjworldbd.com' + window.location.pathname + window.location.search + window.location.hash);
+          }
+        } catch(e) {}
+      })();
+    </script>
+
     <!-- Early Multi-Vendor Wildcard Subdomain Detection -->
     <script data-cfasync="false">
       (function() {

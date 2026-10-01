@@ -116,6 +116,15 @@ app.use((req, res, next) => {
   next();
 });
 
+  // Strictly enforce non-www domain (https://rjworldbd.com)
+  app.use((req, res, next) => {
+    const host = (req.headers.host || '').toLowerCase();
+    if (host === 'www.rjworldbd.com') {
+      return res.redirect(301, `https://rjworldbd.com${req.originalUrl || req.url}`);
+    }
+    next();
+  });
+
   // Cloudflare & Browser Strict Zero-Cache for all dynamic API routes
   // Guarantees user-specific, wallet, order, payment, and reseller data is NEVER cached at Cloudflare edge
   app.use('/api', (req, res, next) => {

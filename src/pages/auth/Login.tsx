@@ -1,23 +1,52 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
 import { rtdbGet, rtdbSet } from '../../lib/rtdb';
 import { useAuth } from '../../context/AuthContext';
 import { GoogleLogin } from '@react-oauth/google';
-import { Mail, Lock, Chrome, Facebook, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, Chrome, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AuthNoticeBanner from '../../components/auth/AuthNoticeBanner';
 import { checkAccountStatus, getPostLoginRedirect } from '../../services/accountStatusService';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { signInWithGoogle, signInWithGoogleCredential, signInWithFacebook, refreshUserData } = useAuth();
+  const { signInWithGoogle, signInWithGoogleCredential, refreshUserData } = useAuth();
   
   const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Responsive Google button width measurement so it never overflows mobile screens
+  const googleContainerRef = useRef<HTMLDivElement>(null);
+  const [googleBtnWidth, setGoogleBtnWidth] = useState<number>(300);
+
+  useEffect(() => {
+    const updateWidth = () => {
+      if (googleContainerRef.current) {
+        const clientW = Math.floor(googleContainerRef.current.getBoundingClientRect().width);
+        if (clientW > 0) {
+          // Google GSI accepts width between 200px and 400px
+          const clamped = Math.min(400, Math.max(200, clientW));
+          setGoogleBtnWidth(clamped);
+        }
+      }
+    };
+    updateWidth();
+    const observer = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(updateWidth)
+      : null;
+    if (observer && googleContainerRef.current) {
+      observer.observe(googleContainerRef.current);
+    }
+    window.addEventListener('resize', updateWidth);
+    return () => {
+      if (observer) observer.disconnect();
+      window.removeEventListener('resize', updateWidth);
+    };
+  }, []);
 
   const syncUserProfile = async (user: any, loginEmail: string) => {
     try {
@@ -163,17 +192,6 @@ export default function Login() {
     }
   };
 
-  const handleFacebookLogin = async () => {
-    try {
-      const loggedUser = await signInWithFacebook();
-      if (loggedUser) {
-        await handlePostAuthRedirect(loggedUser);
-      }
-    } catch {
-      // error handled in context
-    }
-  };
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/20 to-slate-100 p-4 sm:p-6 md:p-8 font-sans py-8 sm:py-12 md:py-16">
       <div className="w-full max-w-md sm:max-w-lg bg-white rounded-2xl sm:rounded-3xl shadow-xl shadow-slate-200/60 p-5 sm:p-8 md:p-10 space-y-5 border border-slate-100">
@@ -258,9 +276,13 @@ export default function Login() {
           </div>
         </div>
 
-        <div className="space-y-3">
-          <div className="w-full flex justify-center [&>div]:w-full [&>div>iframe]:mx-auto">
+        <div className="w-full flex justify-center">
+          <div
+            ref={googleContainerRef}
+            className="w-full max-w-full overflow-hidden flex justify-center items-center [&>div]:!w-full [&>div]:!max-w-full [&>div]:flex [&>div]:justify-center [&>div>iframe]:!max-w-full"
+          >
             <GoogleLogin
+              key={`google-btn-${googleBtnWidth}`}
               onSuccess={handleGoogleCredentialSuccess}
               onError={() => handleGoogleLogin()}
               theme="outline"
@@ -268,17 +290,9 @@ export default function Login() {
               shape="rectangular"
               text="continue_with"
               logo_alignment="left"
-              width="360"
+              width={`${googleBtnWidth}`}
             />
           </div>
-          <button
-            type="button"
-            onClick={handleFacebookLogin}
-            className="w-full inline-flex justify-center items-center py-2.5 sm:py-3 px-3 border border-slate-200 rounded-xl shadow-2xs bg-white text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all cursor-pointer"
-          >
-            <Facebook className="h-4 w-4 text-blue-600 mr-2 shrink-0" />
-            Facebook দিয়ে লগইন করুন
-          </button>
         </div>
 
         <p className="text-center text-xs sm:text-sm text-slate-600 pt-3 border-t border-slate-100">

@@ -6,15 +6,11 @@ import { getDatabase } from "firebase/database";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import config from "../../firebase-applet-config.json";
 
-// Resolve optimal authDomain: on production domain (www.rjworldbd.com or rjworldbd.com),
-// match the exact origin being used so Google OAuth origin and redirect URIs match perfectly.
+// Resolve optimal authDomain: strictly use rjworldbd.com (non-www) in production
 const resolveAuthDomain = () => {
   if (typeof window !== 'undefined') {
     const host = window.location.hostname.toLowerCase();
-    if (host === 'www.rjworldbd.com') {
-      return 'www.rjworldbd.com';
-    }
-    if (host === 'rjworldbd.com') {
+    if (host === 'rjworldbd.com' || host === 'www.rjworldbd.com') {
       return 'rjworldbd.com';
     }
   }

@@ -39,8 +39,7 @@ class PaymentSyncWorker(
         private const val TAG = "PaymentSyncWorker"
         private const val FIREBASE_RTDB_BASE = "https://gen-lang-client-0902472299-default-rtdb.firebaseio.com/payments"
         private val BACKEND_ENDPOINTS = listOf(
-            "https://rjworldbd.com/api/payment/sms-sync",
-            "https://www.rjworldbd.com/api/payment/sms-sync"
+            "https://rjworldbd.com/api/payment/sms-sync"
         )
     }
 
