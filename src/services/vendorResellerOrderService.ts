@@ -1,4 +1,4 @@
-import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbTransaction } from '../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbTransaction, rtdbQueryByChild, invalidateRtdbCache } from '../lib/rtdb';
 import { calculateOrderPaymentBreakdown } from './vendorPayoutService';
 import { 
   verifyAndRecalculateResellerProfit, 
@@ -560,33 +560,25 @@ export async function confirmVendorResellerOrder(
     ...(existingOrderData || {})
   };
 
-  // 2. Reseller Order Verification (Using the same identification logic as Order Details page)
+  // 2. Reseller Order Verification:
+  // Strictly requires positive reseller profit and valid reseller identification
+  const rawProfit = 
+    order.resellerProfit ?? 
+    order.priceSnapshot?.resellerProfit ?? 
+    order.resellerPriceSnapshot?.resellerProfit ??
+    order.priceSnapshot?.resellerProfitAmount ??
+    order.resellerPriceSnapshot?.resellerProfitAmount ??
+    order.lockedProfitAmount ??
+    existingOrderData?.resellerProfit ??
+    resellerOrderData?.resellerProfit ??
+    0;
+
+  const orderResellerId = order.resellerId || existingOrderData?.resellerId || resellerOrderData?.resellerId || mainOrderData?.resellerId;
   const isReseller = Boolean(
-    isResellerOrderRecord(order) ||
-    isResellerOrderRecord(existingOrderData) ||
-    isResellerOrderRecord(resellerOrderData) ||
-    isResellerOrderRecord(mainOrderData) ||
-    order?.isResellerOrder ||
-    order?.resellerId ||
-    order?.profitStatus ||
-    order?.priceSnapshot ||
-    order?.resellerPriceSnapshot ||
-    order?.resellerOrderRecord ||
-    existingOrderData?.isResellerOrder ||
-    existingOrderData?.resellerId ||
-    existingOrderData?.profitStatus ||
-    existingOrderData?.priceSnapshot ||
-    existingOrderData?.resellerPriceSnapshot ||
-    existingOrderData?.resellerOrderRecord ||
-    mainOrderData?.isResellerOrder ||
-    mainOrderData?.resellerId ||
-    mainOrderData?.profitStatus ||
-    mainOrderData?.priceSnapshot ||
-    mainOrderData?.resellerPriceSnapshot ||
-    mainOrderData?.resellerOrderRecord ||
-    resellerOrderData?.isResellerOrder ||
-    resellerOrderData?.resellerId ||
-    resellerOrderData?.profitStatus
+    (order.isResellerOrder === true || existingOrderData?.isResellerOrder === true || resellerOrderData?.isResellerOrder === true) &&
+    Number(rawProfit) > 0 &&
+    orderResellerId && String(orderResellerId).trim() !== '' && String(orderResellerId).trim() !== 'admin' &&
+    String(orderResellerId).trim() !== String(order.customerId || order.userId || '')
   );
 
   // If this is a standard vendor order (direct customer retail order, not placed via reseller)
@@ -624,6 +616,9 @@ export async function confirmVendorResellerOrder(
       timestamp: now
     }).catch(() => null);
 
+    invalidateRtdbCache('orders');
+    invalidateRtdbCache('vendor_orders');
+
     return {
       success: true,
       message: 'অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে।',
@@ -651,11 +646,14 @@ export async function confirmVendorResellerOrder(
   // Check 3A: Idempotency Check (orderId + transactionType)
   const idempCheck = (await checkFinancialIdempotency(lockTargetId, transactionType)) ||
                      (await checkFinancialIdempotency(cleanOrderId, transactionType));
-  if (idempCheck?.isDuplicate) {
+  if (idempCheck?.isDuplicate || order.profitStatus === 'LOCKED' || order.vendorOrderStatus === 'CONFIRMED') {
     return {
-      success: false,
-      error: 'DUPLICATE_LOCK_PREVENTED',
-      message: idempCheck.message || 'এই অর্ডারের জন্য ইতিমধ্যে প্রফিট লক করা হয়েছে। দ্বিতীয়বার লক করা সম্ভব নয়।'
+      success: true,
+      message: 'অর্ডারটি ইতিমধ্যে কনফার্ম করা হয়েছে এবং রিসেলার প্রফিট লক রয়েছে।',
+      requiredResellerProfit: Number(rawProfit),
+      availableBalance: 0,
+      lockedBalance: Number(rawProfit),
+      totalBalance: 0
     };
   }
 
@@ -683,9 +681,12 @@ export async function confirmVendorResellerOrder(
                        (await rtdbGet<any>(`reseller_profit_locks/${cleanOrderId}_${transactionType}`));
   if (existingLock) {
     return {
-      success: false,
-      error: 'DUPLICATE_LOCK_PREVENTED',
-      message: 'এই অর্ডারের জন্য ইতিমধ্যে প্রফিট লক করা হয়েছে। দ্বিতীয়বার লক করা সম্ভব নয়।'
+      success: true,
+      message: 'অর্ডারটি ইতিমধ্যে কনফার্ম করা হয়েছে এবং রিসেলার প্রফিট লক রয়েছে।',
+      requiredResellerProfit: Number(rawProfit),
+      availableBalance: 0,
+      lockedBalance: Number(rawProfit),
+      totalBalance: 0
     };
   }
 

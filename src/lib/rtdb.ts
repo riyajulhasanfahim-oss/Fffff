@@ -6,7 +6,10 @@ import {
   push, 
   remove, 
   onValue, 
-  runTransaction
+  runTransaction,
+  query,
+  orderByChild,
+  equalTo
 } from 'firebase/database';
 import { rtdb, RTDB_BASE_URL, auth } from './firebase';
 
@@ -262,10 +265,15 @@ export async function rtdbGet<T = any>(path: string, timeoutMs: number = 5000): 
 function updateParentCache(itemPath: string, itemData: any) {
   const clean = sanitizePath(itemPath);
   const parts = clean.split('/');
-  if (parts.length === 2 && parts[0] === 'products') {
-    const key = parts[1];
-    // 1. Update active subscription channel for 'products'
-    const parentChannel = subscriptionChannels.get('products');
+  if (parts.length >= 2) {
+    const parent = parts[0];
+    const key = parts.slice(1).join('/');
+    
+    // Always invalidate cached list of parent node
+    invalidateRtdbCache(parent);
+
+    // Update active subscription channel for parent
+    const parentChannel = subscriptionChannels.get(parent);
     if (parentChannel) {
       if (!parentChannel.lastData || typeof parentChannel.lastData !== 'object') {
         parentChannel.lastData = {};
@@ -276,12 +284,14 @@ function updateParentCache(itemPath: string, itemData: any) {
         try { cb(parentChannel.lastData); } catch (_) {}
       });
     }
-    // 2. Update memoryCache for 'products'
-    const memProducts = memoryCache.get('products');
-    if (memProducts && memProducts.data && typeof memProducts.data === 'object') {
-      memProducts.data[key] = itemData;
-    } else {
-      memoryCache.set('products', { data: { [key]: itemData }, timestamp: Date.now() });
+
+    if (parent === 'products') {
+      const memProducts = memoryCache.get('products');
+      if (memProducts && memProducts.data && typeof memProducts.data === 'object') {
+        memProducts.data[key] = itemData;
+      } else {
+        memoryCache.set('products', { data: { [key]: itemData }, timestamp: Date.now() });
+      }
     }
   }
 }
@@ -299,6 +309,9 @@ export async function rtdbSet(
   if (!cleanPath) throw new Error('Path is required');
 
   const cleanData = stripUndefined(data);
+
+  // Invalidate any existing cached path or parent node to ensure fresh reads
+  invalidateRtdbCache(cleanPath);
 
   // Optimistically update local cache & notify subscribers
   memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
@@ -766,6 +779,60 @@ export async function rtdbList<T = any>(
     }
   }
   return results;
+}
+
+/**
+ * Fast indexed query by child field in RTDB with Web SDK and REST fallback
+ */
+export async function rtdbQueryByChild<T = any>(
+  path: string,
+  childKey: string,
+  childValue: any,
+  timeoutMs: number = 7000
+): Promise<Array<{ id: string; data: T }>> {
+  const cleanPath = sanitizePath(path);
+  if (!cleanPath) return [];
+
+  // 1. Try Firebase Web SDK indexed query
+  try {
+    const dbRef = ref(rtdb, cleanPath);
+    const q = query(dbRef, orderByChild(childKey), equalTo(childValue));
+    const sdkTimeout = new Promise<any>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    const sdkPromise = get(q).then((snap) => {
+      if (snap && snap.exists()) {
+        const val = snap.val();
+        if (val && typeof val === 'object') {
+          return Object.entries(val).map(([id, data]) => ({ id, data: data as T }));
+        }
+      }
+      return [];
+    }).catch(() => null);
+
+    const sdkResult = await Promise.race([sdkPromise, sdkTimeout]);
+    if (sdkResult !== null) {
+      return sdkResult;
+    }
+  } catch (_) {}
+
+  // 2. Fallback to direct REST indexed query
+  try {
+    const token = await getAuthToken();
+    const authParam = token ? `&auth=${encodeURIComponent(token)}` : '';
+    const formattedVal = encodeURIComponent(JSON.stringify(childValue));
+    const url = `${RTDB_BASE_URL}/${cleanPath}.json?orderBy="${encodeURIComponent(childKey)}"&equalTo=${formattedVal}${authParam}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    clearTimeout(timer);
+    if (res.ok) {
+      const json = await res.json();
+      if (json && typeof json === 'object' && !('error' in json)) {
+        return Object.entries(json).map(([id, data]) => ({ id, data: data as T }));
+      }
+    }
+  } catch (_) {}
+
+  return [];
 }
 
 // ============================================================================

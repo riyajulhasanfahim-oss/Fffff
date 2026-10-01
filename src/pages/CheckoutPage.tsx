@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { rtdbGet, rtdbSet, rtdbUpdate, rtdbList, rtdbPush, rtdbTransaction } from '../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbList, rtdbPush, rtdbTransaction, invalidateRtdbCache } from '../lib/rtdb';
 import { executeResellerWalletTransaction, isResellerAccount as checkIsResellerAccount } from '../services/resellerWalletService';
 import { ResellerTransactionType } from '../types/resellerWallet';
 import Header from '../components/layout/Header';
@@ -788,11 +788,24 @@ export default function CheckoutPage() {
       
       const cleanItems = items.map(item => {
         const pId = item.id || item.productId;
+        const matchedDetail = itemsWithDetails.find(d => (d.id || d.productId) === pId);
         const chosenColor = item.selectedColor || item.color || null;
         const chosenSize = item.selectedSize || item.size || null;
         const chosenSku = item.variantSku || item.sku || null;
         const chosenVariantId = item.variantId || null;
-        const chosenStoreId = item.vendorId || item.storeId || 'admin';
+        
+        // Comprehensive vendor ID resolution from item, itemsWithDetails, multiVendorShipping, and product
+        let chosenStoreId = item.vendorId || item.storeId || matchedDetail?.vendorId || matchedDetail?.storeId || (item as any).vendor?.id || (item as any).vendor?.vendorId;
+        if (!chosenStoreId || chosenStoreId === 'admin') {
+          const pkg = multiVendorShipping?.vendorPackages?.find(p => 
+            p.items?.some((it: any) => (it.id || it.productId) === pId)
+          );
+          if (pkg?.vendorId && pkg.vendorId !== 'admin') {
+            chosenStoreId = pkg.vendorId;
+          }
+        }
+        chosenStoreId = chosenStoreId || 'admin';
+
         const rawVendorPrice = item.vendorPrice !== undefined 
           ? Number(item.vendorPrice) 
           : (item.adminPrice !== undefined ? Number(item.adminPrice) : (item.price !== undefined ? Number(item.price) : undefined));
@@ -800,12 +813,20 @@ export default function CheckoutPage() {
           ? Number(item.resellerSellingPrice) 
           : (item.price !== undefined ? Number(item.price) : undefined);
         const itemQty = Math.max(1, Number(item.quantity) || 1);
-        const calcUnitProfit = (rawVendorPrice !== undefined && rawSellingPrice !== undefined)
+
+        // Genuine reseller profit detection: strictly requires reseller margin or positive profit
+        const isLegitResellerMargin = Boolean(
+          (rawVendorPrice !== undefined && rawSellingPrice !== undefined && rawSellingPrice > rawVendorPrice) ||
+          (item.resellerProfit !== undefined && Number(item.resellerProfit) > 0) ||
+          (item.unitProfit !== undefined && Number(item.unitProfit) > 0 && item.isResellerItem)
+        );
+
+        const calcUnitProfit = isLegitResellerMargin && rawVendorPrice !== undefined && rawSellingPrice !== undefined
           ? Math.max(0, Number((rawSellingPrice - rawVendorPrice).toFixed(2)))
-          : (item.unitProfit !== undefined ? Number(item.unitProfit) : undefined);
-        const calcResellerProfit = (rawVendorPrice !== undefined && rawSellingPrice !== undefined)
-          ? Math.max(0, Number(((rawSellingPrice - rawVendorPrice) * itemQty).toFixed(2)))
-          : (item.resellerProfit !== undefined ? Number(item.resellerProfit) : undefined);
+          : (isLegitResellerMargin && item.unitProfit !== undefined ? Number(item.unitProfit) : 0);
+        const calcResellerProfit = isLegitResellerMargin
+          ? Math.max(0, Number((calcUnitProfit * itemQty).toFixed(2)))
+          : 0;
 
         const cleanItem: any = {
           ...item,
@@ -827,16 +848,16 @@ export default function CheckoutPage() {
           resellerSellingPrice: rawSellingPrice,
           unitProfit: calcUnitProfit,
           resellerProfit: calcResellerProfit,
-          customerPaidAmount: rawSellingPrice !== undefined ? Number((rawSellingPrice * itemQty).toFixed(2)) : undefined,
-          priceSnapshot: item.priceSnapshot || (rawVendorPrice !== undefined && rawSellingPrice !== undefined ? {
+          customerPaidAmount: rawSellingPrice !== undefined ? Number((rawSellingPrice * itemQty).toFixed(2)) : (item.price ? Number((item.price * itemQty).toFixed(2)) : undefined),
+          priceSnapshot: isLegitResellerMargin ? {
             vendorPrice: rawVendorPrice,
             resellerSellingPrice: rawSellingPrice,
             unitProfit: calcUnitProfit || 0,
             resellerProfit: calcResellerProfit || 0,
             quantity: itemQty,
             capturedAt: Date.now()
-          } : undefined),
-          isResellerItem: item.isResellerItem || Boolean(item.resellerSellingPrice && item.vendorPrice && item.resellerSellingPrice > item.vendorPrice)
+          } : undefined,
+          isResellerItem: isLegitResellerMargin
         };
         Object.keys(cleanItem).forEach(key => {
           if (cleanItem[key] === undefined) {
@@ -846,19 +867,24 @@ export default function CheckoutPage() {
         return cleanItem;
       });
 
-      // Detect if this is a Reseller Order (strictly isolated to reseller account or reseller products)
+      // Detect if this is a genuine Reseller Order
       const isResellerAccount = Boolean(
         userData?.accountType?.toLowerCase() === 'reseller' ||
         userData?.role?.toLowerCase() === 'reseller' ||
         userData?.hasActiveReseller === true
       );
       const containsResellerPricing = cleanItems.some(it => 
-        Boolean(it.priceSnapshot || (it.resellerSellingPrice && it.vendorPrice && it.resellerSellingPrice > it.vendorPrice) || (it.resellerProfit && it.resellerProfit > 0) || it.isResellerItem)
+        Boolean(it.isResellerItem || (it.resellerProfit && it.resellerProfit > 0))
       );
-      const isResellerOrder = isResellerAccount || containsResellerPricing;
-      const effectiveResellerId = isResellerAccount 
-        ? user?.uid 
-        : (cleanItems.find(it => it.referralId || it.resellerId)?.referralId || referralId || user?.uid || null);
+      const hasReferralOrResellerSource = Boolean(
+        cleanItems.some(it => it.referralId || it.resellerId) || referralId
+      );
+      const isResellerOrder = (isResellerAccount || hasReferralOrResellerSource) && containsResellerPricing;
+      const effectiveResellerId = isResellerOrder 
+        ? (isResellerAccount 
+            ? user?.uid 
+            : (cleanItems.find(it => it.referralId || it.resellerId)?.referralId || referralId || null))
+        : null;
 
       let resellerOrderRecord: ResellerOrderRecord | null = null;
       if (isResellerOrder && effectiveResellerId) {
@@ -1485,6 +1511,15 @@ export default function CheckoutPage() {
             console.warn('[CheckoutPage] Reseller pending profit persistence warning:', rErr);
           }
         }
+
+        // Invalidate RTDB caches so Vendor Panel & Admin see the order immediately
+        try {
+          invalidateRtdbCache('orders');
+          invalidateRtdbCache('vendor_orders');
+          invalidateRtdbCache('reseller_orders');
+          invalidateRtdbCache('orderItems');
+          window.dispatchEvent(new CustomEvent('vendor_order_updated'));
+        } catch (_) {}
       } catch (err) {
         console.warn('Error recording vendor order hold', err);
       }
