@@ -265,10 +265,10 @@ export default function VendorDashboard() {
         }
 
         let combinedData: any = {
-          ...(storeSnap || {}),
-          ...(vendorSnap || {}),
           ...(cachedVen || {}),
           ...(cachedProf || {}),
+          ...(storeSnap || {}),
+          ...(vendorSnap || {}),
           ...(profileSnap || {})
         };
 

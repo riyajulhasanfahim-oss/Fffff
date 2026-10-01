@@ -398,22 +398,33 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
 
   const cleanData = stripUndefined(data);
 
-  // Invalidate cache
+  // Invalidate cache immediately
   invalidateRtdbCache(cleanPath);
 
-  // Try SDK update
+  let sdkError: any = null;
+
+  // 1. Try Firebase Web SDK update
   try {
     const dbRef = ref(rtdb, cleanPath);
     const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
-    const sdkUpdate = update(dbRef, cleanData).then(() => true).catch(() => false);
+    const sdkUpdate = update(dbRef, cleanData).then(() => true).catch((err) => {
+      sdkError = err;
+      console.warn(`[RTDB SDK update failed on ${cleanPath}]:`, err?.code, err?.message);
+      return false;
+    });
     const success = await Promise.race([sdkUpdate, sdkTimeout]);
     if (success) {
+      memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
       dispatchToSubscribers(cleanPath, cleanData, true);
       return;
     }
-  } catch (_) {}
+  } catch (err: any) {
+    sdkError = err;
+    console.warn(`[RTDB SDK update exception on ${cleanPath}]:`, err?.message);
+  }
 
-  // Fallback to REST PATCH with Firebase Auth ID token
+  // 2. Fallback to direct REST PATCH with fresh Firebase Auth ID token
+  let restError: any = null;
   try {
     const token = await getAuthToken();
     const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
@@ -427,18 +438,26 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
     });
     clearTimeout(timer);
     if (res.ok) {
-      dispatchToSubscribers(cleanPath, cleanData, true);
-      return;
+      const resJson = await res.json();
+      if (!resJson || typeof resJson !== 'object' || !('error' in resJson)) {
+        memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
+        dispatchToSubscribers(cleanPath, cleanData, true);
+        return;
+      }
+      restError = resJson.error;
+    } else {
+      restError = `HTTP ${res.status}: ${await res.text().catch(() => '')}`;
     }
-  } catch (err) {
-    console.warn(`[RTDB Update Notice for ${cleanPath}]:`, err);
+  } catch (err: any) {
+    restError = err?.message || String(err);
+    console.warn(`[RTDB REST PATCH notice for ${cleanPath}]:`, err);
   }
 
-  // Fallback to local server proxy
+  // 3. Fallback to server proxy with user's Bearer token
   if (typeof window !== 'undefined') {
     try {
       const token = await getAuthToken();
-      await fetch(`/api/${cleanPath}`, {
+      const res = await fetch(`/api/${cleanPath}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -446,9 +465,18 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
         },
         body: JSON.stringify(cleanData)
       });
-      dispatchToSubscribers(cleanPath, cleanData, true);
+      if (res.ok) {
+        memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
+        dispatchToSubscribers(cleanPath, cleanData, true);
+        return;
+      }
     } catch (_) {}
   }
+
+  // If all attempts failed, throw so the caller knows the write did not commit
+  const finalErrorMsg = sdkError?.message || restError || `Failed to update ${cleanPath} in Firebase Realtime Database.`;
+  console.error(`[RTDB update failed completely on ${cleanPath}]:`, finalErrorMsg);
+  throw new Error(finalErrorMsg);
 }
 
 /**

@@ -3,7 +3,7 @@ import imageCompression from 'browser-image-compression';
 import { useAuth } from '../../../context/AuthContext';
 import { useVendorStore } from '../../../context/VendorStoreContext';
 import { RTDB_BASE_URL } from '../../../lib/firebase';
-import { rtdbGet, rtdbSet, rtdbUpdate, rtdbSubscribe } from '../../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbSubscribe, invalidateRtdbCache } from '../../../lib/rtdb';
 import { saveStoreThemeToCache, saveStoreToCache, getStoreFromCache } from '../../../services/storeCache';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
@@ -241,6 +241,7 @@ export default function ShopProfile() {
     if (!user) return;
     try {
       // 1. Fetch Profile, Vendor, Store, and Theme directly from Firebase Realtime Database
+      // /vendor_profiles/${user.uid} is the CANONICAL single source of truth for vendor profile
       const [profileData, vendorData, storeData, themeData] = await Promise.all([
         rtdbGet<any>(`vendor_profiles/${user.uid}`),
         rtdbGet<any>(`vendors/${user.uid}`),
@@ -266,20 +267,6 @@ export default function ShopProfile() {
         } catch (_) {}
       }
 
-      // Check localStorage cache fallback
-      if (!loadedProfileData) {
-        try {
-          const localProf = localStorage.getItem('rj_vendor_profile_' + user.uid);
-          if (localProf) loadedProfileData = JSON.parse(localProf);
-        } catch (_) {}
-      }
-      if (!loadedVendorData) {
-        try {
-          const localVen = localStorage.getItem('rj_active_vendor_' + user.uid);
-          if (localVen) loadedVendorData = JSON.parse(localVen);
-        } catch (_) {}
-      }
-
       // If no data exists in RTDB yet, populate local form defaults without saving to database
       if (!loadedProfileData && !loadedVendorData && !loadedStoreData) {
         const initialShopName = user.displayName ? `${user.displayName}'s Store` : 'My Store';
@@ -287,6 +274,7 @@ export default function ShopProfile() {
         const initialRecord = {
           shopName: initialShopName,
           storeName: initialShopName,
+          ownerName: user.displayName || '',
           description: `Welcome to ${initialShopName}`,
           category: 'Retail',
           contactNumber: user.phoneNumber || '',
@@ -305,11 +293,11 @@ export default function ShopProfile() {
             country: 'Bangladesh'
           },
           openingHours: 'Mon-Fri: 9 AM - 6 PM',
-          status: 'Pending',
+          status: 'Active',
           verificationBadge: false,
           verificationStatus: 'Pending',
           shopSlug: initialSlug,
-          freeShopDomain: `${initialSlug}.rjworldbd.com`,
+          freeShopDomain: `${initialSlug}.${PRIMARY_DOMAIN}`,
           customDomain: '',
           customDomainStatus: 'Pending',
           logo: '',
@@ -320,19 +308,70 @@ export default function ShopProfile() {
           updatedAt: Date.now()
         };
 
-        // Note: Do NOT automatically save to RTDB here.
-        // The store is ONLY saved to the database when the user explicitly clicks Save.
         loadedProfileData = initialRecord;
       }
 
-      const rawVendorAddr = loadedVendorData?.address || loadedProfileData?.address || loadedStoreData?.address || profile.address;
-      const vLoc = extractVendorLocation(loadedVendorData || loadedProfileData || loadedStoreData, loadedVendorData);
+      // Canonical resolution: /vendor_profiles/${user.uid} takes HIGHEST PRIORITY
+      // Falling back to vendors and stores ONLY for fields not yet present in vendor_profiles
+      const resolvedShopName = loadedProfileData?.shopName || loadedProfileData?.storeName ||
+                               loadedVendorData?.shopName || loadedVendorData?.storeName ||
+                               loadedStoreData?.shopName || loadedStoreData?.storeName || '';
+
+      const resolvedOwnerName = loadedProfileData?.ownerName || loadedVendorData?.ownerName || loadedStoreData?.ownerName || '';
+
+      const resolvedCategory = loadedProfileData?.category || loadedVendorData?.category || loadedStoreData?.category || 'Retail';
+
+      const resolvedDescription = loadedProfileData?.description !== undefined ? loadedProfileData.description :
+                                  (loadedVendorData?.description !== undefined ? loadedVendorData.description : (loadedStoreData?.description || ''));
+
+      const resolvedPhone = loadedProfileData?.contactNumber || loadedProfileData?.phone || loadedProfileData?.mobileNumber ||
+                            loadedVendorData?.contactNumber || loadedVendorData?.phone || loadedVendorData?.mobileNumber ||
+                            loadedStoreData?.contactNumber || loadedStoreData?.phone || '';
+
+      const resolvedWhatsApp = loadedProfileData?.whatsappNumber || loadedProfileData?.whatsapp ||
+                               loadedVendorData?.whatsappNumber || loadedVendorData?.whatsapp ||
+                               loadedStoreData?.whatsappNumber || loadedStoreData?.whatsapp || '';
+
+      const resolvedEmail = loadedProfileData?.email || loadedVendorData?.email || loadedStoreData?.email || user.email || '';
+
+      const resolvedWebsite = loadedProfileData?.website || loadedVendorData?.website || loadedStoreData?.website || '';
+      const resolvedFacebook = loadedProfileData?.facebook || loadedProfileData?.socialLinks?.facebook || loadedVendorData?.facebook || loadedStoreData?.facebook || '';
+      const resolvedInstagram = loadedProfileData?.instagram || loadedProfileData?.socialLinks?.instagram || loadedVendorData?.instagram || loadedStoreData?.instagram || '';
+      const resolvedYoutube = loadedProfileData?.youtube || loadedProfileData?.socialLinks?.youtube || loadedVendorData?.youtube || loadedStoreData?.youtube || '';
+      const resolvedTiktok = loadedProfileData?.tiktok || loadedProfileData?.socialLinks?.tiktok || loadedVendorData?.tiktok || loadedStoreData?.tiktok || '';
+      const resolvedOpeningHours = loadedProfileData?.openingHours || loadedVendorData?.openingHours || loadedStoreData?.openingHours || 'Mon-Fri: 9 AM - 6 PM';
+
+      const resolvedLogo = loadedProfileData?.logo || loadedProfileData?.shopLogo || loadedProfileData?.profileImage ||
+                           loadedVendorData?.logo || loadedVendorData?.shopLogo ||
+                           loadedStoreData?.logo || loadedStoreData?.shopLogo || '';
+
+      const resolvedBanner = loadedProfileData?.banner || loadedProfileData?.shopBanner ||
+                             loadedVendorData?.banner || loadedVendorData?.shopBanner ||
+                             loadedStoreData?.banner || loadedStoreData?.shopBanner || '';
+
+      const resolvedSlug = loadedProfileData?.shopSlug || loadedProfileData?.storeSlug ||
+                           loadedVendorData?.shopSlug || loadedVendorData?.storeSlug ||
+                           loadedStoreData?.shopSlug || loadedStoreData?.storeSlug || '';
+
+      const resolvedFreeDomain = loadedProfileData?.freeShopDomain || loadedVendorData?.freeShopDomain || loadedStoreData?.freeShopDomain || '';
+      const resolvedCustomDomain = loadedProfileData?.customDomain || loadedVendorData?.customDomain || loadedStoreData?.customDomain || '';
+      const resolvedCustomDomainStatus = loadedProfileData?.customDomainStatus || loadedVendorData?.customDomainStatus || loadedStoreData?.customDomainStatus || 'Pending';
+
+      const resolvedVerificationBadge = Boolean(
+        loadedProfileData?.verificationBadge || loadedVendorData?.verificationBadge || loadedStoreData?.verificationBadge ||
+        loadedProfileData?.verificationStatus === 'verified' || loadedVendorData?.verificationStatus === 'verified' || loadedStoreData?.verificationStatus === 'verified'
+      );
+      const resolvedVerificationStatus = loadedProfileData?.verificationStatus || loadedVendorData?.verificationStatus || loadedStoreData?.verificationStatus || 'Pending';
+      const resolvedStatus = loadedProfileData?.status || loadedVendorData?.status || loadedStoreData?.status || 'Active';
+
+      const rawVendorAddr = loadedProfileData?.address || loadedVendorData?.address || loadedStoreData?.address;
+      const vLoc = extractVendorLocation(loadedProfileData || loadedVendorData || loadedStoreData, loadedProfileData || loadedVendorData);
       const isObj = typeof rawVendorAddr === 'object' && rawVendorAddr !== null;
-      const resolvedDist = (isObj ? (rawVendorAddr.district || rawVendorAddr.state) : '') || loadedVendorData?.district || loadedProfileData?.district || vLoc.district || '';
-      const resolvedUp = (isObj ? (rawVendorAddr.upazila || rawVendorAddr.city) : '') || loadedVendorData?.upazila || loadedProfileData?.upazila || vLoc.upazila || '';
-      const resolvedDiv = (isObj ? rawVendorAddr.division : '') || loadedVendorData?.division || loadedProfileData?.division || vLoc.division || (resolvedDist ? getDivisionByDistrict(resolvedDist) : '');
-      const resolvedStreet = (isObj ? (rawVendorAddr.street || rawVendorAddr.area) : (typeof rawVendorAddr === 'string' ? rawVendorAddr : '')) || vLoc.area || '';
-      const resolvedZip = (isObj ? rawVendorAddr.zip : '') || '';
+      const resolvedDist = (isObj ? (rawVendorAddr.district || rawVendorAddr.state) : '') || loadedProfileData?.district || loadedVendorData?.district || loadedStoreData?.district || vLoc.district || '';
+      const resolvedUp = (isObj ? (rawVendorAddr.upazila || rawVendorAddr.city) : '') || loadedProfileData?.upazila || loadedVendorData?.upazila || loadedStoreData?.upazila || vLoc.upazila || '';
+      const resolvedDiv = (isObj ? rawVendorAddr.division : '') || loadedProfileData?.division || loadedVendorData?.division || loadedStoreData?.division || vLoc.division || (resolvedDist ? getDivisionByDistrict(resolvedDist) : '');
+      const resolvedStreet = (isObj ? (rawVendorAddr.street || rawVendorAddr.area) : (typeof rawVendorAddr === 'string' ? rawVendorAddr : '')) || loadedProfileData?.street || vLoc.area || '';
+      const resolvedZip = (isObj ? rawVendorAddr.zip : '') || loadedProfileData?.zip || '';
 
       const normalizedAddress = {
         street: resolvedStreet,
@@ -345,27 +384,41 @@ export default function ShopProfile() {
         country: 'Bangladesh'
       };
 
-      const mergedProfile = {
-        ...profile,
-        ...(loadedStoreData || {}),
-        ...(loadedVendorData ? {
-          shopName: loadedVendorData.shopName || loadedVendorData.storeName || '',
-          email: loadedVendorData.email || user.email || '',
-          contactNumber: loadedVendorData.contactNumber || loadedVendorData.mobileNumber || loadedVendorData.phone || '',
-          whatsappNumber: loadedVendorData.whatsappNumber || loadedVendorData.contactNumber || ''
-        } : {}),
-        ...(loadedProfileData || {}),
-        address: normalizedAddress
-      };
-
-      const resolvedLogo = loadedProfileData?.logo || loadedVendorData?.logo || loadedStoreData?.logo || '';
-      const resolvedBanner = loadedProfileData?.banner || loadedVendorData?.banner || loadedStoreData?.banner || '';
-
-      setProfile((prev: any) => ({ ...prev, ...mergedProfile }));
-      await updateVendorInfo({
-        ...mergedProfile,
-        logo: resolvedLogo || mergedProfile.logo,
-        banner: resolvedBanner || mergedProfile.banner
+      setProfile({
+        shopName: resolvedShopName,
+        storeName: resolvedShopName,
+        ownerName: resolvedOwnerName,
+        category: resolvedCategory,
+        description: resolvedDescription,
+        contactNumber: resolvedPhone,
+        mobileNumber: resolvedPhone,
+        phone: resolvedPhone,
+        whatsappNumber: resolvedWhatsApp,
+        whatsapp: resolvedWhatsApp,
+        email: resolvedEmail,
+        website: resolvedWebsite,
+        facebook: resolvedFacebook,
+        instagram: resolvedInstagram,
+        youtube: resolvedYoutube,
+        tiktok: resolvedTiktok,
+        address: normalizedAddress,
+        openingHours: resolvedOpeningHours,
+        logo: resolvedLogo,
+        banner: resolvedBanner,
+        shopSlug: resolvedSlug,
+        storeSlug: resolvedSlug,
+        freeShopDomain: resolvedFreeDomain,
+        customDomain: resolvedCustomDomain,
+        customDomainStatus: resolvedCustomDomainStatus,
+        verificationBadge: resolvedVerificationBadge,
+        verificationStatus: resolvedVerificationStatus,
+        status: resolvedStatus,
+        seo: loadedProfileData?.seo || loadedStoreData?.seo || {
+          title: '',
+          description: '',
+          keywords: '',
+          urlSlug: ''
+        }
       });
 
       setMedia({
@@ -375,7 +428,7 @@ export default function ShopProfile() {
       });
 
       // 2. Fetch Theme from RTDB
-      const resolvedTheme = themeData || loadedProfileData?.theme;
+      const resolvedTheme = themeData || loadedProfileData?.theme || loadedStoreData?.theme;
       if (resolvedTheme) {
         setTheme(t => ({ ...t, ...resolvedTheme }));
       }
@@ -550,56 +603,23 @@ export default function ShopProfile() {
         area: selectedStreet
       };
 
-      const profilePayload = cleanObject({
-        ...profile,
-        shopName: shopTitle,
-        storeName: shopTitle,
-        address: structuredAddress,
-        district: selectedDistrict,
-        upazila: selectedUpazila,
-        thana: selectedUpazila,
-        division: selectedDivision,
-        vendorDistrict: selectedDistrict,
-        vendorUpazila: selectedUpazila,
-        vendorDivision: selectedDivision,
-        vendorLocation: structuredVendorLocation,
-        logo: media.logo || profile.logo || '',
-        banner: media.banner || profile.banner || '',
-        isCodEnabled: vendorInfo?.isCodEnabled ?? profile.isCodEnabled ?? true,
-        codEnabled: vendorInfo?.codEnabled ?? profile.codEnabled ?? true,
-        rating: vendorInfo?.rating ?? profile.rating ?? null,
-        reviews: vendorInfo?.reviews ?? profile.reviews ?? null,
-        reviewsCount: vendorInfo?.reviewsCount ?? profile.reviewsCount ?? null,
-        totalSales: vendorInfo?.totalSales ?? profile.totalSales ?? 0,
-        totalOrders: vendorInfo?.totalOrders ?? profile.totalOrders ?? 0,
-        followersCount: vendorInfo?.followersCount ?? profile.followersCount ?? 0,
-        verifiedAt: vendorInfo?.verifiedAt || profile.verifiedAt || null,
-        planExpiresAt: vendorInfo?.planExpiresAt || profile.planExpiresAt || 0,
-        verifiedDurationMonths: vendorInfo?.verifiedDurationMonths || profile.verifiedDurationMonths || null,
-        verifiedPlanPrice: vendorInfo?.verifiedPlanPrice || profile.verifiedPlanPrice || null,
-        verifiedPaymentMethod: vendorInfo?.verifiedPaymentMethod || profile.verifiedPaymentMethod || null,
-        verifiedTrxId: vendorInfo?.verifiedTrxId || profile.verifiedTrxId || null,
-        isVerified: vendorInfo?.isVerified ?? profile.isVerified ?? false,
-        verified: vendorInfo?.verified ?? profile.verified ?? false,
-        blueBadge: vendorInfo?.blueBadge ?? profile.blueBadge ?? false,
-        isVerifiedSeller: vendorInfo?.isVerifiedSeller ?? profile.isVerifiedSeller ?? false,
-        verifiedSellerPlanActive: vendorInfo?.verifiedSellerPlanActive ?? false,
-        vendorId: user.uid,
-        userId: user.uid,
-        updatedAt: now
-      });
+      const cleanLogo = (media.logo || profile.logo || '').trim();
+      const cleanBanner = (media.banner || profile.banner || '').trim();
 
-      const vendorPayload = cleanObject({
+      // Safe partial update for editable profile fields only
+      // Do not modify unrelated vendor data such as wallet, orders, products, commissions, withdrawals, statistics, etc.
+      const editableProfilePayload = cleanObject({
         shopName: shopTitle,
         storeName: shopTitle,
-        ownerName: profile.ownerName || shopTitle || user.displayName || '',
-        logo: media.logo || profile.logo || '',
-        banner: media.banner || profile.banner || '',
-        email: profile.email || user.email || '',
+        ownerName: (profile.ownerName || shopTitle).trim(),
+        category: profile.category || 'Retail',
+        description: profile.description !== undefined ? profile.description : '',
         contactNumber: profile.contactNumber || profile.mobileNumber || profile.phone || '',
         mobileNumber: profile.contactNumber || profile.mobileNumber || profile.phone || '',
         phone: profile.contactNumber || profile.mobileNumber || profile.phone || '',
-        whatsappNumber: profile.whatsappNumber || profile.contactNumber || '',
+        whatsappNumber: profile.whatsappNumber || '',
+        whatsapp: profile.whatsappNumber || '',
+        email: profile.email || user.email || '',
         website: profile.website || '',
         facebook: profile.facebook || '',
         instagram: profile.instagram || '',
@@ -615,74 +635,67 @@ export default function ShopProfile() {
         vendorDivision: selectedDivision,
         vendorLocation: structuredVendorLocation,
         openingHours: profile.openingHours || 'Mon-Fri: 9 AM - 6 PM',
-        category: profile.category || 'Retail',
-        status: profile.status || 'Active',
-        shopSlug: finalSlug || profile.shopSlug || '',
-        storeSlug: finalSlug || profile.storeSlug || '',
-        freeShopDomain: finalFreeDomain || profile.freeShopDomain || '',
+        logo: cleanLogo,
+        shopLogo: cleanLogo,
+        profileImage: cleanLogo,
+        banner: cleanBanner,
+        shopBanner: cleanBanner,
+        shopSlug: finalSlug,
+        storeSlug: finalSlug,
+        freeShopDomain: finalFreeDomain,
         customDomain: profile.customDomain || '',
         customDomainStatus: profile.customDomainStatus || 'Pending',
-        verificationStatus: profile.verificationStatus || vendorInfo?.verificationStatus || 'Pending',
-        verificationBadge: profile.verificationBadge || vendorInfo?.verificationBadge || false,
-        verifiedAt: vendorInfo?.verifiedAt || null,
-        planExpiresAt: vendorInfo?.planExpiresAt || 0,
-        verifiedDurationMonths: vendorInfo?.verifiedDurationMonths || null,
-        verifiedPlanPrice: vendorInfo?.verifiedPlanPrice || null,
-        verifiedPaymentMethod: vendorInfo?.verifiedPaymentMethod || null,
-        verifiedTrxId: vendorInfo?.verifiedTrxId || null,
-        isVerified: vendorInfo?.isVerified ?? false,
-        verified: vendorInfo?.verified ?? false,
-        blueBadge: vendorInfo?.blueBadge ?? false,
-        isVerifiedSeller: vendorInfo?.isVerifiedSeller ?? false,
-        verifiedSellerPlanActive: vendorInfo?.verifiedSellerPlanActive ?? false,
-        isCodEnabled: vendorInfo?.isCodEnabled ?? profile.isCodEnabled ?? true,
-        codEnabled: vendorInfo?.codEnabled ?? profile.codEnabled ?? true,
-        rating: vendorInfo?.rating ?? profile.rating ?? null,
-        reviews: vendorInfo?.reviews ?? profile.reviews ?? null,
-        reviewsCount: vendorInfo?.reviewsCount ?? profile.reviewsCount ?? null,
-        totalSales: vendorInfo?.totalSales ?? profile.totalSales ?? 0,
-        totalOrders: vendorInfo?.totalOrders ?? profile.totalOrders ?? 0,
-        followersCount: vendorInfo?.followersCount ?? profile.followersCount ?? 0,
-        userId: user.uid,
         vendorId: user.uid,
+        userId: user.uid,
         updatedAt: now
       });
 
-      const storePayload = cleanObject({
-        ...profilePayload,
-        id: user.uid,
-        storeId: user.uid
-      });
+      // 1. Single Source of Truth: Write to canonical /vendor_profiles/${user.uid}
+      // Wait for Firebase to confirm that the write succeeded
+      await rtdbUpdate(`vendor_profiles/${user.uid}`, editableProfilePayload);
 
-      // 1. Guaranteed Realtime Database safe write (preserving existing stats and flags)
-      await Promise.all([
-        rtdbUpdate(`vendor_profiles/${user.uid}`, profilePayload),
-        rtdbUpdate(`vendors/${user.uid}`, vendorPayload),
-        rtdbUpdate(`stores/${user.uid}`, storePayload)
+      // Synchronize editable profile fields to vendors and stores nodes
+      await Promise.allSettled([
+        rtdbUpdate(`vendors/${user.uid}`, editableProfilePayload),
+        rtdbUpdate(`stores/${user.uid}`, { ...editableProfilePayload, id: user.uid, storeId: user.uid })
       ]);
 
-      // 2. Server-Side Realtime Database & Disk Sync
+      // 2. Server-Side Realtime Database & Disk Sync with user ID token
       try {
+        const idToken = await user.getIdToken();
         await fetch('/api/vendor/save-profile', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
+          },
           body: JSON.stringify({
             vendorId: user.uid,
-            profileData: profilePayload,
-            vendorData: vendorPayload
+            profileData: editableProfilePayload,
+            vendorData: editableProfilePayload,
+            storeData: editableProfilePayload
           })
         });
       } catch (srvErr) {
         console.warn('Server sync notice:', srvErr);
       }
 
-      // 3. Update persistent vendor store context & caches for instant UI responsiveness across all routes
-      await updateVendorInfo({
-        ...profilePayload,
-        ...vendorPayload
+      // 3. Invalidate caches so all components fetch fresh Firebase values
+      invalidateRtdbCache(`vendor_profiles/${user.uid}`);
+      invalidateRtdbCache(`vendors/${user.uid}`);
+      invalidateRtdbCache(`stores/${user.uid}`);
+
+      // 4. Update local UI state & vendor store context immediately
+      setProfile((prev: any) => ({ ...prev, ...editableProfilePayload }));
+      setMedia({
+        logo: cleanLogo,
+        logoId: '',
+        banner: cleanBanner
       });
 
-      // 4. Re-read from RTDB to confirm data is persisted and show updated data in form
+      await updateVendorInfo(editableProfilePayload);
+
+      // 5. Re-read the saved profile from Firebase after the write to verify and display that Firebase data
       await fetchData();
 
       toast.success('Shop profile updated successfully', { id: toastId });

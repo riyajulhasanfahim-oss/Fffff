@@ -1078,34 +1078,58 @@ app.use((req, res, next) => {
   // Vendor Profile & Store Synchronizer Endpoint
   app.post('/api/vendor/save-profile', async (req, res) => {
     try {
-      const { vendorId, profileData, vendorData } = req.body || {};
+      const { vendorId, profileData, vendorData, storeData } = req.body || {};
       if (!vendorId) {
         return res.status(400).json({ success: false, error: 'Vendor ID is required' });
       }
 
+      const authHeader = req.headers.authorization || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : (String(req.query?.auth || ''));
+      const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
+
       const now = Date.now();
       const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
 
-      // 1. Sync to Firebase Realtime Database
+      // 1. Sync to Firebase Realtime Database with auth token
+      const syncErrors: string[] = [];
       try {
         if (profileData) {
-          await fetch(`${rtdbBase}/vendor_profiles/${vendorId}.json`, {
+          const pRes = await fetch(`${rtdbBase}/vendor_profiles/${vendorId}.json${authQuery}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...profileData, updatedAt: now }),
-            signal: AbortSignal.timeout(3000)
+            signal: AbortSignal.timeout(5000)
           });
+          if (!pRes.ok) {
+            syncErrors.push(`vendor_profiles: ${pRes.status} ${await pRes.text().catch(() => '')}`);
+          }
         }
         if (vendorData) {
-          await fetch(`${rtdbBase}/vendors/${vendorId}.json`, {
+          const vRes = await fetch(`${rtdbBase}/vendors/${vendorId}.json${authQuery}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...vendorData, updatedAt: now }),
-            signal: AbortSignal.timeout(3000)
+            signal: AbortSignal.timeout(5000)
           });
+          if (!vRes.ok) {
+            syncErrors.push(`vendors: ${vRes.status} ${await vRes.text().catch(() => '')}`);
+          }
         }
-      } catch (rtdbErr) {
-        console.warn('Realtime Database vendor sync notice:', rtdbErr);
+        const sPayload = storeData || profileData || vendorData;
+        if (sPayload) {
+          const sRes = await fetch(`${rtdbBase}/stores/${vendorId}.json${authQuery}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...sPayload, updatedAt: now }),
+            signal: AbortSignal.timeout(5000)
+          });
+          if (!sRes.ok) {
+            syncErrors.push(`stores: ${sRes.status} ${await sRes.text().catch(() => '')}`);
+          }
+        }
+      } catch (rtdbErr: any) {
+        console.warn('Realtime Database vendor sync notice:', rtdbErr?.message);
+        syncErrors.push(rtdbErr?.message || 'Network error');
       }
 
       // 2. Persistent disk cache for guaranteed server continuity
@@ -1123,10 +1147,44 @@ app.use((req, res, next) => {
         }, null, 2));
       } catch (_) {}
 
-      return res.json({ success: true, message: 'Vendor store and profile successfully synchronized' });
+      return res.json({ 
+        success: true, 
+        message: 'Vendor store and profile successfully synchronized',
+        syncNotice: syncErrors.length > 0 ? syncErrors.join('; ') : undefined
+      });
     } catch (err: any) {
       console.error('Vendor save-profile error:', err);
       return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Generic RTDB PATCH proxy
+  app.patch('/api/:path(*)', async (req, res) => {
+    try {
+      const cleanPath = req.params.path;
+      if (!cleanPath) return res.status(400).json({ error: 'Path is required' });
+
+      const authHeader = req.headers.authorization || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : (String(req.query?.auth || ''));
+      const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
+      const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+
+      const rRes = await fetch(`${rtdbBase}/${cleanPath}.json${authQuery}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body),
+        signal: AbortSignal.timeout(5000)
+      });
+
+      if (rRes.ok) {
+        const rJson = await rRes.json();
+        return res.json(rJson);
+      } else {
+        const errText = await rRes.text();
+        return res.status(rRes.status).send(errText);
+      }
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message || 'Internal error' });
     }
   });
 

@@ -248,17 +248,60 @@ export const VendorStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
     merged.storeId = merged.storeId || currentUid;
     merged.vendorId = merged.vendorId || currentUid;
     merged.userId = merged.userId || currentUid;
-    merged.shopName = merged.shopName || merged.storeName || prev.shopName || prev.storeName;
-    merged.storeName = merged.storeName || merged.shopName || prev.storeName || prev.shopName;
-    merged.logo = merged.logo || merged.shopLogo || merged.profileImage || prev.logo || prev.shopLogo;
-    merged.shopLogo = merged.shopLogo || merged.logo || prev.shopLogo;
-    merged.banner = merged.banner || merged.shopBanner || prev.banner || prev.shopBanner;
-    merged.shopBanner = merged.shopBanner || merged.banner || prev.shopBanner;
-    merged.contactNumber = merged.contactNumber || merged.phone || merged.mobileNumber || prev.contactNumber;
-    merged.phone = merged.phone || merged.contactNumber || prev.phone;
-    merged.whatsappNumber = merged.whatsappNumber || merged.whatsapp || prev.whatsappNumber;
-    merged.whatsapp = merged.whatsapp || merged.whatsappNumber || prev.whatsapp;
-    merged.description = merged.description !== undefined && merged.description !== '' ? merged.description : prev.description;
+
+    if (newData?.shopName) {
+      merged.shopName = newData.shopName;
+      merged.storeName = newData.shopName;
+    } else if (newData?.storeName) {
+      merged.shopName = newData.storeName;
+      merged.storeName = newData.storeName;
+    } else {
+      merged.shopName = merged.shopName || merged.storeName || prev.shopName || prev.storeName;
+      merged.storeName = merged.storeName || merged.shopName || prev.storeName || prev.shopName;
+    }
+
+    if (newData?.logo) {
+      merged.logo = newData.logo;
+      merged.shopLogo = newData.logo;
+      merged.profileImage = newData.logo;
+    } else {
+      merged.logo = merged.logo || merged.shopLogo || merged.profileImage || prev.logo || prev.shopLogo;
+      merged.shopLogo = merged.shopLogo || merged.logo || prev.shopLogo;
+    }
+
+    if (newData?.banner) {
+      merged.banner = newData.banner;
+      merged.shopBanner = newData.banner;
+    } else {
+      merged.banner = merged.banner || merged.shopBanner || prev.banner || prev.shopBanner;
+      merged.shopBanner = merged.shopBanner || merged.banner || prev.shopBanner;
+    }
+
+    if (newData?.contactNumber) {
+      merged.contactNumber = newData.contactNumber;
+      merged.phone = newData.contactNumber;
+      merged.mobileNumber = newData.contactNumber;
+    } else if (newData?.phone) {
+      merged.contactNumber = newData.phone;
+      merged.phone = newData.phone;
+      merged.mobileNumber = newData.phone;
+    } else {
+      merged.contactNumber = merged.contactNumber || merged.phone || merged.mobileNumber || prev.contactNumber;
+      merged.phone = merged.phone || merged.contactNumber || prev.phone;
+    }
+
+    if (newData?.whatsappNumber) {
+      merged.whatsappNumber = newData.whatsappNumber;
+      merged.whatsapp = newData.whatsappNumber;
+    } else if (newData?.whatsapp) {
+      merged.whatsappNumber = newData.whatsapp;
+      merged.whatsapp = newData.whatsapp;
+    } else {
+      merged.whatsappNumber = merged.whatsappNumber || merged.whatsapp || prev.whatsappNumber;
+      merged.whatsapp = merged.whatsapp || merged.whatsappNumber || prev.whatsapp;
+    }
+
+    merged.description = newData?.description !== undefined ? newData.description : (prev.description ?? '');
 
     // Harmonize Cash on Delivery (COD) aliases to be identical boolean
     if (newData?.isCodEnabled !== undefined) {
@@ -329,8 +372,9 @@ export const VendorStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return null;
       }
 
-      // Merge on top of previous state ensuring no valid fields disappear
-      const finalData = mergeVendorData(combined, latestVendorInfoRef.current);
+      // Merge: if Firebase returned actual data, treat Firebase as authoritative over stale memory/cache
+      const hasFirebaseData = Boolean(restProfile || restVendor || storeSnap);
+      const finalData = mergeVendorData(combined, hasFirebaseData ? combined : latestVendorInfoRef.current);
 
       // Ensure freeShopDomain is correctly formatted to rjworldbd.com
       if (finalData) {
