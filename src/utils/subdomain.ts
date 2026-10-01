@@ -154,10 +154,12 @@ export function getVendorSubdomain(slug: string): string {
 }
 
 /**
- * Returns the full store URL, e.g. "https://fahim-store.rjworldbd.com/"
+ * Returns the full store URL, e.g. "https://rjworldbd.com/store/fahim-store"
  */
 export function getVendorStoreUrl(slug: string): string {
-  return `https://${getVendorSubdomain(slug)}/`;
+  const cleanSlug = slugifyVendorName(slug);
+  const origin = typeof window !== 'undefined' ? window.location.origin : `https://${PRIMARY_DOMAIN}`;
+  return `${origin}/store/${cleanSlug}`;
 }
 
 export interface DomainExtractionResult {
@@ -359,26 +361,27 @@ export async function generateUniqueVendorSlug(
 }
 
 /**
- * Returns the proper URL to open a vendor's store.
- * - In production: opens `https://${freeShopDomain}/`
- * - In dev/preview environments: opens using `test_shop_domain` parameter so it resolves instantly in the current environment
+ * Returns the proper URL to open a vendor's store reliably without subdomain DNS failures.
+ * Opens `/store/${slug || vendorId}` on the active origin or primary domain.
  */
-export function getVendorOpenUrl(freeShopDomain: string, vendorId?: string): string {
-  if (!freeShopDomain && vendorId) {
-    return `/store/${vendorId}`;
-  }
-  if (!freeShopDomain) return '/';
-
-  const cleanDomain = freeShopDomain.replace('https://', '').replace('http://', '').replace(/\/$/, '');
+export function getVendorOpenUrl(freeShopDomain?: string, vendorId?: string, slug?: string): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : `https://${PRIMARY_DOMAIN}`;
   
-  // In development / preview environments (not rjworldbd.com), use query param to guarantee local preview works
-  if (typeof window !== 'undefined') {
-    const currentHost = (window.location.hostname || '').toLowerCase();
-    const isProd = currentHost === PRIMARY_DOMAIN || currentHost.endsWith(`.${PRIMARY_DOMAIN}`);
-    if (!isProd) {
-      return `${window.location.origin}/?test_shop_domain=${encodeURIComponent(cleanDomain)}`;
+  let targetSlug = slug;
+  if (!targetSlug && freeShopDomain) {
+    const clean = freeShopDomain.replace('https://', '').replace('http://', '').replace(/\/$/, '').trim();
+    if (clean.endsWith(`.${PRIMARY_DOMAIN}`)) {
+      targetSlug = clean.replace(`.${PRIMARY_DOMAIN}`, '');
+    } else if (clean.endsWith('.rjworld.com')) {
+      targetSlug = clean.replace('.rjworld.com', '');
+    } else if (!clean.includes('.')) {
+      targetSlug = clean;
     }
   }
+  targetSlug = slugifyVendorName(targetSlug || '') || vendorId || '';
 
-  return `https://${cleanDomain}/`;
+  if (targetSlug) {
+    return `${origin}/store/${targetSlug}`;
+  }
+  return `${origin}/store/${vendorId || ''}`;
 }

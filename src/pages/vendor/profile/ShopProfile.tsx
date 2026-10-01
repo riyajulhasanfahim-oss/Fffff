@@ -565,6 +565,14 @@ export default function ShopProfile() {
         vendorLocation: structuredVendorLocation,
         logo: media.logo || profile.logo || '',
         banner: media.banner || profile.banner || '',
+        isCodEnabled: vendorInfo?.isCodEnabled ?? profile.isCodEnabled ?? true,
+        codEnabled: vendorInfo?.codEnabled ?? profile.codEnabled ?? true,
+        rating: vendorInfo?.rating ?? profile.rating ?? null,
+        reviews: vendorInfo?.reviews ?? profile.reviews ?? null,
+        reviewsCount: vendorInfo?.reviewsCount ?? profile.reviewsCount ?? null,
+        totalSales: vendorInfo?.totalSales ?? profile.totalSales ?? 0,
+        totalOrders: vendorInfo?.totalOrders ?? profile.totalOrders ?? 0,
+        followersCount: vendorInfo?.followersCount ?? profile.followersCount ?? 0,
         verifiedAt: vendorInfo?.verifiedAt || profile.verifiedAt || null,
         planExpiresAt: vendorInfo?.planExpiresAt || profile.planExpiresAt || 0,
         verifiedDurationMonths: vendorInfo?.verifiedDurationMonths || profile.verifiedDurationMonths || null,
@@ -627,6 +635,14 @@ export default function ShopProfile() {
         blueBadge: vendorInfo?.blueBadge ?? false,
         isVerifiedSeller: vendorInfo?.isVerifiedSeller ?? false,
         verifiedSellerPlanActive: vendorInfo?.verifiedSellerPlanActive ?? false,
+        isCodEnabled: vendorInfo?.isCodEnabled ?? profile.isCodEnabled ?? true,
+        codEnabled: vendorInfo?.codEnabled ?? profile.codEnabled ?? true,
+        rating: vendorInfo?.rating ?? profile.rating ?? null,
+        reviews: vendorInfo?.reviews ?? profile.reviews ?? null,
+        reviewsCount: vendorInfo?.reviewsCount ?? profile.reviewsCount ?? null,
+        totalSales: vendorInfo?.totalSales ?? profile.totalSales ?? 0,
+        totalOrders: vendorInfo?.totalOrders ?? profile.totalOrders ?? 0,
+        followersCount: vendorInfo?.followersCount ?? profile.followersCount ?? 0,
         userId: user.uid,
         vendorId: user.uid,
         updatedAt: now
@@ -638,11 +654,11 @@ export default function ShopProfile() {
         storeId: user.uid
       });
 
-      // 1. Guaranteed Realtime Database write (Zero Firestore!)
+      // 1. Guaranteed Realtime Database safe write (preserving existing stats and flags)
       await Promise.all([
-        rtdbSet(`vendor_profiles/${user.uid}`, profilePayload),
-        rtdbSet(`vendors/${user.uid}`, vendorPayload),
-        rtdbSet(`stores/${user.uid}`, storePayload)
+        rtdbUpdate(`vendor_profiles/${user.uid}`, profilePayload),
+        rtdbUpdate(`vendors/${user.uid}`, vendorPayload),
+        rtdbUpdate(`stores/${user.uid}`, storePayload)
       ]);
 
       // 2. Server-Side Realtime Database & Disk Sync
