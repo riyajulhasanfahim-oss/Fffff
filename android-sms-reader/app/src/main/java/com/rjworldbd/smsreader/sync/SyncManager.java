@@ -76,11 +76,7 @@ public class SyncManager {
     public static List<String> getCandidateEndpoints(Context context) {
         List<String> list = new ArrayList<>();
         
-        // 1. Live Google Cloud Run backend for RJ World BD (Direct HTTPS)
-        list.add("https://ais-dev-6fbr6wfsfb733bpemqpi5w-645913857598.asia-southeast1.run.app/api/payment/sms-sync");
-        list.add("https://ais-pre-6fbr6wfsfb733bpemqpi5w-645913857598.asia-southeast1.run.app/api/payment/sms-sync");
-        
-        // 2. Custom production domain HTTPS endpoints
+        // 1. Production domain HTTPS endpoints for RJ World BD
         list.add("https://rjworldbd.com/api/payment/sms-sync");
         list.add("https://www.rjworldbd.com/api/payment/sms-sync");
 
