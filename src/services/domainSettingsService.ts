@@ -18,7 +18,7 @@ export interface DomainSettings {
 }
 
 // Authentic Firebase Auth domain from project configuration
-export const PROJECT_AUTH_DOMAIN = (config as any).authDomain || 'rjworldbdcom.firebaseapp.com';
+export const PROJECT_AUTH_DOMAIN = (config as any).authDomain || `${(config as any).projectId || 'gen-lang-client-0902472299'}.firebaseapp.com`;
 export const PROJECT_OAUTH_CLIENT_ID = (config as any).oAuthClientId || '';
 
 // Default production configuration for this project
@@ -313,7 +313,7 @@ export interface AuthHandlerDiagnostic {
 
 /**
  * Verifies whether https://<domain>/__/auth/handler is actually connected to Firebase Hosting
- * for the new rjworldbdcom project, or if external configuration is still pending.
+ * for the configured project, or if external configuration is still pending.
  */
 export async function checkCustomAuthDomainStatus(domain: string = 'rjworldbd.com'): Promise<AuthHandlerDiagnostic> {
   const norm = normalizeDomain(domain) || 'rjworldbd.com';
@@ -335,14 +335,14 @@ export async function checkCustomAuthDomainStatus(domain: string = 'rjworldbd.co
       isConfigured: false,
       checkedUrl: targetUrl,
       responseType: 'cors_blocked',
-      message: 'Direct probe received response. Verify Firebase Hosting custom domain setup for rjworldbdcom in Firebase Console.'
+      message: `Direct probe received response. Verify Firebase Hosting custom domain setup for ${(config as any).projectId} in Firebase Console.`
     };
   } catch (err: any) {
     return {
       isConfigured: false,
       checkedUrl: targetUrl,
       responseType: 'unreachable',
-      message: `Could not verify ${targetUrl}. Ensure rjworldbd.com is connected to Firebase Hosting in the rjworldbdcom project.`
+      message: `Could not verify ${targetUrl}. Ensure rjworldbd.com is connected to Firebase Hosting in the ${(config as any).projectId} project.`
     };
   }
 }

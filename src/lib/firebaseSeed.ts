@@ -11,7 +11,7 @@ import {
   addDoc,
   serverTimestamp
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, firebaseConfig } from './firebase';
 import { rtdbGet, rtdbSet } from './rtdb';
 
 // Initial Banners Data
@@ -493,7 +493,7 @@ export async function seedAllCollections(force: boolean = false): Promise<{ succ
         primaryDomain: 'rjworldbd.com',
         websiteUrl: 'https://rjworldbd.com',
         authorizedDomain: 'rjworldbd.com',
-        oauthRedirectUri: 'https://rjworldbdcom.firebaseapp.com/__/auth/handler',
+        oauthRedirectUri: `https://${firebaseConfig.authDomain}/__/auth/handler`,
         fallbackOauthRedirectUri: 'https://rjworldbd.com/__/auth/handler',
         status: 'Connected',
         lastChecked: new Date().toISOString(),

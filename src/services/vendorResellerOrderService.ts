@@ -691,15 +691,16 @@ export async function confirmVendorResellerOrder(
   }
 
   // 4. Stored Reseller Profit from RTDB (Source of Truth)
-  const rawProfit = 
+  const storedRawProfit = 
     order.resellerProfit ?? 
     order.priceSnapshot?.resellerProfit ?? 
     order.resellerPriceSnapshot?.resellerProfit ??
     order.priceSnapshot?.resellerProfitAmount ??
     order.resellerPriceSnapshot?.resellerProfitAmount ??
     order.lockedProfitAmount ??
+    rawProfit ??
     0;
-  let requiredResellerProfit = Math.round(parseNumericAmount(rawProfit) * 100) / 100;
+  let requiredResellerProfit = Math.round(parseNumericAmount(storedRawProfit) * 100) / 100;
   
   if (requiredResellerProfit <= 0) {
     const profitVerification = verifyAndRecalculateResellerProfit(order);

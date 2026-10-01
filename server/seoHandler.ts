@@ -39,7 +39,9 @@ interface RtdbProduct {
   updatedAt?: number;
 }
 
-const RTDB_URL = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+import config from '../firebase-applet-config.json';
+
+const RTDB_URL = (config as any).databaseURL || `https://${(config as any).projectId || 'gen-lang-client-0902472299'}-default-rtdb.firebaseio.com`;
 
 // Cache products in memory for 60 seconds to ensure high performance while staying fresh
 let cachedProducts: Record<string, RtdbProduct> | null = null;

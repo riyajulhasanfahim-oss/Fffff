@@ -1,5 +1,8 @@
 import 'dotenv/config';
 import type { Request, Response } from 'express';
+import config from '../firebase-applet-config.json';
+
+const RTDB_BASE = (config as any).databaseURL || `https://${(config as any).projectId || 'gen-lang-client-0902472299'}-default-rtdb.firebaseio.com`;
 
 // Vercel Serverless Function entry point
 export default async function handler(req: any, res: any) {
@@ -42,6 +45,27 @@ export default async function handler(req: any, res: any) {
     return res.end();
   }
 
+  // Firebase Auth Custom Domain Handler Proxy for Vercel/Serverless
+  if (pathPart.startsWith('/__/auth')) {
+    try {
+      const targetUrl = `https://${(config as any).projectId || 'gen-lang-client-0902472299'}.web.app${rawUrl}`;
+      const proxyRes = await fetch(targetUrl, {
+        method: req.method,
+        headers: {
+          'User-Agent': (req.headers && req.headers['user-agent']) || 'Mozilla/5.0',
+          'Accept': (req.headers && req.headers['accept']) || '*/*'
+        }
+      });
+      res.writeHead(proxyRes.status, {
+        'Content-Type': proxyRes.headers.get('content-type') || 'text/html; charset=utf-8'
+      });
+      const buf = await proxyRes.arrayBuffer();
+      return res.end(Buffer.from(buf));
+    } catch (_) {
+      return safeSend(502, { error: 'Auth proxy unavailable' });
+    }
+  }
+
   // Fast direct RTDB proxy for core marketplace endpoints
   if (req.method === 'GET') {
     // 1. Explicitly handle deleted_vendors so active stores are NEVER returned as deleted
@@ -53,7 +77,7 @@ export default async function handler(req: any, res: any) {
     if (lowerPath.includes('product')) {
       try {
         const cleanPath = pathPart.replace(/^\/api\//i, '').replace(/^\//, '');
-        const rtdbRes = await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/${cleanPath}.json`);
+        const rtdbRes = await fetch(`${RTDB_BASE}/${cleanPath}.json`);
         if (rtdbRes.ok) {
           const data = await rtdbRes.json();
           return safeSend(200, data || {});
@@ -68,7 +92,7 @@ export default async function handler(req: any, res: any) {
         const cleanPath = pathPart.replace(/^\/api\//i, '').replace(/^\//, '');
         // Map vendors/* to stores/* as vendor store profiles reside under stores/ in RTDB
         const rtdbPath = cleanPath.toLowerCase().startsWith('vendor') ? cleanPath.replace(/^vendors?/i, 'stores') : cleanPath;
-        const rtdbRes = await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/${rtdbPath}.json`);
+        const rtdbRes = await fetch(`${RTDB_BASE}/${rtdbPath}.json`);
         if (rtdbRes.ok) {
           const data = await rtdbRes.json();
           if (data && typeof data === 'object' && !('error' in data)) {
@@ -76,7 +100,7 @@ export default async function handler(req: any, res: any) {
           }
         }
         // Fallback to full stores.json if specific subpath wasn't found
-        const fallbackRes = await fetch('https://rjworldbdcom-default-rtdb.firebaseio.com/stores.json');
+        const fallbackRes = await fetch(`${RTDB_BASE}/stores.json`);
         if (fallbackRes.ok) {
           const fData = await fallbackRes.json();
           return safeSend(200, fData || {});

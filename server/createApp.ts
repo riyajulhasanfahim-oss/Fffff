@@ -27,23 +27,22 @@ import {
 } from './courierVerificationService';
 import { analyzeImageForProductMatch } from './visualSearchService';
 
+let appletFirebaseConfig: any = {};
+try {
+  const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(cfgPath)) {
+    appletFirebaseConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  }
+} catch {}
+
+export const CURRENT_FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || appletFirebaseConfig.projectId || 'gen-lang-client-0902472299';
+export const CURRENT_RTDB_BASE = appletFirebaseConfig.databaseURL || `https://${CURRENT_FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com`;
+export const CURRENT_AUTH_DOMAIN = appletFirebaseConfig.authDomain || `${CURRENT_FIREBASE_PROJECT_ID}.firebaseapp.com`;
+
 // Initialize Firebase Admin safely
 try {
   if (!getApps().length) {
-    let projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
-    if (!projectId) {
-      try {
-        const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
-        if (fs.existsSync(cfgPath)) {
-          const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-          projectId = cfg.projectId;
-        }
-      } catch {}
-    }
-    if (!projectId) {
-      projectId = 'rjworldbdcom';
-    }
-    initializeApp({ projectId });
+    initializeApp({ projectId: CURRENT_FIREBASE_PROJECT_ID });
   }
 } catch (adminErr) {
   console.warn('Firebase Admin SDK initialization deferred or running in client-mode:', adminErr);
@@ -228,7 +227,7 @@ app.use((req, res, next) => {
   // Helper to fetch RTDB node directly
   const fetchRtdbNode = async (node: string) => {
     try {
-      const res = await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/${node}.json`);
+      const res = await fetch(`${CURRENT_RTDB_BASE}/${node}.json`);
       if (res.ok) {
         return await res.json();
       }
@@ -359,7 +358,7 @@ app.use((req, res, next) => {
 
       // Attempt async write to RTDB
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
-      fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/products/${key}.json${authQuery}`, {
+      fetch(`${CURRENT_RTDB_BASE}/products/${key}.json${authQuery}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -387,7 +386,7 @@ app.use((req, res, next) => {
 
       // Attempt async write to RTDB
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
-      fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/products/${id}.json${authQuery}`, {
+      fetch(`${CURRENT_RTDB_BASE}/products/${id}.json${authQuery}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -413,7 +412,7 @@ app.use((req, res, next) => {
 
       // Attempt async patch to RTDB
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
-      fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/products/${id}.json${authQuery}`, {
+      fetch(`${CURRENT_RTDB_BASE}/products/${id}.json${authQuery}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -436,7 +435,7 @@ app.use((req, res, next) => {
       removeLocalProduct(id);
 
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
-      fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/products/${id}.json${authQuery}`, {
+      fetch(`${CURRENT_RTDB_BASE}/products/${id}.json${authQuery}`, {
         method: 'DELETE'
       }).catch(() => {});
 
@@ -689,7 +688,7 @@ app.use((req, res, next) => {
   // 5. Get Courier Verification Records (RTDB)
   app.get('/api/courier/verifications', async (req, res) => {
     try {
-      const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+      const rtdbBase = CURRENT_RTDB_BASE;
       const orderId = req.query.orderId as string;
 
       let fetchUrl = `${rtdbBase}/courier_verifications.json`;
@@ -727,7 +726,7 @@ app.use((req, res, next) => {
         return res.status(400).json({ success: false, error: 'orderId and action are required' });
       }
 
-      const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+      const rtdbBase = CURRENT_RTDB_BASE;
       const now = Date.now();
 
       if (action === 'approve') {
@@ -1088,7 +1087,7 @@ app.use((req, res, next) => {
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
 
       const now = Date.now();
-      const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+      const rtdbBase = CURRENT_RTDB_BASE;
 
       // 1. Sync to Firebase Realtime Database with auth token
       const syncErrors: string[] = [];
@@ -1167,7 +1166,7 @@ app.use((req, res, next) => {
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : (String(req.query?.auth || ''));
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
-      const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+      const rtdbBase = CURRENT_RTDB_BASE;
 
       const rRes = await fetch(`${rtdbBase}/${cleanPath}.json${authQuery}`, {
         method: 'PATCH',
@@ -1205,7 +1204,7 @@ app.use((req, res, next) => {
       }
 
       const now = Date.now();
-      const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+      const rtdbBase = CURRENT_RTDB_BASE;
       const vendorDataDir = path.join(process.cwd(), 'public', 'data', 'vendors');
 
       for (const id of ids) {
@@ -1248,7 +1247,7 @@ app.use((req, res, next) => {
         return res.status(400).json({ success: false, error: 'Missing orderId or vendorId' });
       }
 
-      const rtdbBase = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+      const rtdbBase = CURRENT_RTDB_BASE;
       const cleanOrderId = String(orderId).trim().replace(/^#/, '');
       const pureOrderId = (cleanOrderId.includes('_') ? cleanOrderId.split('_')[0] : cleanOrderId).trim();
 
@@ -1560,7 +1559,7 @@ app.use((req, res, next) => {
     primaryDomain: 'rjworldbd.com',
     websiteUrl: 'https://rjworldbd.com',
     authorizedDomain: 'rjworldbd.com',
-    oauthRedirectUri: 'https://rjworldbdcom.firebaseapp.com/__/auth/handler',
+    oauthRedirectUri: `https://${CURRENT_AUTH_DOMAIN}/__/auth/handler`,
     fallbackOauthRedirectUri: 'https://rjworldbd.com/__/auth/handler',
     status: 'Connected' as 'Connected' | 'Not Connected',
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
@@ -1593,7 +1592,7 @@ app.use((req, res, next) => {
         websiteUrl,
         authorizedDomain,
         oauthRedirectUri,
-        fallbackOauthRedirectUri: 'https://rjworldbdcom.firebaseapp.com/__/auth/handler',
+        fallbackOauthRedirectUri: `https://${CURRENT_AUTH_DOMAIN}/__/auth/handler`,
         status,
         lastChecked: firestoreSettings?.lastChecked || serverSideDomainConfig.lastChecked,
         hasClientSecret: Boolean(serverSideDomainConfig.googleClientSecret),
@@ -1645,7 +1644,7 @@ app.use((req, res, next) => {
       }
 
       // 4. Authentic OAuth Redirect URI calculation
-      const oauthRedirectUri = 'https://rjworldbdcom.firebaseapp.com/__/auth/handler';
+      const oauthRedirectUri = `https://${CURRENT_AUTH_DOMAIN}/__/auth/handler`;
       const fallbackOauthRedirectUri = `https://${primaryDomain}/__/auth/handler`;
 
       // 5. Store sensitive OAuth secret server-side only
@@ -1744,7 +1743,7 @@ app.use((req, res, next) => {
           isConfigured: false,
           checkedUrl: targetUrl,
           responseType: 'spa_fallback',
-          message: `External Setup Pending: https://${cleanDomain}/__/auth/handler is currently returning the website's SPA HTML instead of Firebase Auth handler. Please connect "${cleanDomain}" as a custom domain under Firebase Console > Hosting for project "rjworldbdcom".`
+          message: `External Setup Pending: https://${cleanDomain}/__/auth/handler is currently returning the website's SPA HTML instead of Firebase Auth handler. Please connect "${cleanDomain}" as a custom domain under Firebase Console > Hosting for project "${CURRENT_FIREBASE_PROJECT_ID}".`
         });
       }
     } catch (err: any) {
@@ -2462,7 +2461,7 @@ app.use((req, res, next) => {
 
       // Forward immediately to Firebase Realtime Database 'payments' node with exact existing structure
       try {
-        const rtdbUrl = `https://rjworldbdcom-default-rtdb.firebaseio.com/payments.json`;
+        const rtdbUrl = `${CURRENT_RTDB_BASE}/payments.json`;
         await fetch(rtdbUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2513,8 +2512,8 @@ app.use((req, res, next) => {
       totalSyncedCount: syncedSmsRecords.size,
       cachedTransactions: Array.from(syncedSmsRecords.keys()),
       environment: {
-        firebaseProject: 'rjworldbdcom',
-        rtdbBase: 'https://rjworldbdcom-default-rtdb.firebaseio.com/payments'
+        firebaseProject: CURRENT_FIREBASE_PROJECT_ID,
+        rtdbBase: `${CURRENT_RTDB_BASE}/payments`
       }
     });
   });
@@ -2524,7 +2523,7 @@ app.use((req, res, next) => {
     let rtdbStatus = 'healthy';
     let rtdbRecords: any = null;
     try {
-      const rtdbCheck = await fetch('https://rjworldbdcom-default-rtdb.firebaseio.com/payments.json');
+      const rtdbCheck = await fetch(`${CURRENT_RTDB_BASE}/payments.json`);
       if (rtdbCheck.ok) {
         rtdbRecords = await rtdbCheck.json();
       } else {
@@ -2536,8 +2535,8 @@ app.use((req, res, next) => {
 
     res.json({
       environment: {
-        firebaseProject: 'rjworldbdcom',
-        firebaseRtdbBase: 'https://rjworldbdcom-default-rtdb.firebaseio.com/payments',
+        firebaseProject: CURRENT_FIREBASE_PROJECT_ID,
+        firebaseRtdbBase: `${CURRENT_RTDB_BASE}/payments`,
         serverTime: new Date().toISOString()
       },
       cachedRecordsCount: syncedSmsRecords.size,
@@ -2626,7 +2625,7 @@ app.use((req, res, next) => {
       // 2. Check Firebase Realtime Database: 'payments' node (3.5-second timeout)
       if (!foundRecord) {
         try {
-          const rtdbRes = await fetch('https://rjworldbdcom-default-rtdb.firebaseio.com/payments.json', {
+          const rtdbRes = await fetch(`${CURRENT_RTDB_BASE}/payments.json`, {
             signal: AbortSignal.timeout(3500)
           });
           if (rtdbRes.ok) {
@@ -2736,7 +2735,7 @@ app.use((req, res, next) => {
 
           console.log('[VERIFY] Updating payment status');
           if (foundRecord.pushKey) {
-            await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/payments/${foundRecord.pushKey}.json`, {
+            await fetch(`${CURRENT_RTDB_BASE}/payments/${foundRecord.pushKey}.json`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               signal: AbortSignal.timeout(3000),
@@ -2861,7 +2860,7 @@ app.use((req, res, next) => {
       let targetPushKey = pushKey;
       if (!targetPushKey) {
         try {
-          const rtdbRes = await fetch('https://rjworldbdcom-default-rtdb.firebaseio.com/payments.json', {
+          const rtdbRes = await fetch(`${CURRENT_RTDB_BASE}/payments.json`, {
             signal: AbortSignal.timeout(2500)
           });
           if (rtdbRes.ok) {
@@ -2881,7 +2880,7 @@ app.use((req, res, next) => {
       }
 
       if (targetPushKey) {
-        await fetch(`https://rjworldbdcom-default-rtdb.firebaseio.com/payments/${targetPushKey}.json`, {
+        await fetch(`${CURRENT_RTDB_BASE}/payments/${targetPushKey}.json`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           signal: AbortSignal.timeout(2500),
@@ -2931,11 +2930,11 @@ app.use((req, res, next) => {
   app.get('/api/downloads/sms-reader-apk', serveApkDownload);
 
   // Firebase Auth Custom Domain Handler Proxy
-  // Transparently proxies /__/auth/* to Firebase Hosting (https://rjworldbdcom.web.app/__/auth/*)
+  // Transparently proxies /__/auth/* to Firebase Hosting (https://${CURRENT_FIREBASE_PROJECT_ID}.web.app/__/auth/*)
   // so OAuth sign-in popups and redirects reliably load the Google OAuth widget
   app.use('/__/auth', async (req, res) => {
     try {
-      const targetUrl = `https://rjworldbdcom.web.app/__/auth${req.url}`;
+      const targetUrl = `https://${CURRENT_FIREBASE_PROJECT_ID}.web.app/__/auth${req.url}`;
       const response = await fetch(targetUrl, {
         method: req.method,
         headers: {

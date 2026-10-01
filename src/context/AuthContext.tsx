@@ -6,6 +6,7 @@ import {
   FacebookAuthProvider,
   signInWithPopup,
   signInWithRedirect,
+  signInWithCredential,
   getRedirectResult,
   signOut,
   sendPasswordResetEmail,
@@ -55,6 +56,7 @@ interface AuthContextType {
   authNotice: AuthNoticeInfo | null;
   clearAuthNotice: () => void;
   signInWithGoogle: () => Promise<User | null>;
+  signInWithGoogleCredential: (idToken: string) => Promise<User | null>;
   signInWithFacebook: () => Promise<User | null>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -461,6 +463,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const signInWithGoogleCredential = async (idToken: string): Promise<User | null> => {
+    clearAuthNotice();
+    try {
+      const credential = GoogleAuthProvider.credential(idToken);
+      const result = await signInWithCredential(auth, credential);
+      if (result?.user) {
+        await handleUserAuth(result.user);
+        toast.success('Successfully logged in with Google (RJ World BD)');
+        return result.user;
+      }
+      return null;
+    } catch (error: any) {
+      handleSocialAuthError(error, 'Google');
+      throw error;
+    }
+  };
+
   const signInWithFacebook = async (): Promise<User | null> => {
     clearAuthNotice();
     const provider = new FacebookAuthProvider();
@@ -544,6 +563,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authNotice,
         clearAuthNotice,
         signInWithGoogle,
+        signInWithGoogleCredential,
         signInWithFacebook,
         logout,
         resetPassword,

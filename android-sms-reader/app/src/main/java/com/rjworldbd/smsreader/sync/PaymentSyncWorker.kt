@@ -37,7 +37,7 @@ class PaymentSyncWorker(
 
     companion object {
         private const val TAG = "PaymentSyncWorker"
-        private const val FIREBASE_RTDB_BASE = "https://rjworldbdcom-default-rtdb.firebaseio.com/payments"
+        private const val FIREBASE_RTDB_BASE = "https://gen-lang-client-0902472299-default-rtdb.firebaseio.com/payments"
         private val BACKEND_ENDPOINTS = listOf(
             "https://ais-dev-6fbr6wfsfb733bpemqpi5w-645913857598.asia-southeast1.run.app/api/payment/sms-sync",
             "https://ais-pre-6fbr6wfsfb733bpemqpi5w-645913857598.asia-southeast1.run.app/api/payment/sms-sync",
@@ -74,7 +74,7 @@ class PaymentSyncWorker(
             try {
                 // A. Try Firebase Realtime Database SDK first
                 try {
-                    val rtdbInstance = FirebaseDatabase.getInstance("https://rjworldbdcom-default-rtdb.firebaseio.com/")
+                    val rtdbInstance = FirebaseDatabase.getInstance("https://gen-lang-client-0902472299-default-rtdb.firebaseio.com/")
                     val recordMap = hashMapOf<String, Any>(
                         "transactionId" to cleanTrxId,
                         "paymentMethod" to pMethod,

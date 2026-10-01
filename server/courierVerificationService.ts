@@ -197,7 +197,9 @@ export const DEFAULT_APPROVED_COURIERS: ApprovedCourier[] = [
   }
 ];
 
-const RTDB_BASE_URL = 'https://rjworldbdcom-default-rtdb.firebaseio.com';
+import config from '../firebase-applet-config.json';
+
+const RTDB_BASE_URL = (config as any).databaseURL || `https://${(config as any).projectId || 'gen-lang-client-0902472299'}-default-rtdb.firebaseio.com`;
 
 /**
  * Fetch approved couriers (combines default with any customized couriers in RTDB)

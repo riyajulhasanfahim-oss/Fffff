@@ -1,12 +1,11 @@
 {
-  "projectId": "rjworldbdcom",
-  "appId": "1:743174693139:web:4d6da0adaa569369b57ae6",
-  "apiKey": "AIzaSyDQLuvLjcIwkOYBgN6V80gT1Lk3q-KmNoY",
-  "authDomain": "rjworldbdcom.firebaseapp.com",
-  "databaseURL": "https://rjworldbdcom-default-rtdb.firebaseio.com",
-  "storageBucket": "rjworldbdcom.firebasestorage.app",
-  "messagingSenderId": "743174693139",
-  "measurementId": "G-L1CRFLTLC1",
-  "oAuthClientId": "738381846485-gehruu3n0ccelleqbbl64s8qn6gjbmsp.apps.googleusercontent.com",
+  "projectId": "gen-lang-client-0902472299",
+  "appId": "1:1071719868207:web:00d6e9fd550205cedae3da",
+  "apiKey": "AIzaSyBRVKTyumBDPcXwbOOQ4Qg5QI62gwtSciQ",
+  "authDomain": "gen-lang-client-0902472299.firebaseapp.com",
+  "storageBucket": "gen-lang-client-0902472299.firebasestorage.app",
+  "messagingSenderId": "1071719868207",
+  "measurementId": "",
+  "oAuthClientId": "1071719868207-upc2p09s59ic23nq52fv605tktck0ff0.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

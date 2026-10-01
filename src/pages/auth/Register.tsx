@@ -5,6 +5,7 @@ import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbTransaction } from '../../lib/rtdb';
 import { useAuth } from '../../context/AuthContext';
+import { GoogleLogin } from '@react-oauth/google';
 import { Mail, Lock, User as UserIcon, Chrome, Facebook, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AuthNoticeBanner from '../../components/auth/AuthNoticeBanner';
@@ -16,7 +17,7 @@ export default function Register() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { signInWithGoogle, signInWithFacebook, refreshUserData } = useAuth();
+  const { signInWithGoogle, signInWithGoogleCredential, signInWithFacebook, refreshUserData } = useAuth();
   
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -299,22 +300,39 @@ export default function Register() {
     }
   };
 
+  const handleRegisterPostAuthRedirect = async (loggedUser: any) => {
+    const uData = await refreshUserData();
+    const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
+    const isUserAdmin = uData?.role === 'Admin' || adminEmails.includes(loggedUser.email?.toLowerCase() || '');
+    if (isUserAdmin) {
+      navigate('/admin/dashboard', { replace: true });
+    } else if (uData?.role === 'Vendor') {
+      navigate('/vendor-dashboard', { replace: true });
+    } else if (uData?.role === 'Reseller') {
+      navigate('/reseller/dashboard', { replace: true });
+    } else {
+      navigate('/', { replace: true });
+    }
+  };
+
+  const handleGoogleCredentialSuccess = async (response: any) => {
+    try {
+      if (response?.credential) {
+        const loggedUser = await signInWithGoogleCredential(response.credential);
+        if (loggedUser) {
+          await handleRegisterPostAuthRedirect(loggedUser);
+        }
+      }
+    } catch {
+      // error handled in context
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     try {
       const loggedUser = await signInWithGoogle();
       if (loggedUser) {
-        const uData = await refreshUserData();
-        const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-        const isUserAdmin = uData?.role === 'Admin' || adminEmails.includes(loggedUser.email?.toLowerCase() || '');
-        if (isUserAdmin) {
-          navigate('/admin/dashboard', { replace: true });
-        } else if (uData?.role === 'Vendor') {
-          navigate('/vendor-dashboard', { replace: true });
-        } else if (uData?.role === 'Reseller') {
-          navigate('/reseller/dashboard', { replace: true });
-        } else {
-          navigate('/', { replace: true });
-        }
+        await handleRegisterPostAuthRedirect(loggedUser);
       }
     } catch {
       // error handled in context
@@ -325,18 +343,7 @@ export default function Register() {
     try {
       const loggedUser = await signInWithFacebook();
       if (loggedUser) {
-        const uData = await refreshUserData();
-        const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-        const isUserAdmin = uData?.role === 'Admin' || adminEmails.includes(loggedUser.email?.toLowerCase() || '');
-        if (isUserAdmin) {
-          navigate('/admin/dashboard', { replace: true });
-        } else if (uData?.role === 'Vendor') {
-          navigate('/vendor-dashboard', { replace: true });
-        } else if (uData?.role === 'Reseller') {
-          navigate('/reseller/dashboard', { replace: true });
-        } else {
-          navigate('/', { replace: true });
-        }
+        await handleRegisterPostAuthRedirect(loggedUser);
       }
     } catch {
       // error handled in context
@@ -472,22 +479,26 @@ export default function Register() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            className="w-full inline-flex justify-center items-center py-2.5 sm:py-3 px-3 border border-slate-200 rounded-xl shadow-2xs bg-white text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all cursor-pointer"
-          >
-            <Chrome className="h-4 w-4 text-red-500 mr-2 shrink-0" />
-            Google
-          </button>
+        <div className="space-y-3">
+          <div className="w-full flex justify-center [&>div]:w-full [&>div>iframe]:mx-auto">
+            <GoogleLogin
+              onSuccess={handleGoogleCredentialSuccess}
+              onError={() => handleGoogleSignIn()}
+              theme="outline"
+              size="large"
+              shape="rectangular"
+              text="continue_with"
+              logo_alignment="left"
+              width="360"
+            />
+          </div>
           <button
             type="button"
             onClick={handleFacebookSignIn}
             className="w-full inline-flex justify-center items-center py-2.5 sm:py-3 px-3 border border-slate-200 rounded-xl shadow-2xs bg-white text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all cursor-pointer"
           >
             <Facebook className="h-4 w-4 text-blue-600 mr-2 shrink-0" />
-            Facebook
+            Facebook দিয়ে নিবন্ধন করুন
           </button>
         </div>
 

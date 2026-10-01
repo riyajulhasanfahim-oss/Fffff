@@ -67,7 +67,7 @@ public class SyncManager {
         return sb.toString();
     }
 
-    private static final String FIREBASE_RTDB_BASE_URL = "https://rjworldbdcom-default-rtdb.firebaseio.com/payments";
+    private static final String FIREBASE_RTDB_BASE_URL = "https://gen-lang-client-0902472299-default-rtdb.firebaseio.com/payments";
 
     /**
      * Retrieves the ordered list of sync candidate endpoints.
@@ -301,9 +301,9 @@ public class SyncManager {
                     Class<?> optionsBuilderClass = Class.forName("com.google.firebase.FirebaseOptions$Builder");
                     Object builder = optionsBuilderClass.getDeclaredConstructor().newInstance();
                     java.lang.reflect.Method setProjectId = optionsBuilderClass.getMethod("setProjectId", String.class);
-                    setProjectId.invoke(builder, "rjworldbdcom");
+                    setProjectId.invoke(builder, "gen-lang-client-0902472299");
                     java.lang.reflect.Method setDbUrl = optionsBuilderClass.getMethod("setDatabaseUrl", String.class);
-                    setDbUrl.invoke(builder, "https://rjworldbdcom-default-rtdb.firebaseio.com/");
+                    setDbUrl.invoke(builder, "https://gen-lang-client-0902472299-default-rtdb.firebaseio.com/");
                     java.lang.reflect.Method buildMethod = optionsBuilderClass.getMethod("build");
                     Object options = buildMethod.invoke(builder);
                     java.lang.reflect.Method initMethod = firebaseAppClass.getMethod("initializeApp", Context.class, Class.forName("com.google.firebase.FirebaseOptions"));
@@ -313,7 +313,7 @@ public class SyncManager {
 
             Class<?> dbClass = Class.forName("com.google.firebase.database.FirebaseDatabase");
             java.lang.reflect.Method getInstance = dbClass.getMethod("getInstance", String.class);
-            Object dbInstance = getInstance.invoke(null, "https://rjworldbdcom-default-rtdb.firebaseio.com/");
+            Object dbInstance = getInstance.invoke(null, "https://gen-lang-client-0902472299-default-rtdb.firebaseio.com/");
 
             java.lang.reflect.Method getRef = dbClass.getMethod("getReference", String.class);
             Object rootRef = getRef.invoke(dbInstance, "payments");

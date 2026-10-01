@@ -6,16 +6,27 @@ import { getDatabase } from "firebase/database";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import config from "../../firebase-applet-config.json";
 
-// Direct Firebase configuration for rjworldbdcom
+// Resolve optimal authDomain: on production domain (rjworldbd.com), use rjworldbd.com so Google Sign-In displays "to continue to rjworldbd.com"
+const resolveAuthDomain = () => {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname.toLowerCase();
+    if (host === 'rjworldbd.com' || host === 'www.rjworldbd.com') {
+      return 'rjworldbd.com';
+    }
+  }
+  return config.authDomain;
+};
+
+// Firebase configuration dynamically loaded from firebase-applet-config.json
 export const firebaseConfig = {
-  apiKey: "AIzaSyDQLuvLjcIwkOYBgN6V80gT1Lk3q-KmNoY",
-  authDomain: "rjworldbdcom.firebaseapp.com",
-  databaseURL: "https://rjworldbdcom-default-rtdb.firebaseio.com",
-  projectId: "rjworldbdcom",
-  storageBucket: "rjworldbdcom.firebasestorage.app",
-  messagingSenderId: "743174693139",
-  appId: "1:743174693139:web:4d6da0adaa569369b57ae6",
-  measurementId: "G-L1CRFLTLC1"
+  apiKey: config.apiKey,
+  authDomain: resolveAuthDomain(),
+  databaseURL: (config as any).databaseURL || `https://${config.projectId}-default-rtdb.firebaseio.com`,
+  projectId: config.projectId,
+  storageBucket: config.storageBucket,
+  messagingSenderId: config.messagingSenderId,
+  appId: config.appId,
+  measurementId: (config as any).measurementId || ""
 };
 
 console.log('[Firebase Initialized]', {

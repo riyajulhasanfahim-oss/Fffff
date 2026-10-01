@@ -9,14 +9,13 @@ importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-comp
 // For security as requested, we shouldn't put secrets, but these are public identifiers.
 
 firebase.initializeApp({
-  apiKey: "AIzaSyDQLuvLjcIwkOYBgN6V80gT1Lk3q-KmNoY",
-  authDomain: "rjworldbdcom.firebaseapp.com",
-  databaseURL: "https://rjworldbdcom-default-rtdb.firebaseio.com",
-  projectId: "rjworldbdcom",
-  storageBucket: "rjworldbdcom.firebasestorage.app",
-  messagingSenderId: "743174693139",
-  appId: "1:743174693139:web:4d6da0adaa569369b57ae6",
-  measurementId: "G-L1CRFLTLC1"
+  apiKey: "AIzaSyBRVKTyumBDPcXwbOOQ4Qg5QI62gwtSciQ",
+  authDomain: "gen-lang-client-0902472299.firebaseapp.com",
+  databaseURL: "https://gen-lang-client-0902472299-default-rtdb.firebaseio.com",
+  projectId: "gen-lang-client-0902472299",
+  storageBucket: "gen-lang-client-0902472299.firebasestorage.app",
+  messagingSenderId: "1071719868207",
+  appId: "1:1071719868207:web:00d6e9fd550205cedae3da"
 });
 
 const messaging = firebase.messaging();
