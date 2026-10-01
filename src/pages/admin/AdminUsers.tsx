@@ -1,4 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { rtdbGet, rtdbList, rtdbUpdate } from '../../lib/rtdb';
 import { Search, Filter, Shield, ShieldAlert, CheckCircle, XCircle, MoreVertical, Eye, UserX, UserCheck, BadgeCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -34,18 +36,43 @@ export default function AdminUsers() {
       setLoading(true);
       const userMap = new Map<string, any>();
 
-      // 1. Fetch from RTDB 'users'
+      // 1. Fetch from Cloud Firestore 'users' collection
+      try {
+        const firestoreSnap = await getDocs(collection(db, 'users'));
+        firestoreSnap.forEach((docSnap) => {
+          const id = docSnap.id;
+          const data = docSnap.data();
+          if (!id || !data) return;
+          userMap.set(id, {
+            id,
+            ...data,
+            name: data.name || data.displayName || data.fullName || 'Unnamed User',
+            email: data.email || '',
+            phone: data.phone || data.mobileNumber || '',
+            role: (data.role || 'customer').toLowerCase(),
+            status: data.status || 'active',
+            createdAt: data.createdAt || null
+          });
+        });
+      } catch (fsErr) {
+        console.warn('Error fetching Firestore users:', fsErr);
+      }
+
+      // 2. Fetch from RTDB 'users' and merge
       const rtdbUsers = await rtdbList<any>('users').catch(() => []);
       rtdbUsers.forEach(({ id, data }) => {
         if (!id || !data) return;
+        const existing = userMap.get(id);
         userMap.set(id, {
           id,
+          ...(existing || {}),
           ...data,
-          name: data.name || data.displayName || data.fullName || 'Unnamed User',
-          email: data.email || '',
-          phone: data.phone || data.mobileNumber || '',
-          role: (data.role || 'customer').toLowerCase(),
-          status: data.status || 'active'
+          name: data.name || data.displayName || data.fullName || existing?.name || 'Unnamed User',
+          email: data.email || existing?.email || '',
+          phone: data.phone || data.mobileNumber || existing?.phone || '',
+          role: (data.role || existing?.role || 'customer').toLowerCase(),
+          status: data.status || existing?.status || 'active',
+          createdAt: data.createdAt || existing?.createdAt || null
         });
       });
 
@@ -147,6 +174,7 @@ export default function AdminUsers() {
       };
 
       await Promise.allSettled([
+        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload),
@@ -173,6 +201,7 @@ export default function AdminUsers() {
       const payload = { status: newStatus, updatedAt: Date.now() };
 
       await Promise.allSettled([
+        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload)

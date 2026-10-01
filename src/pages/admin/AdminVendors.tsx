@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { rtdbGet, rtdbList, rtdbUpdate, rtdbRemove, rtdbSet } from '../../lib/rtdb';
-import { Search, Filter, Eye, CheckCircle, XCircle, Store, Box, DollarSign, Activity, Trash2, Ban, BadgeCheck } from 'lucide-react';
+import { Search, Filter, Eye, CheckCircle, XCircle, Store, Box, DollarSign, Activity, Trash2, Ban, BadgeCheck, PowerOff, Power } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import { isStorePlanVerified, saveStoreToCache, removeStoreFromCache, fetchOfficialStoresFromRTDB } from '../../services/storeCache';
@@ -74,29 +76,74 @@ export default function AdminVendors() {
         }
       });
 
-      // Merge both stores and vendors nodes
+      // 0. Fetch vendors from Cloud Firestore 'vendors' collection
+      try {
+        const firestoreSnap = await getDocs(collection(db, 'vendors'));
+        firestoreSnap.forEach((docSnap) => {
+          const id = docSnap.id;
+          const data = docSnap.data();
+          if (!id || !data) return;
+          const rawStatus = (data.status || 'active').toLowerCase();
+          const isDisabled = Boolean(data.isDisabled || rawStatus === 'disabled');
+          vendorMap.set(id, {
+            id,
+            ...data,
+            name: data.ownerName || data.name || data.fullName || 'Unknown Owner',
+            shopName: data.storeName || data.shopName || data.businessName || 'Unknown Shop',
+            email: data.email || '',
+            phone: data.mobileNumber || data.phone || '',
+            paymentMethod: data.paymentMethod || 'N/A',
+            transactionId: data.transactionId || 'N/A',
+            address: formatAddress(data.address),
+            district: data.district || data.vendorDistrict || '',
+            upazila: data.upazila || data.vendorUpazila || '',
+            division: data.division || data.vendorDivision || '',
+            storeSlug: data.storeSlug || '',
+            whatsappNumber: data.whatsappNumber || 'N/A',
+            facebookPage: data.facebookPage || 'N/A',
+            status: isDisabled ? 'disabled' : rawStatus,
+            isDisabled: isDisabled,
+            totalProducts: productCounts[id] ?? Number(data.totalProducts || 0),
+            totalSales: salesTotals[id] ?? Number(data.totalSales || 0),
+            totalOrders: orderCounts[id] ?? Number(data.totalOrders || 0),
+            vendorData: data
+          });
+        });
+      } catch (fsErr) {
+        console.warn('Error reading Firestore vendors:', fsErr);
+      }
+
+      // 1. Merge both RTDB stores and vendors nodes
       const allStoresAndVendors = [...rtdbStores, ...rtdbVendors];
       allStoresAndVendors.forEach(({ id, data }) => {
         if (!id || !data) return;
         const existing = vendorMap.get(id);
         const mergedData = { ...(existing?.vendorData || {}), ...data };
+        const rawStatus = (mergedData.status || data.status || existing?.status || 'pending').toLowerCase();
+        const isDisabled = Boolean(mergedData.isDisabled || data.isDisabled || existing?.isDisabled || rawStatus === 'disabled');
         vendorMap.set(id, {
           id,
+          ...(existing || {}),
           ...mergedData,
-          name: mergedData.ownerName || mergedData.name || mergedData.fullName || 'Unknown Owner',
-          shopName: data.storeName || data.shopName || data.businessName || 'Unknown Shop',
-          email: data.email || '',
-          phone: data.mobileNumber || data.phone || '',
-          paymentMethod: data.paymentMethod || 'N/A',
-          transactionId: data.transactionId || 'N/A',
-          address: formatAddress(data.address),
-          whatsappNumber: data.whatsappNumber || 'N/A',
-          facebookPage: data.facebookPage || 'N/A',
-          status: data.status || 'pending',
-          totalProducts: productCounts[id] ?? Number(data.totalProducts || 0),
-          totalSales: salesTotals[id] ?? Number(data.totalSales || 0),
-          totalOrders: orderCounts[id] ?? Number(data.totalOrders || 0),
-          vendorData: data
+          name: mergedData.ownerName || mergedData.name || mergedData.fullName || existing?.name || 'Unknown Owner',
+          shopName: data.storeName || data.shopName || data.businessName || existing?.shopName || 'Unknown Shop',
+          email: data.email || existing?.email || '',
+          phone: data.mobileNumber || data.phone || existing?.phone || '',
+          paymentMethod: data.paymentMethod || existing?.paymentMethod || 'N/A',
+          transactionId: data.transactionId || existing?.transactionId || 'N/A',
+          address: formatAddress(data.address) || existing?.address || '',
+          district: data.district || data.vendorDistrict || existing?.district || '',
+          upazila: data.upazila || data.vendorUpazila || existing?.upazila || '',
+          division: data.division || data.vendorDivision || existing?.division || '',
+          storeSlug: data.storeSlug || existing?.storeSlug || '',
+          whatsappNumber: data.whatsappNumber || existing?.whatsappNumber || 'N/A',
+          facebookPage: data.facebookPage || existing?.facebookPage || 'N/A',
+          status: isDisabled ? 'disabled' : rawStatus,
+          isDisabled: isDisabled,
+          totalProducts: productCounts[id] ?? existing?.totalProducts ?? Number(data.totalProducts || 0),
+          totalSales: salesTotals[id] ?? existing?.totalSales ?? Number(data.totalSales || 0),
+          totalOrders: orderCounts[id] ?? existing?.totalOrders ?? Number(data.totalOrders || 0),
+          vendorData: mergedData
         });
       });
 
@@ -146,19 +193,73 @@ export default function AdminVendors() {
     }
   };
 
+  const toggleDisableVendor = async (vendorId: string, currentIsDisabled: boolean) => {
+    try {
+      const willDisable = !currentIsDisabled;
+      const newStatus = willDisable ? 'disabled' : 'active';
+      const payload = {
+        status: newStatus,
+        isDisabled: willDisable,
+        hasActiveVendor: !willDisable,
+        updatedAt: Date.now(),
+        ...(willDisable ? { disabledAt: Date.now() } : { reEnabledAt: Date.now() })
+      };
+
+      await Promise.allSettled([
+        // Update in Firestore
+        setDoc(doc(db, 'vendors', vendorId), payload, { merge: true }),
+        setDoc(doc(db, 'users', vendorId), {
+          status: willDisable ? 'disabled' : 'active',
+          hasActiveVendor: !willDisable,
+          isVendor: !willDisable,
+          updatedAt: Date.now()
+        }, { merge: true }),
+        // Update in RTDB
+        rtdbUpdate(`vendors/${vendorId}`, payload),
+        rtdbUpdate(`stores/${vendorId}`, payload),
+        rtdbUpdate(`vendor_profiles/${vendorId}`, payload),
+        rtdbUpdate(`users/${vendorId}`, {
+          status: willDisable ? 'disabled' : 'active',
+          hasActiveVendor: !willDisable,
+          isVendor: !willDisable,
+          updatedAt: Date.now()
+        })
+      ]);
+
+      if (willDisable) {
+        removeStoreFromCache(vendorId);
+      }
+      await fetchOfficialStoresFromRTDB(true);
+
+      setVendors(prev => prev.map(v => v.id === vendorId ? { ...v, ...payload } : v));
+      if (selectedVendor && selectedVendor.id === vendorId) {
+        setSelectedVendor({ ...selectedVendor, ...payload });
+      }
+
+      toast.success(willDisable ? 'ভেন্ডর অ্যাকাউন্ট সম্পূর্ণভাবে ডিজেবল করা হয়েছে' : 'ভেন্ডর অ্যাকাউন্ট সক্রিয় করা হয়েছে');
+    } catch (err) {
+      console.error('Error toggling disable vendor:', err);
+      toast.error('ভেন্ডর স্ট্যাটাস পরিবর্তন করতে সমস্যা হয়েছে');
+    }
+  };
+
   const toggleVendorStatus = async (vendorId: string, currentStatus: string) => {
     try {
       if (currentStatus === 'pending') {
         // Approve vendor
         await Promise.allSettled([
-          rtdbUpdate(`vendors/${vendorId}`, { status: 'active', updatedAt: Date.now() }),
-          rtdbUpdate(`vendor_profiles/${vendorId}`, { status: 'active', updatedAt: Date.now() }),
-          rtdbUpdate(`users/${vendorId}`, { role: 'Vendor', status: 'active', updatedAt: Date.now() })
+          setDoc(doc(db, 'vendors', vendorId), { status: 'active', isDisabled: false, updatedAt: Date.now() }, { merge: true }),
+          setDoc(doc(db, 'users', vendorId), { role: 'Vendor', hasActiveVendor: true, status: 'active', updatedAt: Date.now() }, { merge: true }),
+          rtdbUpdate(`vendors/${vendorId}`, { status: 'active', isDisabled: false, updatedAt: Date.now() }),
+          rtdbUpdate(`vendor_profiles/${vendorId}`, { status: 'active', isDisabled: false, updatedAt: Date.now() }),
+          rtdbUpdate(`users/${vendorId}`, { role: 'Vendor', hasActiveVendor: true, status: 'active', updatedAt: Date.now() })
         ]);
         toast.success('Vendor approved successfully');
       } else {
         const newStatus = currentStatus === 'active' ? 'suspended' : 'active';
         await Promise.allSettled([
+          setDoc(doc(db, 'vendors', vendorId), { status: newStatus, updatedAt: Date.now() }, { merge: true }),
+          setDoc(doc(db, 'users', vendorId), { status: newStatus, updatedAt: Date.now() }, { merge: true }),
           rtdbUpdate(`users/${vendorId}`, { status: newStatus, updatedAt: Date.now() }),
           rtdbUpdate(`vendors/${vendorId}`, { status: newStatus, updatedAt: Date.now() }),
           rtdbUpdate(`vendor_profiles/${vendorId}`, { status: newStatus, updatedAt: Date.now() })
@@ -176,8 +277,10 @@ export default function AdminVendors() {
   const rejectVendor = async (vendorId: string) => {
     try {
       await Promise.allSettled([
+        setDoc(doc(db, 'vendors', vendorId), { status: 'rejected', updatedAt: Date.now() }, { merge: true }),
+        setDoc(doc(db, 'users', vendorId), { role: 'Customer', hasActiveVendor: false, status: 'active', updatedAt: Date.now() }, { merge: true }),
         rtdbUpdate(`vendors/${vendorId}`, { status: 'rejected', updatedAt: Date.now() }),
-        rtdbUpdate(`users/${vendorId}`, { role: 'Customer', status: 'active', updatedAt: Date.now() })
+        rtdbUpdate(`users/${vendorId}`, { role: 'Customer', hasActiveVendor: false, status: 'active', updatedAt: Date.now() })
       ]);
       toast.success('Vendor rejected successfully');
       fetchVendors();
@@ -344,12 +447,15 @@ export default function AdminVendors() {
           v.id?.toLowerCase().includes(searchTerm.toLowerCase());
 
         const isVerified = isStorePlanVerified(v);
+        const isVendorDisabled = Boolean(v.isDisabled || v.status === 'disabled');
+
         const filterMatch = 
-          statusFilter === 'All' ? true :
-          statusFilter === 'Verified' ? isVerified :
-          statusFilter === 'Active' ? v.status === 'active' :
-          statusFilter === 'Pending' ? v.status === 'pending' :
-          statusFilter === 'Suspended' ? v.status === 'suspended' || v.status === 'inactive' :
+          statusFilter === 'All' ? !isVendorDisabled :
+          statusFilter === 'Verified' ? isVerified && !isVendorDisabled :
+          statusFilter === 'Active' ? v.status === 'active' && !isVendorDisabled :
+          statusFilter === 'Pending' ? v.status === 'pending' && !isVendorDisabled :
+          statusFilter === 'Suspended' ? (v.status === 'suspended' || v.status === 'inactive') && !isVendorDisabled :
+          statusFilter === 'Disabled' ? isVendorDisabled :
           true;
 
         return searchMatch && filterMatch;
@@ -367,16 +473,20 @@ export default function AdminVendors() {
     return vendors.filter(v => isStorePlanVerified(v)).length;
   }, [vendors]);
 
+  const disabledVendorsCount = useMemo(() => {
+    return vendors.filter(v => v.isDisabled || v.status === 'disabled').length;
+  }, [vendors]);
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Vendors Management</h1>
-          <p className="text-sm text-slate-500 mt-1">Manage all registered vendors and their stores (100% RTDB Realtime Database).</p>
+          <p className="text-sm text-slate-500 mt-1">Manage all registered vendors and their stores (100% Realtime & Firestore sync).</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
           <p className="text-xs text-slate-500 font-medium mb-1">Total Vendors</p>
           <p className="text-xl font-bold text-slate-900">{vendors.length}</p>
@@ -390,20 +500,26 @@ export default function AdminVendors() {
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
           <p className="text-xs text-slate-500 font-medium mb-1">Active Stores</p>
           <p className="text-xl font-bold text-emerald-600">
-            {vendors.filter(v => v.status === 'active').length}
+            {vendors.filter(v => v.status === 'active' && !v.isDisabled).length}
           </p>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
           <p className="text-xs text-slate-500 font-medium mb-1">Pending Approval</p>
           <p className="text-xl font-bold text-amber-600">
-            {vendors.filter(v => v.status === 'pending').length}
+            {vendors.filter(v => v.status === 'pending' && !v.isDisabled).length}
           </p>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
           <p className="text-xs text-slate-500 font-medium mb-1">Suspended</p>
-          <p className="text-xl font-bold text-rose-600">
-            {vendors.filter(v => v.status === 'suspended' || v.status === 'inactive').length}
+          <p className="text-xl font-bold text-slate-600">
+            {vendors.filter(v => (v.status === 'suspended' || v.status === 'inactive') && !v.isDisabled).length}
           </p>
+        </div>
+        <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm text-center bg-red-50/20">
+          <p className="text-xs text-red-600 font-medium mb-1 flex items-center justify-center gap-1">
+            <PowerOff className="w-3.5 h-3.5 text-red-600" /> Disabled
+          </p>
+          <p className="text-xl font-bold text-red-700">{disabledVendorsCount}</p>
         </div>
       </div>
 
@@ -422,17 +538,22 @@ export default function AdminVendors() {
           
           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
             <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 w-full sm:w-auto overflow-x-auto">
-              {['All', 'Verified', 'Active', 'Pending', 'Suspended'].map(tab => (
+              {['All', 'Verified', 'Active', 'Pending', 'Suspended', 'Disabled'].map(tab => (
                 <button 
                   key={tab}
                   onClick={() => setStatusFilter(tab)}
                   className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors flex items-center gap-1.5 ${
                     statusFilter === tab 
-                      ? tab === 'Verified' ? 'bg-blue-600 text-white' : 'bg-slate-900 text-white' 
+                      ? tab === 'Verified' 
+                        ? 'bg-blue-600 text-white' 
+                        : tab === 'Disabled'
+                          ? 'bg-red-600 text-white'
+                          : 'bg-slate-900 text-white' 
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                   }`}
                 >
                   {tab === 'Verified' && <BadgeCheck className="w-3.5 h-3.5 text-blue-300" />}
+                  {tab === 'Disabled' && <PowerOff className="w-3.5 h-3.5 text-red-300" />}
                   {tab}
                 </button>
               ))}
@@ -502,13 +623,55 @@ export default function AdminVendors() {
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${vendor.status === 'active' ? 'bg-emerald-100 text-emerald-700' : vendor.status === 'pending' ? 'bg-amber-100 text-amber-700' : vendor.status === 'rejected' ? 'bg-rose-100 text-rose-700' : 'bg-red-100 text-red-700'}`}>
-                          {vendor.status === 'active' ? <CheckCircle className="w-3.5 h-3.5" /> : vendor.status === 'pending' ? <Activity className="w-3.5 h-3.5" /> : vendor.status === 'rejected' ? <Ban className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                          {vendor.status === 'active' ? 'Active' : vendor.status === 'pending' ? 'Pending' : vendor.status === 'rejected' ? 'Rejected' : 'Suspended'}
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
+                          (vendor.isDisabled || vendor.status === 'disabled')
+                            ? 'bg-red-100 text-red-700 border border-red-200'
+                            : vendor.status === 'active' 
+                              ? 'bg-emerald-100 text-emerald-700' 
+                              : vendor.status === 'pending' 
+                                ? 'bg-amber-100 text-amber-700' 
+                                : vendor.status === 'rejected' 
+                                  ? 'bg-rose-100 text-rose-700' 
+                                  : 'bg-slate-100 text-slate-700'
+                        }`}>
+                          {(vendor.isDisabled || vendor.status === 'disabled') ? (
+                            <>
+                              <PowerOff className="w-3.5 h-3.5 text-red-600" /> Disabled
+                            </>
+                          ) : vendor.status === 'active' ? (
+                            <>
+                              <CheckCircle className="w-3.5 h-3.5" /> Active
+                            </>
+                          ) : vendor.status === 'pending' ? (
+                            <>
+                              <Activity className="w-3.5 h-3.5" /> Pending
+                            </>
+                          ) : vendor.status === 'rejected' ? (
+                            <>
+                              <Ban className="w-3.5 h-3.5" /> Rejected
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="w-3.5 h-3.5" /> Suspended
+                            </>
+                          )}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {/* Toggle Disable / Enable Vendor */}
+                          <button
+                            onClick={() => toggleDisableVendor(vendor.id, Boolean(vendor.isDisabled || vendor.status === 'disabled'))}
+                            className={`p-2 rounded-lg transition-colors border ${
+                              (vendor.isDisabled || vendor.status === 'disabled')
+                                ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
+                                : 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
+                            }`}
+                            title={(vendor.isDisabled || vendor.status === 'disabled') ? "Enable Vendor Account" : "Disable Vendor Account"}
+                          >
+                            {(vendor.isDisabled || vendor.status === 'disabled') ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
+                          </button>
+
                           {/* Toggle Verified Badge */}
                           <button 
                             onClick={() => toggleVerifiedBadge(vendor)}

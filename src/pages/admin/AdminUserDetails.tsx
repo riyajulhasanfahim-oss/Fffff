@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { rtdbGet, rtdbUpdate, rtdbList } from '../../lib/rtdb';
 import { ArrowLeft, User, Mail, Phone, MapPin, Calendar, Shield, CreditCard, Activity, Briefcase, Network, ShoppingBag, CheckCircle, XCircle, BadgeCheck } from 'lucide-react';
 import { format } from 'date-fns';
@@ -36,11 +38,23 @@ export default function AdminUserDetails() {
       setLoading(true);
       let foundUser: any = null;
 
-      // 1. Fetch from RTDB users
+      // 0. Fetch from Cloud Firestore 'users' collection
+      try {
+        if (id) {
+          const fsDoc = await getDoc(doc(db, 'users', id));
+          if (fsDoc.exists()) {
+            foundUser = { id, ...fsDoc.data() };
+          }
+        }
+      } catch (fsErr) {
+        console.warn('Firestore user fetch notice:', fsErr);
+      }
+
+      // 1. Fetch from RTDB users and merge
       try {
         const rtdbUser = await rtdbGet<any>(`users/${id}`);
         if (rtdbUser) {
-          foundUser = { id, ...rtdbUser };
+          foundUser = { ...(foundUser || {}), id, ...rtdbUser };
         }
       } catch (e) {
         console.warn('RTDB user fetch notice:', e);
@@ -137,6 +151,7 @@ export default function AdminUserDetails() {
       };
 
       await Promise.allSettled([
+        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload),
@@ -164,6 +179,7 @@ export default function AdminUserDetails() {
       const payload = { status: newStatus, updatedAt: Date.now() };
 
       await Promise.allSettled([
+        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload)
@@ -185,6 +201,7 @@ export default function AdminUserDetails() {
       const payload = { role: newRole, updatedAt: Date.now() };
 
       await Promise.allSettled([
+        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload)

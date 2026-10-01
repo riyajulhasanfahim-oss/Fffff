@@ -1109,8 +1109,17 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
         }
 
         const status = String(vendorData.status || storeData.status || profileData.status || '').toLowerCase();
-        // If marked deleted, inactive, or rejected, purge from cache and skip
-        if (status === 'deleted' || status === 'rejected' || status === 'inactive') {
+        // If marked deleted, inactive, disabled, suspended, or rejected, purge from cache and skip
+        if (
+          status === 'deleted' ||
+          status === 'rejected' ||
+          status === 'inactive' ||
+          status === 'disabled' ||
+          status === 'suspended' ||
+          vendorData.isDisabled ||
+          storeData.isDisabled ||
+          profileData.isDisabled
+        ) {
           removeStoreFromCache(id);
           continue;
         }
@@ -1118,7 +1127,7 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
         const isActive = !status || status === 'active' || status === 'approved';
         const hasName = vendorData.shopName || vendorData.storeName || storeData.shopName || storeData.storeName || profileData.shopName || profileData.storeName;
 
-        if (isActive && hasName) {
+        if (isActive && hasName && !vendorData.isDisabled && !storeData.isDisabled && !profileData.isDisabled) {
           const existing = storeMap.get(id);
           const combined = mergeStoreObjects(existing, {
             id,
@@ -1138,7 +1147,11 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
           !deletedIds.has(s.vendorId || '') &&
           !deletedIds.has(s.storeId || '') &&
           s.status !== 'deleted' && 
-          s.status !== 'rejected'
+          s.status !== 'rejected' &&
+          s.status !== 'disabled' &&
+          s.status !== 'inactive' &&
+          s.status !== 'suspended' &&
+          !s.isDisabled
         )
       );
       saveOfficialStoresToCache(finalList);

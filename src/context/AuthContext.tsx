@@ -15,7 +15,8 @@ import {
   signInWithEmailAndPassword,
   updateProfile
 } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 import { rtdbGet, rtdbUpdate, rtdbSubscribe } from '../lib/rtdb';
 import { requestAndSaveFCMToken, removeFCMToken, onMessageListener } from '../lib/fcm';
 import toast from 'react-hot-toast';
@@ -226,6 +227,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           hasActiveReseller: false,
         };
         setUserData(initialUserData);
+
+        // Save/Sync to Firestore 'users' collection
+        try {
+          await setDoc(doc(db, 'users', authUser.uid), {
+            uid: authUser.uid,
+            id: authUser.uid,
+            name: fallbackName,
+            displayName: fallbackName,
+            email: authUser.email || '',
+            phone: authUser.phoneNumber || null,
+            role: determinedRole,
+            accountType: "general",
+            status: "active",
+            balance: 0,
+            wallet: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }, { merge: true });
+        } catch (fsErr) {
+          console.warn("Firestore user profile creation sync notice:", fsErr);
+        }
 
         // Attempt background persistence to Firebase Realtime Database
         try {

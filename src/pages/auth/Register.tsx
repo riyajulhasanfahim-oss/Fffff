@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { auth } from '../../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbTransaction } from '../../lib/rtdb';
 import { useAuth } from '../../context/AuthContext';
 import { GoogleLogin } from '@react-oauth/google';
@@ -89,7 +90,14 @@ export default function Register() {
       updatedAt: now,
     };
     
-    // Save to Firebase Realtime Database: users/{uid}
+    // 1. Save to Cloud Firestore: collection 'users', document id = user.uid
+    try {
+      await setDoc(doc(db, 'users', user.uid), newUserData, { merge: true });
+    } catch (fsErr) {
+      console.error('Firestore user save error:', fsErr);
+    }
+
+    // 2. Save to Firebase Realtime Database: users/{uid}
     await rtdbSet(`users/${user.uid}`, newUserData);
     
     // Save referral code in Realtime Database

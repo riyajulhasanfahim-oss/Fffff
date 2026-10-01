@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
-import { auth } from '../../../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../../../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbUpdate } from '../../../lib/rtdb';
 import { 
   Store, ChevronRight, CheckCircle, ArrowLeft, Eye, EyeOff, Copy, Check, 
@@ -451,6 +452,41 @@ export default function VendorRegistration() {
           localStorage.setItem('rj_vendor_profile_' + currentUserId, JSON.stringify(initialProfilePayload));
         } catch (_) {}
 
+        // 1. Save to Cloud Firestore: collection 'vendors', document id = currentUserId
+        try {
+          await setDoc(doc(db, 'vendors', currentUserId), {
+            id: currentUserId,
+            ...activeVendorPayload,
+            totalSales: 0,
+            totalOrders: 0,
+            totalProducts: 0
+          }, { merge: true });
+        } catch (fsErr) {
+          console.warn('Firestore vendor registration save error:', fsErr);
+        }
+
+        // 2. Also ensure user document in Firestore has Vendor role and store name
+        try {
+          await setDoc(doc(db, 'users', currentUserId), {
+            uid: currentUserId,
+            id: currentUserId,
+            name: formData.ownerName.trim(),
+            displayName: formData.ownerName.trim(),
+            email: formData.email.trim() || user?.email || '',
+            phone: formData.mobileNumber.trim(),
+            role: 'Vendor',
+            hasActiveVendor: true,
+            storeName: formData.storeName.trim(),
+            shopName: formData.storeName.trim(),
+            vendorId: currentUserId,
+            status: 'active',
+            updatedAt: Date.now()
+          }, { merge: true });
+        } catch (fsUserErr) {
+          console.warn('Firestore user vendor update error:', fsUserErr);
+        }
+
+        // 3. Save to Firebase Realtime Database
         await Promise.allSettled([
           rtdbUpdate(`vendors/${currentUserId}`, activeVendorPayload),
           rtdbUpdate(`stores/${currentUserId}`, storePayload),

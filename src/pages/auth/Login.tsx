@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../../lib/firebase';
 import { rtdbGet, rtdbSet } from '../../lib/rtdb';
 import { useAuth } from '../../context/AuthContext';
 import { GoogleLogin } from '@react-oauth/google';
@@ -54,7 +55,7 @@ export default function Login() {
       if (!existing) {
         const fallbackName = user.displayName || user.email?.split('@')[0] || 'RJ WORLD BD User';
         const now = Date.now();
-        await rtdbSet(`users/${user.uid}`, {
+        const newProfile = {
           uid: user.uid,
           id: user.uid,
           name: fallbackName,
@@ -68,7 +69,13 @@ export default function Login() {
           wallet: 0,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        try {
+          await setDoc(doc(db, 'users', user.uid), newProfile, { merge: true });
+        } catch (fsErr) {
+          console.warn('Firestore user profile sync on login notice:', fsErr);
+        }
+        await rtdbSet(`users/${user.uid}`, newProfile);
       }
     } catch (rtdbErr: any) {
       console.warn('RTDB user profile sync error on login:', rtdbErr);

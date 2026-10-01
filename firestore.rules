@@ -34,7 +34,7 @@ service cloud.firestore {
     // User profiles
     match /users/{userId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
       allow update: if isUserAdmin() || (isSignedIn() && request.auth.uid == userId);
       allow delete: if isUserAdmin();
     }

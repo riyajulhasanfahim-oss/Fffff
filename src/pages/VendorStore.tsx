@@ -255,7 +255,15 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
         // 1. Fetch Vendor & Store Data strictly from RTDB via storeCache service
         const freshStore = await fetchStoreDetailFromRTDB(vendorId);
 
-        if (freshStore?.isDeleted || freshStore?.status === 'deleted') {
+        const isStoreUnavailable = 
+          freshStore?.isDeleted || 
+          freshStore?.status === 'deleted' ||
+          freshStore?.status === 'disabled' ||
+          freshStore?.status === 'suspended' ||
+          freshStore?.status === 'inactive' ||
+          freshStore?.isDisabled;
+
+        if (isStoreUnavailable) {
           if (isMounted) {
             setIsDeletedStore(true);
             setLoading(false);
