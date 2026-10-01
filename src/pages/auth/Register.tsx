@@ -369,67 +369,67 @@ export default function Register() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/20 to-slate-100 p-4 sm:p-6 md:p-8 font-sans py-8 sm:py-12 md:py-16">
-      <div className="w-full max-w-md sm:max-w-lg bg-white rounded-2xl sm:rounded-3xl shadow-xl shadow-slate-200/60 p-5 sm:p-8 md:p-10 space-y-5 border border-slate-100">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/20 to-slate-100 p-3 sm:p-6 md:p-8 font-sans py-4 sm:py-8 md:py-12">
+      <div className="w-full max-w-md bg-white rounded-2xl sm:rounded-3xl shadow-lg sm:shadow-xl shadow-slate-200/60 p-4 sm:p-6 md:p-8 space-y-3 sm:space-y-4 border border-slate-100">
         <div className="text-center">
-          <Link to="/" className="inline-block mb-2 group">
-            <span className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 group-hover:opacity-90 transition-opacity">
+          <Link to="/" className="inline-block mb-1 group">
+            <span className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 group-hover:opacity-90 transition-opacity">
               RJ <span className="text-primary-main">WORLD BD</span>
             </span>
           </Link>
-          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 leading-tight">Create Account</h2>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">Join RJ WORLD BD & enjoy shopping</p>
+          <h2 className="text-lg sm:text-xl font-bold text-slate-900 leading-tight">Create Account</h2>
+          <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">Join RJ WORLD BD & enjoy shopping</p>
         </div>
 
         <AuthNoticeBanner />
 
-        <form onSubmit={handleRegister} className="space-y-4 pt-1">
+        <form onSubmit={handleRegister} className="space-y-2.5 sm:space-y-3 pt-0.5">
           <div>
-            <label className="block text-xs sm:text-sm font-semibold text-slate-700 mb-1.5">
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
               Full Name *
             </label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                <UserIcon className="h-4 w-4 sm:h-5 sm:w-5 text-slate-400" />
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <UserIcon className="h-4 w-4 text-slate-400" />
               </div>
               <input
                 type="text"
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="block w-full pl-10 sm:pl-11 pr-4 py-2.5 sm:py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm sm:text-base text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
+                className="block w-full pl-9 sm:pl-10 pr-3 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-lg sm:rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
                 placeholder="Your name"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs sm:text-sm font-semibold text-slate-700 mb-1.5">
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
               Email Address *
             </label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                <Mail className="h-4 w-4 sm:h-5 sm:w-5 text-slate-400" />
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Mail className="h-4 w-4 text-slate-400" />
               </div>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="block w-full pl-10 sm:pl-11 pr-4 py-2.5 sm:py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm sm:text-base text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
+                className="block w-full pl-9 sm:pl-10 pr-3 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-lg sm:rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
                 placeholder="you@example.com"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
             <div>
-              <label className="block text-xs sm:text-sm font-semibold text-slate-700 mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
                 Password *
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Lock className="h-4 w-4 sm:h-5 sm:w-5 text-slate-400" />
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Lock className="h-4 w-4 text-slate-400" />
                 </div>
                 <input
                   type={showPassword ? 'text' : 'password'}
@@ -437,26 +437,26 @@ export default function Register() {
                   minLength={6}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full pl-10 sm:pl-11 pr-10 py-2.5 sm:py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm sm:text-base text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
+                  className="block w-full pl-9 sm:pl-10 pr-9 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-lg sm:rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
                   placeholder="Min 6 chars"
                 />
                 <button 
                   type="button" 
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center cursor-pointer text-slate-400 hover:text-slate-600"
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-slate-400 hover:text-slate-600"
                 >
-                  {showPassword ? <EyeOff className="h-4 w-4 sm:h-5 sm:w-5" /> : <Eye className="h-4 w-4 sm:h-5 sm:w-5" />}
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </div>
 
             <div>
-              <label className="block text-xs sm:text-sm font-semibold text-slate-700 mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
                 Confirm Password *
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Lock className="h-4 w-4 sm:h-5 sm:w-5 text-slate-400" />
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Lock className="h-4 w-4 text-slate-400" />
                 </div>
                 <input
                   type={showConfirmPassword ? 'text' : 'password'}
@@ -464,15 +464,15 @@ export default function Register() {
                   minLength={6}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="block w-full pl-10 sm:pl-11 pr-10 py-2.5 sm:py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm sm:text-base text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
+                  className="block w-full pl-9 sm:pl-10 pr-9 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-lg sm:rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-main focus:ring-2 focus:ring-primary-main/20 outline-none transition-all"
                   placeholder="Repeat pass"
                 />
                 <button 
                   type="button" 
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center cursor-pointer text-slate-400 hover:text-slate-600"
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-slate-400 hover:text-slate-600"
                 >
-                  {showConfirmPassword ? <EyeOff className="h-4 w-4 sm:h-5 sm:w-5" /> : <Eye className="h-4 w-4 sm:h-5 sm:w-5" />}
+                  {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </div>
@@ -481,18 +481,18 @@ export default function Register() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex justify-center items-center py-3 sm:py-3.5 px-4 rounded-xl shadow-md text-sm sm:text-base font-bold text-white bg-primary-main hover:bg-sky-600 active:scale-[0.99] disabled:opacity-50 transition-all cursor-pointer mt-2"
+            className="w-full flex justify-center items-center py-2.5 sm:py-3 px-4 rounded-lg sm:rounded-xl shadow-md text-xs sm:text-sm font-bold text-white bg-primary-main hover:bg-sky-600 active:scale-[0.99] disabled:opacity-50 transition-all cursor-pointer mt-1"
           >
             {loading ? 'Processing...' : 'Create Account'}
-            {!loading && <ArrowRight className="ml-2 h-4 w-4 sm:h-5 sm:w-5" />}
+            {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
           </button>
         </form>
 
-        <div className="relative my-4">
+        <div className="relative my-2.5 sm:my-3.5">
           <div className="absolute inset-0 flex items-center">
             <div className="w-full border-t border-slate-200" />
           </div>
-          <div className="relative flex justify-center text-xs">
+          <div className="relative flex justify-center text-[11px] sm:text-xs">
             <span className="px-3 bg-white text-slate-400 font-medium">Or continue with</span>
           </div>
         </div>
@@ -516,7 +516,7 @@ export default function Register() {
           </div>
         </div>
 
-        <p className="text-center text-xs sm:text-sm text-slate-600 pt-3 border-t border-slate-100">
+        <p className="text-center text-xs text-slate-600 pt-2 sm:pt-2.5 border-t border-slate-100">
           Already have an account?{' '}
           <Link to="/login" className="font-bold text-primary-main hover:underline">
             Sign in
