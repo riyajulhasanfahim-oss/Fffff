@@ -11,7 +11,106 @@ import {
   orderByChild,
   equalTo
 } from 'firebase/database';
-import { rtdb, RTDB_BASE_URL, auth } from './firebase';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+  query as fsQuery,
+  where as fsWhere
+} from 'firebase/firestore';
+import { rtdb, RTDB_BASE_URL, auth, db } from './firebase';
+
+/**
+ * Helper to read a 1-segment collection or 2-segment document path from Cloud Firestore
+ */
+async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000): Promise<FetchResult<T>> {
+  try {
+    const parts = cleanPath.split('/').filter(Boolean);
+    const timeoutPromise = new Promise<FetchResult<T>>((resolve) =>
+      setTimeout(() => resolve({ ok: false, data: null }), timeoutMs)
+    );
+
+    const fsPromise = (async (): Promise<FetchResult<T>> => {
+      if (parts.length === 1) {
+        const colName = parts[0];
+        const snap = await getDocs(collection(db, colName));
+        if (!snap.empty) {
+          const mapObj: Record<string, any> = {};
+          snap.forEach((docSnap) => {
+            mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
+          });
+          return { ok: true, data: mapObj as unknown as T };
+        }
+        if (colName === 'vendors') {
+          const storeSnap = await getDocs(collection(db, 'stores'));
+          if (!storeSnap.empty) {
+            const mapObj: Record<string, any> = {};
+            storeSnap.forEach((docSnap) => {
+              mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
+            });
+            return { ok: true, data: mapObj as unknown as T };
+          }
+        }
+        return { ok: true, data: null };
+      } else if (parts.length === 2) {
+        const [colName, docId] = parts;
+        const snap = await getDoc(doc(db, colName, docId));
+        if (snap.exists()) {
+          return { ok: true, data: ({ id: snap.id, ...snap.data() } as unknown) as T };
+        }
+        if (colName === 'vendors') {
+          const sSnap = await getDoc(doc(db, 'stores', docId));
+          if (sSnap.exists()) {
+            return { ok: true, data: ({ id: sSnap.id, ...sSnap.data() } as unknown) as T };
+          }
+        }
+        return { ok: true, data: null };
+      } else if (parts.length === 4 && parts[0] === 'vendors' && parts[2] === 'products') {
+        const snap = await getDoc(doc(db, 'products', parts[3]));
+        if (snap.exists()) {
+          return { ok: true, data: ({ id: snap.id, ...snap.data() } as unknown) as T };
+        }
+      }
+      return { ok: false, data: null };
+    })().catch(() => ({ ok: false, data: null }));
+
+    return await Promise.race([fsPromise, timeoutPromise]);
+  } catch (_) {
+    return { ok: false, data: null };
+  }
+}
+
+/**
+ * Helper to write/merge a path into Cloud Firestore
+ */
+async function writeFirestoreNode(cleanPath: string, cleanData: any, merge: boolean = true): Promise<boolean> {
+  try {
+    const parts = cleanPath.split('/').filter(Boolean);
+    if (parts.length === 2) {
+      const [colName, docId] = parts;
+      await setDoc(doc(db, colName, docId), { id: docId, ...cleanData }, { merge });
+      return true;
+    } else if (parts.length === 1 && cleanData && typeof cleanData === 'object' && !Array.isArray(cleanData)) {
+      const colName = parts[0];
+      const entries = Object.entries(cleanData);
+      for (const [docId, val] of entries) {
+        if (val && typeof val === 'object') {
+          await setDoc(doc(db, colName, docId), { id: docId, ...(val as any) }, { merge });
+        }
+      }
+      return true;
+    } else if (parts.length === 4 && parts[0] === 'vendors' && parts[2] === 'products') {
+      const prodId = parts[3];
+      await setDoc(doc(db, 'products', prodId), { id: prodId, vendorId: parts[1], ...cleanData }, { merge });
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
 
 /**
  * Safely strips undefined values so Firebase Web SDK will never throw
@@ -210,14 +309,15 @@ export async function rtdbGet<T = any>(path: string, timeoutMs: number = 5000): 
     return (await inflight) as T | null;
   }
 
-  // 3. Create execution promise racing fast REST and SDK
+  // 3. Create execution promise racing fast REST, SDK, and Cloud Firestore
   const execPromise = (async (): Promise<T | null> => {
     try {
+      const fsCall = fetchFirestoreNode<T>(cleanPath, timeoutMs);
       const restCall = fetchRtdbRest<T>(cleanPath, timeoutMs);
       const sdkCall = fetchRtdbSdk<T>(cleanPath, timeoutMs);
 
-      // Prioritize non-null authoritative data: if either source returns actual data, resolve immediately.
-      // If a source returns null, wait for the other source before concluding the node is null.
+      // Prioritize non-null authoritative data: if any source returns actual data, resolve immediately.
+      // If a source returns null, wait for the other sources before concluding the node is null.
       const result = await new Promise<T | null>((resolve) => {
         let settled = 0;
         let hasResolved = false;
@@ -229,13 +329,14 @@ export async function rtdbGet<T = any>(path: string, timeoutMs: number = 5000): 
             resolve(res.data);
           } else {
             settled++;
-            if (settled >= 2) {
+            if (settled >= 3) {
               hasResolved = true;
               resolve(null);
             }
           }
         };
 
+        fsCall.then(handleResult).catch(() => handleResult({ ok: false, data: null }));
         restCall.then(handleResult).catch(() => handleResult({ ok: false, data: null }));
         sdkCall.then(handleResult).catch(() => handleResult({ ok: false, data: null }));
 
@@ -320,6 +421,14 @@ export async function rtdbSet(
 
   let sdkError: any = null;
   let saveSucceeded = false;
+
+  // 0. Sync to Cloud Firestore (ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c)
+  try {
+    const fsOk = await writeFirestoreNode(cleanPath, cleanData, true);
+    if (fsOk) {
+      saveSucceeded = true;
+    }
+  } catch (_) {}
 
   // 1. Try Firebase Web SDK write
   try {
@@ -415,6 +524,17 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
   invalidateRtdbCache(cleanPath);
 
   let sdkError: any = null;
+  let fsUpdated = false;
+
+  // 0. Sync merge update to Cloud Firestore
+  try {
+    fsUpdated = await writeFirestoreNode(cleanPath, cleanData, true);
+    if (fsUpdated) {
+      memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
+      dispatchToSubscribers(cleanPath, cleanData, true);
+      updateParentCache(cleanPath, cleanData);
+    }
+  } catch (_) {}
 
   // 1. Try Firebase Web SDK update
   try {
@@ -484,6 +604,10 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
         return;
       }
     } catch (_) {}
+  }
+
+  if (fsUpdated) {
+    return;
   }
 
   // If all attempts failed, throw so the caller knows the write did not commit
@@ -592,10 +716,12 @@ export async function rtdbPush(path: string, data: any, timeoutMs: number = 7000
         id: cleanData.id || pushKey,
         productId: cleanData.productId || pushKey
       };
+      // Write to Cloud Firestore
+      const fsSaved = await writeFirestoreNode(`${cleanPath}/${pushKey}`, payloadWithId, true).catch(() => false);
       const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
       const sdkSet = set(newRef, payloadWithId).then(() => true).catch(() => false);
       const success = await Promise.race([sdkSet, sdkTimeout]);
-      if (success) {
+      if (success || fsSaved) {
         memoryCache.set(`${cleanPath}/${pushKey}`, { data: payloadWithId, timestamp: Date.now() });
         dispatchToSubscribers(cleanPath, { [pushKey]: payloadWithId }, true);
         return pushKey;
@@ -738,6 +864,14 @@ export async function rtdbRemove(path: string, timeoutMs: number = 5000): Promis
     }
   }
 
+  // Delete from Cloud Firestore if 2-segment path
+  try {
+    const parts = cleanPath.split('/').filter(Boolean);
+    if (parts.length === 2) {
+      await deleteDoc(doc(db, parts[0], parts[1])).catch(() => {});
+    }
+  } catch (_) {}
+
   try {
     const dbRef = ref(rtdb, cleanPath);
     const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
@@ -792,6 +926,21 @@ export async function rtdbQueryByChild<T = any>(
 ): Promise<Array<{ id: string; data: T }>> {
   const cleanPath = sanitizePath(path);
   if (!cleanPath) return [];
+
+  // 0. Try Cloud Firestore indexed query first
+  try {
+    const parts = cleanPath.split('/').filter(Boolean);
+    if (parts.length === 1) {
+      const colSnap = await getDocs(fsQuery(collection(db, parts[0]), fsWhere(childKey, '==', childValue)));
+      if (!colSnap.empty) {
+        const fsResults: Array<{ id: string; data: T }> = [];
+        colSnap.forEach((docSnap) => {
+          fsResults.push({ id: docSnap.id, data: ({ id: docSnap.id, ...docSnap.data() } as unknown) as T });
+        });
+        return fsResults;
+      }
+    }
+  } catch (_) {}
 
   // 1. Try Firebase Web SDK indexed query
   try {
@@ -924,19 +1073,52 @@ export function rtdbSubscribe<T = any>(
       }
     }).catch(() => {});
 
-    // Establish WebSocket onValue listener
+    // Establish Firestore + RTDB real-time listener
     try {
+      const parts = cleanPath.split('/').filter(Boolean);
+      let fsUnsub: (() => void) | null = null;
+      if (parts.length === 1) {
+        fsUnsub = onSnapshot(
+          collection(db, parts[0]),
+          (snap) => {
+            if (!snap.empty) {
+              const mapObj: Record<string, any> = {};
+              snap.forEach((d) => {
+                mapObj[d.id] = { id: d.id, ...d.data() };
+              });
+              dispatchToSubscribers(cleanPath, mapObj as unknown as T);
+            }
+          },
+          () => {}
+        );
+      } else if (parts.length === 2) {
+        fsUnsub = onSnapshot(
+          doc(db, parts[0], parts[1]),
+          (snap) => {
+            if (snap.exists()) {
+              dispatchToSubscribers(cleanPath, ({ id: snap.id, ...snap.data() } as unknown) as T);
+            }
+          },
+          () => {}
+        );
+      }
+
       const dbRef = ref(rtdb, cleanPath);
-      channel.sdkUnsubscribe = onValue(
+      const rtdbUnsub = onValue(
         dbRef,
         (snap) => {
-          const val = snap.exists() ? (snap.val() as T) : null;
-          dispatchToSubscribers(cleanPath, val);
+          if (snap.exists()) {
+            dispatchToSubscribers(cleanPath, snap.val() as T);
+          }
         },
-        (err) => {
-          console.warn(`[RTDB Subscribe onValue notice for ${cleanPath}]:`, err?.message || err);
-        }
+        () => {}
       );
+      channel.sdkUnsubscribe = () => {
+        if (fsUnsub) {
+          try { fsUnsub(); } catch (_) {}
+        }
+        try { rtdbUnsub(); } catch (_) {}
+      };
     } catch (e) {
       console.warn(`[RTDB Subscribe init warning for ${cleanPath}]:`, e);
     }

@@ -1,10 +1,14 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { initializeFirestore, getFirestore, memoryLocalCache, doc, getDocFromServer } from "firebase/firestore";
+import { initializeFirestore, getFirestore, memoryLocalCache, doc, getDocFromServer, setLogLevel } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getDatabase } from "firebase/database";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import config from "../../firebase-applet-config.json";
+
+try {
+  setLogLevel('silent');
+} catch (_) {}
 
 // Resolve optimal authDomain: strictly use rjworldbd.com (non-www) in production
 const resolveAuthDomain = () => {
@@ -38,7 +42,8 @@ console.log('[Firebase Initialized]', {
 export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
-const databaseId = (config as any).firestoreDatabaseId;
+export const FIRESTORE_DATABASE_ID = (config as any).firestoreDatabaseId || "ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c";
+const databaseId = FIRESTORE_DATABASE_ID;
 
 let firestoreInstance;
 try {
@@ -62,10 +67,8 @@ export const RTDB_BASE_URL = (firebaseConfig.databaseURL ? firebaseConfig.databa
 async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration.");
-    }
+  } catch (_) {
+    // Connection check handled quietly
   }
 }
 if (typeof window !== "undefined") {

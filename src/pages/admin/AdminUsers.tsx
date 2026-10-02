@@ -49,17 +49,7 @@ export default function AdminUsers() {
           });
         });
         setUsers((prev) => {
-          const mergedMap = new Map<string, any>();
-          prev.forEach((u) => mergedMap.set(u.id, u));
-          fsMap.forEach((fsUser, id) => {
-            const existing = mergedMap.get(id);
-            mergedMap.set(id, {
-              ...(existing || {}),
-              ...fsUser,
-              status: fsUser.status || existing?.status || 'active',
-            });
-          });
-          return Array.from(mergedMap.values());
+          return Array.from(fsMap.values());
         });
       },
       (err) => {
@@ -73,128 +63,28 @@ export default function AdminUsers() {
     try {
       setLoading(true);
       const userMap = new Map<string, any>();
-      const firestoreIds = new Set<string>();
 
-      // 1. Fetch from Cloud Firestore 'users' collection (Primary Authoritative Source)
-      try {
-        const firestoreSnap = await getDocs(collection(db, 'users'));
-        firestoreSnap.forEach((docSnap) => {
-          const id = docSnap.id;
-          const data = docSnap.data();
-          if (!id || !data) return;
-          firestoreIds.add(id);
-          userMap.set(id, {
-            id,
-            ...data,
-            name: data.name || data.displayName || data.fullName || 'Unnamed User',
-            email: data.email || '',
-            phone: data.phone || data.mobileNumber || '',
-            role: (data.role || 'customer').toLowerCase(),
-            status: (data.status || 'active').toLowerCase(),
-            createdAt: data.createdAt || null
-          });
-        });
-      } catch (fsErr) {
-        console.warn('Error fetching Firestore users:', fsErr);
-      }
-
-      // 2. Fetch from RTDB 'users' and merge (Firestore status takes precedence)
-      const rtdbUsers = await rtdbList<any>('users').catch(() => []);
-      rtdbUsers.forEach(({ id, data }) => {
+      // Fetch from Cloud Firestore 'users' collection (Authoritative Source)
+      const firestoreSnap = await getDocs(collection(db, 'users'));
+      firestoreSnap.forEach((docSnap) => {
+        const id = docSnap.id;
+        const data = docSnap.data();
         if (!id || !data) return;
-        const existing = userMap.get(id);
-        const merged = {
+        userMap.set(id, {
           id,
           ...data,
-          ...(existing || {}),
-          name: existing?.name && existing.name !== 'Unnamed User' ? existing.name : (data.name || data.displayName || data.fullName || 'Unnamed User'),
-          email: existing?.email || data.email || '',
-          phone: existing?.phone || data.phone || data.mobileNumber || '',
-          role: (existing?.role || data.role || 'customer').toLowerCase(),
-          status: (existing?.status || data.status || 'active').toLowerCase(),
-          createdAt: existing?.createdAt || data.createdAt || null
-        };
-        userMap.set(id, merged);
-
-        // Sync any RTDB-only user into Firestore 'users' collection so Firestore collection is complete
-        if (!firestoreIds.has(id)) {
-          setDoc(doc(db, 'users', id), {
-            ...data,
-            uid: id,
-            id,
-            name: merged.name,
-            email: merged.email,
-            phone: merged.phone || null,
-            role: merged.role,
-            status: merged.status,
-            createdAt: merged.createdAt || Date.now(),
-            updatedAt: Date.now()
-          }, { merge: true }).catch(() => {});
-        }
+          name: data.name || data.displayName || data.fullName || 'Unnamed User',
+          email: data.email || '',
+          phone: data.phone || data.mobileNumber || '',
+          role: (data.role || 'customer').toLowerCase(),
+          status: (data.status || 'active').toLowerCase(),
+          createdAt: data.createdAt || null
+        });
       });
-
-      // 2. Fetch from RTDB 'resellers' to include any resellers not in users
-      try {
-        const rtdbResellers = await rtdbList<any>('resellers').catch(() => []);
-        rtdbResellers.forEach(({ id, data }) => {
-          if (!id || !data) return;
-          const existing = userMap.get(id);
-          if (!existing) {
-            userMap.set(id, {
-              id,
-              ...data,
-              name: data.fullName || data.name || 'Reseller ' + id.substring(0, 5),
-              email: data.email || '',
-              phone: data.mobileNumber || data.phone || '',
-              role: 'reseller',
-              status: data.status || 'active'
-            });
-          } else {
-            existing.role = 'reseller';
-            if (!existing.phone && data.mobileNumber) existing.phone = data.mobileNumber;
-            if (data.isVerified || data.blueBadge || data.verificationBadge) {
-              existing.isVerified = true;
-              existing.blueBadge = true;
-            }
-          }
-        });
-      } catch (err) {
-        console.warn('Error reading resellers for users list:', err);
-      }
-
-      // 3. Fetch from RTDB 'vendors' to include any vendors not in users
-      try {
-        const rtdbVendors = await rtdbList<any>('vendors').catch(() => []);
-        rtdbVendors.forEach(({ id, data }) => {
-          if (!id || !data) return;
-          const existing = userMap.get(id);
-          if (!existing) {
-            userMap.set(id, {
-              id,
-              ...data,
-              name: data.ownerName || data.name || data.fullName || 'Vendor ' + id.substring(0, 5),
-              email: data.email || '',
-              phone: data.mobileNumber || data.phone || '',
-              role: 'vendor',
-              status: data.status || 'active'
-            });
-          } else {
-            existing.role = 'vendor';
-            if (!existing.phone && data.mobileNumber) existing.phone = data.mobileNumber;
-            if (data.isVerified || data.isVerifiedSeller || data.blueBadge || data.verificationStatus === 'verified') {
-              existing.isVerified = true;
-              existing.isVerifiedSeller = true;
-              existing.blueBadge = true;
-            }
-          }
-        });
-      } catch (err) {
-        console.warn('Error reading vendors for users list:', err);
-      }
 
       setUsers(Array.from(userMap.values()));
     } catch (error) {
-      console.error('Error fetching users from RTDB:', error);
+      console.error('Error fetching users from Firestore:', error);
       toast.error('Failed to load users');
     } finally {
       setLoading(false);
@@ -257,8 +147,8 @@ export default function AdminUsers() {
       const newStatus = user.status === 'inactive' ? 'active' : 'inactive';
       const payload = { status: newStatus, updatedAt: Date.now() };
 
+      await setDoc(doc(db, 'users', user.id), payload, { merge: true });
       await Promise.allSettled([
-        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload)
@@ -267,8 +157,8 @@ export default function AdminUsers() {
       setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
       toast.success(`User marked as ${newStatus}`);
     } catch (error) {
-      console.error('Error updating status in RTDB:', error);
-      toast.error('Failed to update status');
+      console.error('Error updating status in Firestore:', error);
+      toast.error('Failed to update status in Firestore');
     } finally {
       setActionLoading(null);
     }

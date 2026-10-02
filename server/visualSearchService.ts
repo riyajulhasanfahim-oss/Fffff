@@ -89,7 +89,7 @@ export function initEmbeddingIndex(): void {
 
   // Also populate asynchronously from Firestore if available
   try {
-    const db = getFirestore();
+    const db = getFirestore('ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c');
     db.collection('product_image_embeddings')
       .limit(500)
       .get()
@@ -153,7 +153,7 @@ export async function saveProductEmbedding(
 
   // Save to separate Firestore collection: product_image_embeddings
   try {
-    const db = getFirestore();
+    const db = getFirestore('ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c');
     await db.collection('product_image_embeddings').doc(productId).set(record, { merge: true });
   } catch (_) {
     // Firestore write error ignored gracefully

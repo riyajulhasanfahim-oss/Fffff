@@ -80,7 +80,7 @@ export default function Login() {
         } catch (fsErr) {
           console.warn('Firestore user profile sync on login notice:', fsErr);
         }
-        await rtdbSet(`users/${user.uid}`, newProfile);
+        await rtdbSet(`users/${user.uid}`, newProfile).catch(() => {});
       } else if (!fsExisting && rtdbExisting) {
         try {
           await setDoc(doc(db, 'users', user.uid), {

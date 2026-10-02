@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Database, CheckCircle2, AlertTriangle, RefreshCw, Copy, ExternalLink, ShieldCheck, Flame, Server, ListPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { firebaseConfig, db } from '../../lib/firebase';
+import { firebaseConfig, db, FIRESTORE_DATABASE_ID } from '../../lib/firebase';
 import { seedAllCollections } from '../../lib/firebaseSeed';
 import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { rtdbGet } from '../../lib/rtdb';
@@ -288,6 +288,12 @@ service cloud.firestore {
             <span className="text-xs text-slate-500 block font-medium">Project ID</span>
             <span className="text-sm font-semibold text-slate-800 font-mono select-all">
               {firebaseConfig.projectId}
+            </span>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/70">
+            <span className="text-xs text-slate-500 block font-medium">Firestore Database ID</span>
+            <span className="text-sm font-semibold text-emerald-700 font-mono select-all truncate block">
+              {FIRESTORE_DATABASE_ID}
             </span>
           </div>
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/70">

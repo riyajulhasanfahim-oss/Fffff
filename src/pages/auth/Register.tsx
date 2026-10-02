@@ -100,8 +100,8 @@ export default function Register() {
       console.error('Firestore user save error:', fsErr);
     }
 
-    // 2. Save to Firebase Realtime Database: users/{uid}
-    await rtdbSet(`users/${user.uid}`, newUserData);
+    // 2. Save to Firebase Realtime Database: users/{uid} (non-blocking fallback)
+    await rtdbSet(`users/${user.uid}`, newUserData).catch(() => {});
     
     // Save referral code in Realtime Database
     try {

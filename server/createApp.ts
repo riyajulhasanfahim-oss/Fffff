@@ -35,7 +35,25 @@ try {
   }
 } catch {}
 
-export const CURRENT_FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || appletFirebaseConfig.projectId || 'gen-lang-client-0902472299';
+const sanitizeProjectId = (val?: string): string => {
+  if (!val) return '';
+  const trimmed = val.trim();
+  if (trimmed.includes('projectId')) {
+    const m = trimmed.match(/projectId\s*:\s*["']([^"']+)["']/);
+    if (m && m[1]) return m[1].trim();
+  }
+  if (/^[a-z0-9-]+$/i.test(trimmed)) return trimmed;
+  return '';
+};
+
+export const CURRENT_FIREBASE_PROJECT_ID =
+  sanitizeProjectId(process.env.FIREBASE_PROJECT_ID) ||
+  sanitizeProjectId(process.env.GCLOUD_PROJECT) ||
+  appletFirebaseConfig.projectId ||
+  'gen-lang-client-0902472299';
+export const CURRENT_FIRESTORE_DATABASE_ID =
+  appletFirebaseConfig.firestoreDatabaseId ||
+  'ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c';
 export const CURRENT_RTDB_BASE = appletFirebaseConfig.databaseURL || `https://${CURRENT_FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com`;
 export const CURRENT_AUTH_DOMAIN = appletFirebaseConfig.authDomain || `${CURRENT_FIREBASE_PROJECT_ID}.firebaseapp.com`;
 
@@ -60,9 +78,11 @@ let transporter: nodemailer.Transporter | null = null;
 
 export async function setupMailer() {
   try {
-    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    const smtpHost = (process.env.SMTP_HOST || '').trim();
+    const isValidSmtpHost = smtpHost && !smtpHost.includes('firebaseConfig') && !smtpHost.includes('{') && !smtpHost.includes(' ');
+    if (isValidSmtpHost && process.env.SMTP_USER && process.env.SMTP_PASS) {
       transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
+        host: smtpHost,
         port: Number(process.env.SMTP_PORT) || 587,
         secure: process.env.SMTP_PORT === '465',
         auth: {
@@ -233,16 +253,88 @@ app.use((req, res, next) => {
     res.status(200).json({ status: 'ok', timestamp: Date.now() });
   });
 
-  // Helper to fetch RTDB node directly
+  // Helper to convert Firestore REST field values to plain JS values
+  const fromFirestoreValue = (val: any): any => {
+    if (!val || typeof val !== 'object') return null;
+    if ('stringValue' in val) return val.stringValue;
+    if ('integerValue' in val) return Number(val.integerValue);
+    if ('doubleValue' in val) return Number(val.doubleValue);
+    if ('booleanValue' in val) return Boolean(val.booleanValue);
+    if ('nullValue' in val) return null;
+    if ('timestampValue' in val) return val.timestampValue;
+    if ('arrayValue' in val) {
+      return (val.arrayValue?.values || []).map(fromFirestoreValue);
+    }
+    if ('mapValue' in val) {
+      const out: Record<string, any> = {};
+      for (const [k, v] of Object.entries(val.mapValue?.fields || {})) {
+        out[k] = fromFirestoreValue(v);
+      }
+      return out;
+    }
+    return null;
+  };
+
+  // Helper to fetch RTDB node directly with automatic Cloud Firestore fallback
   const fetchRtdbNode = async (node: string) => {
     try {
       const res = await fetch(`${CURRENT_RTDB_BASE}/${node}.json`);
       if (res.ok) {
-        return await res.json();
+        const json = await res.json();
+        if (json && typeof json === 'object' && !('error' in json)) {
+          return json;
+        }
       }
     } catch (e) {
       console.warn(`[RTDB node ${node} fetch warning]:`, e);
     }
+
+    // Fallback to Cloud Firestore REST API (ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c)
+    try {
+      const clean = node.replace(/^\/+|\/+$/g, '').trim();
+      const parts = clean.split('/').filter(Boolean);
+      const fsBase = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents`;
+      if (parts.length === 1) {
+        const rq = await fetch(`${fsBase}:runQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: parts[0] }],
+              limit: 200
+            }
+          })
+        });
+        if (rq.ok) {
+          const rows = await rq.json();
+          if (Array.isArray(rows)) {
+            const mapObj: Record<string, any> = {};
+            for (const row of rows) {
+              if (row?.document?.name && row?.document?.fields) {
+                const docId = row.document.name.split('/').pop()!;
+                const docData = fromFirestoreValue({ mapValue: { fields: row.document.fields } });
+                mapObj[docId] = { id: docId, ...docData };
+              }
+            }
+            if (Object.keys(mapObj).length > 0) {
+              return mapObj;
+            }
+          }
+        }
+      } else if (parts.length === 2) {
+        const docRes = await fetch(`${fsBase}/${parts[0]}/${parts[1]}`);
+        if (docRes.ok) {
+          const docJson = await docRes.json();
+          if (docJson?.fields) {
+            return {
+              id: parts[1],
+              ...fromFirestoreValue({ mapValue: { fields: docJson.fields } })
+            };
+          }
+        }
+      }
+    } catch (_) {}
+
     return null;
   };
 
@@ -1536,7 +1628,7 @@ app.use((req, res, next) => {
       localSofolXConfig.lastFetched = Date.now();
 
       try {
-        const db = getFirestore();
+        const db = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
         await db.collection('settings').doc('payment').set({
           sofolxBrandKey: localSofolXConfig.brandKey,
           sofolxEnabled: localSofolXConfig.enabled,
@@ -1581,7 +1673,7 @@ app.use((req, res, next) => {
     try {
       let firestoreSettings: any = null;
       try {
-        const db = getFirestore();
+        const db = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
         const docSnap = await db.collection('settings').doc('domain').get();
         if (docSnap.exists) {
           firestoreSettings = docSnap.data();
@@ -1673,7 +1765,7 @@ app.use((req, res, next) => {
 
       // 6. Save to Firestore (excluding client secret)
       try {
-        const db = getFirestore();
+        const db = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
         await db.collection('settings').doc('domain').set({
           primaryDomain,
           websiteUrl,
@@ -2057,7 +2149,7 @@ app.use((req, res, next) => {
 
         // Update Firestore order status
         try {
-          const db = getFirestore();
+          const db = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
           await db.collection('orders').doc(orderId).update({
             paymentStatus: 'Paid',
             orderStatus: 'Processing',
@@ -2179,7 +2271,7 @@ app.use((req, res, next) => {
 
       // Update Firestore order to Paid directly on server-side
       try {
-        const db = getFirestore();
+        const db = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
         await db.collection('orders').doc(orderId).update({
           paymentStatus: 'Paid',
           orderStatus: 'Processing',
@@ -2231,7 +2323,7 @@ app.use((req, res, next) => {
         if (orderId) {
           processedPayments.set(`sofolx_order_${orderId}`, { timestamp: Date.now(), orderId, status: 'Completed' });
           try {
-            const db = getFirestore();
+            const db = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
             await db.collection('orders').doc(orderId).update({
               paymentStatus: 'Paid',
               orderStatus: 'Processing',

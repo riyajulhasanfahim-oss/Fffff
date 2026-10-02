@@ -138,12 +138,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         // If user existed in RTDB but not yet in Firestore, sync to Firestore 'users' collection
-        if (!fsData && rtdbData) {
+        if (!fsData) {
+          const resolvedName = data.name || data.displayName || auth.currentUser?.displayName || auth.currentUser?.email?.split('@')[0] || 'RJ WORLD BD User';
           setDoc(doc(db, 'users', uid), {
-            ...rtdbData,
+            ...(rtdbData || {}),
             uid,
             id: uid,
-            status: rtdbData.status || 'active',
+            name: resolvedName,
+            displayName: resolvedName,
+            email: data.email || auth.currentUser?.email || '',
+            phone: data.phone ?? data.mobileNumber ?? auth.currentUser?.phoneNumber ?? null,
+            photo: data.photo ?? data.photoURL ?? auth.currentUser?.photoURL ?? null,
+            role: determinedRole,
+            accountType: data.accountType || 'general',
+            status: (data.status || 'active').toLowerCase(),
+            referralId: data.referralId || uid.substring(0, 8).toUpperCase(),
+            createdAt: data.createdAt || Date.now(),
             updatedAt: Date.now(),
           }, { merge: true }).catch(() => {});
         }

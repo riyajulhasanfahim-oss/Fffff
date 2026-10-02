@@ -322,31 +322,8 @@ export const INITIAL_PROMO_CODES = [
   { id: 'PROMO-SAVE10', code: 'SAVE10', resellerId: 'reseller-premier', discountPercent: 10, minPurchase: 500, active: true }
 ];
 
-// Initial Admin Users
-export const INITIAL_ADMIN_USERS = [
-  {
-    id: 'admin-frofficialbd1',
-    uid: 'admin-frofficialbd1',
-    email: 'frofficialbd1@gmail.com',
-    name: 'Super Admin',
-    role: 'Admin',
-    status: 'Active',
-    verified: true,
-    wallet: 50000,
-    createdAt: Date.now()
-  },
-  {
-    id: 'admin-riyajulhasanfahim',
-    uid: 'admin-riyajulhasanfahim',
-    email: 'riyajulhasanfahim@gmail.com',
-    name: 'Riyajul Hasan Fahim',
-    role: 'Admin',
-    status: 'Active',
-    verified: true,
-    wallet: 50000,
-    createdAt: Date.now()
-  }
-];
+// Initial Admin Users (Demo users removed)
+export const INITIAL_ADMIN_USERS: any[] = [];
 
 // Initial Payments
 export const INITIAL_PAYMENTS = [
@@ -557,8 +534,7 @@ export async function seedAllCollections(force: boolean = false): Promise<{ succ
   await safeSeed('order_items', INITIAL_ORDER_ITEMS);
   await safeSeed('orderItems', INITIAL_ORDER_ITEMS);
 
-  // 6. Admin Users & Cloud Storage & Payments
-  await safeSeed('users', INITIAL_ADMIN_USERS);
+  // 6. Cloud Storage & Payments (Never seed fake/demo users)
   await safeSeed('payments', INITIAL_PAYMENTS);
   await safeSeed('storage_accounts', INITIAL_STORAGE_ACCOUNTS);
 

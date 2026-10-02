@@ -57,80 +57,23 @@ export default function AdminUserDetails() {
   const fetchUserDetails = async () => {
     try {
       setLoading(true);
-      let fsUser: any = null;
-      let rtdbUser: any = null;
+      let foundUser: any = null;
 
-      // 0. Fetch from Cloud Firestore 'users' collection (Primary Authoritative Source)
-      try {
-        if (id) {
-          const fsDoc = await getDoc(doc(db, 'users', id));
-          if (fsDoc.exists()) {
-            fsUser = { id, ...fsDoc.data() };
-          }
-        }
-      } catch (fsErr) {
-        console.warn('Firestore user fetch notice:', fsErr);
-      }
-
-      // 1. Fetch from RTDB users and merge (Firestore status/fields take precedence)
-      try {
-        rtdbUser = await rtdbGet<any>(`users/${id}`);
-      } catch (e) {
-        console.warn('RTDB user fetch notice:', e);
-      }
-
-      let foundUser: any = (fsUser || rtdbUser)
-        ? {
+      // Fetch from Cloud Firestore 'users' collection (Authoritative Source)
+      if (id) {
+        const fsDoc = await getDoc(doc(db, 'users', id));
+        if (fsDoc.exists()) {
+          const fsUser: any = fsDoc.data();
+          foundUser = {
             id,
-            ...(rtdbUser || {}),
-            ...(fsUser || {}),
-            name: fsUser?.name || fsUser?.displayName || rtdbUser?.name || rtdbUser?.displayName || 'Unnamed User',
-            email: fsUser?.email || rtdbUser?.email || '',
-            phone: fsUser?.phone || rtdbUser?.phone || rtdbUser?.mobileNumber || '',
-            role: (fsUser?.role || rtdbUser?.role || 'customer').toLowerCase(),
-            status: (fsUser?.status || rtdbUser?.status || 'active').toLowerCase(),
-          }
-        : null;
-
-      if (!fsUser && rtdbUser && id) {
-        setDoc(doc(db, 'users', id), {
-          ...rtdbUser,
-          uid: id,
-          id,
-          status: (rtdbUser.status || 'active').toLowerCase(),
-          updatedAt: Date.now(),
-        }, { merge: true }).catch(() => {});
-      }
-
-      // 2. If not found, check resellers or vendors in RTDB
-      if (!foundUser) {
-        try {
-          const rReseller = await rtdbGet<any>(`resellers/${id}`);
-          if (rReseller) {
-            foundUser = {
-              id,
-              ...rReseller,
-              name: rReseller.fullName || rReseller.name,
-              phone: rReseller.mobileNumber || rReseller.phone,
-              role: 'reseller'
-            };
-          }
-        } catch {}
-      }
-
-      if (!foundUser) {
-        try {
-          const rVendor = await rtdbGet<any>(`vendors/${id}`);
-          if (rVendor) {
-            foundUser = {
-              id,
-              ...rVendor,
-              name: rVendor.ownerName || rVendor.name,
-              phone: rVendor.mobileNumber || rVendor.phone,
-              role: 'vendor'
-            };
-          }
-        } catch {}
+            ...fsUser,
+            name: fsUser?.name || fsUser?.displayName || 'Unnamed User',
+            email: fsUser?.email || '',
+            phone: fsUser?.phone || fsUser?.mobileNumber || '',
+            role: (fsUser?.role || 'customer').toLowerCase(),
+            status: (fsUser?.status || 'active').toLowerCase(),
+          };
+        }
       }
 
       if (foundUser) {
@@ -220,8 +163,8 @@ export default function AdminUserDetails() {
       const newStatus = user.status === 'inactive' ? 'active' : 'inactive';
       const payload = { status: newStatus, updatedAt: Date.now() };
 
+      await setDoc(doc(db, 'users', user.id), payload, { merge: true });
       await Promise.allSettled([
-        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload)
@@ -229,8 +172,8 @@ export default function AdminUserDetails() {
       setUser({ ...user, status: newStatus });
       toast.success(`User account marked as ${newStatus}`);
     } catch (error) {
-      console.error('Error updating status in RTDB:', error);
-      toast.error('Failed to update status');
+      console.error('Error updating status in Firestore:', error);
+      toast.error('Failed to update status in Firestore');
     } finally {
       setUpdating(false);
     }
@@ -242,8 +185,8 @@ export default function AdminUserDetails() {
       setUpdating(true);
       const payload = { role: newRole, updatedAt: Date.now() };
 
+      await setDoc(doc(db, 'users', user.id), payload, { merge: true });
       await Promise.allSettled([
-        setDoc(doc(db, 'users', user.id), payload, { merge: true }),
         rtdbUpdate(`users/${user.id}`, payload),
         rtdbUpdate(`resellers/${user.id}`, payload),
         rtdbUpdate(`vendors/${user.id}`, payload)
@@ -251,8 +194,8 @@ export default function AdminUserDetails() {
       setUser({ ...user, role: newRole });
       toast.success(`Role changed to ${newRole}`);
     } catch (error) {
-      console.error('Error updating user role in RTDB:', error);
-      toast.error('Failed to update user role');
+      console.error('Error updating user role in Firestore:', error);
+      toast.error('Failed to update user role in Firestore');
     } finally {
       setUpdating(false);
     }
