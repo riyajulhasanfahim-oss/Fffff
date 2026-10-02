@@ -66,26 +66,29 @@ export default function Register() {
   }, [searchParams]);
 
   const processRegistrationData = async (user: any, userEmail: string) => {
+    const cleanName = name.trim();
     try {
-      await updateProfile(user, { displayName: name.trim() });
+      await updateProfile(user, { displayName: cleanName });
     } catch (authProfErr) {
       console.warn('Auth profile update notice:', authProfErr);
     }
     
     const now = Date.now();
-    const cleanName = name.trim();
+    const userRefCode = user.uid.substring(0, 8).toUpperCase();
     const newUserData = {
       uid: user.uid,
       id: user.uid,
       name: cleanName,
+      displayName: cleanName,
       email: userEmail,
-      phone: null,
-      photo: null,
+      phone: user.phoneNumber || null,
+      photo: user.photoURL || null,
       role: "Customer",
       accountType: "general",
       status: "active",
       balance: 0,
       wallet: 0,
+      referralId: userRefCode,
       createdAt: now,
       updatedAt: now,
     };
@@ -102,7 +105,6 @@ export default function Register() {
     
     // Save referral code in Realtime Database
     try {
-      const userRefCode = user.uid.substring(0, 8).toUpperCase();
       await rtdbSet(`referral_codes/${user.uid}`, {
         code: userRefCode,
         userId: user.uid,
@@ -170,13 +172,18 @@ export default function Register() {
         }
 
         if (sponsorId) {
-          // Link sponsor in user record
-          await rtdbUpdate(`users/${user.uid}`, {
+          const sponsorPayload = {
             sponsorId: sponsorId,
             referredBy: sponsorId,
             referralCodeUsed: cleanRef,
-            isMLMMember: true
-          });
+            isMLMMember: true,
+            updatedAt: Date.now()
+          };
+          // Link sponsor in Firestore & RTDB user record
+          await Promise.allSettled([
+            setDoc(doc(db, 'users', user.uid), sponsorPayload, { merge: true }),
+            rtdbUpdate(`users/${user.uid}`, sponsorPayload)
+          ]);
 
           // Save MLM membership in RTDB
           await rtdbSet(`mlm_members/${user.uid}`, {

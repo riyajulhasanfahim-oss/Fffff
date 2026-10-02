@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { rtdbGet, rtdbUpdate, rtdbList } from '../../lib/rtdb';
 import { ArrowLeft, User, Mail, Phone, MapPin, Calendar, Shield, CreditCard, Activity, Briefcase, Network, ShoppingBag, CheckCircle, XCircle, BadgeCheck } from 'lucide-react';
@@ -28,36 +28,78 @@ export default function AdminUserDetails() {
   const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
-    if (id) {
-      fetchUserDetails();
-    }
+    if (!id) return;
+    fetchUserDetails();
+    const unsub = onSnapshot(
+      doc(db, 'users', id),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const fsData = docSnap.data();
+          setUser((prev: any) => ({
+            ...(prev || {}),
+            id,
+            ...fsData,
+            name: fsData.name || fsData.displayName || prev?.name || 'Unnamed User',
+            email: fsData.email || prev?.email || '',
+            phone: fsData.phone || fsData.mobileNumber || prev?.phone || '',
+            role: (fsData.role || prev?.role || 'customer').toLowerCase(),
+            status: (fsData.status || prev?.status || 'active').toLowerCase(),
+          }));
+        }
+      },
+      (err) => {
+        console.warn('Firestore user details listener notice:', err);
+      }
+    );
+    return () => unsub();
   }, [id]);
 
   const fetchUserDetails = async () => {
     try {
       setLoading(true);
-      let foundUser: any = null;
+      let fsUser: any = null;
+      let rtdbUser: any = null;
 
-      // 0. Fetch from Cloud Firestore 'users' collection
+      // 0. Fetch from Cloud Firestore 'users' collection (Primary Authoritative Source)
       try {
         if (id) {
           const fsDoc = await getDoc(doc(db, 'users', id));
           if (fsDoc.exists()) {
-            foundUser = { id, ...fsDoc.data() };
+            fsUser = { id, ...fsDoc.data() };
           }
         }
       } catch (fsErr) {
         console.warn('Firestore user fetch notice:', fsErr);
       }
 
-      // 1. Fetch from RTDB users and merge
+      // 1. Fetch from RTDB users and merge (Firestore status/fields take precedence)
       try {
-        const rtdbUser = await rtdbGet<any>(`users/${id}`);
-        if (rtdbUser) {
-          foundUser = { ...(foundUser || {}), id, ...rtdbUser };
-        }
+        rtdbUser = await rtdbGet<any>(`users/${id}`);
       } catch (e) {
         console.warn('RTDB user fetch notice:', e);
+      }
+
+      let foundUser: any = (fsUser || rtdbUser)
+        ? {
+            id,
+            ...(rtdbUser || {}),
+            ...(fsUser || {}),
+            name: fsUser?.name || fsUser?.displayName || rtdbUser?.name || rtdbUser?.displayName || 'Unnamed User',
+            email: fsUser?.email || rtdbUser?.email || '',
+            phone: fsUser?.phone || rtdbUser?.phone || rtdbUser?.mobileNumber || '',
+            role: (fsUser?.role || rtdbUser?.role || 'customer').toLowerCase(),
+            status: (fsUser?.status || rtdbUser?.status || 'active').toLowerCase(),
+          }
+        : null;
+
+      if (!fsUser && rtdbUser && id) {
+        setDoc(doc(db, 'users', id), {
+          ...rtdbUser,
+          uid: id,
+          id,
+          status: (rtdbUser.status || 'active').toLowerCase(),
+          updatedAt: Date.now(),
+        }, { merge: true }).catch(() => {});
       }
 
       // 2. If not found, check resellers or vendors in RTDB
@@ -421,6 +463,84 @@ export default function AdminUserDetails() {
               <p className="text-xl font-bold text-slate-900">
                 {user.totalOrders || 0}
               </p>
+            </div>
+          </div>
+
+          {/* Full User Profile Details Card */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <User className="w-5 h-5 text-primary-main" /> Full User Profile Details (Firestore)
+              </h3>
+              <button
+                onClick={toggleStatus}
+                disabled={updating}
+                className={`px-4 py-2 rounded-xl font-bold text-xs transition-colors flex items-center gap-1.5 ${
+                  user.status === 'inactive'
+                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                    : 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200'
+                }`}
+              >
+                {user.status === 'inactive' ? (
+                  <>
+                    <CheckCircle className="w-4 h-4" /> Make Active
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-4 h-4" /> Make Inactive
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Full Name</p>
+                <p className="font-semibold text-slate-900">{user.name || user.displayName || 'N/A'}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Email Address</p>
+                <p className="font-semibold text-slate-900 break-all">{user.email || 'N/A'}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Phone Number</p>
+                <p className="font-semibold text-slate-900">{user.phone || user.mobileNumber || 'N/A'}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Account Status</p>
+                <p className={`font-bold uppercase ${user.status === 'inactive' ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {user.status === 'inactive' ? 'Inactive (Blocked)' : 'Active'}
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">User ID (UID)</p>
+                <p className="font-mono text-xs font-semibold text-slate-900 break-all">{user.uid || user.id}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Role / Account Type</p>
+                <p className="font-semibold text-slate-900 uppercase">{user.role || 'Customer'} ({user.accountType || 'general'})</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Referral Code</p>
+                <p className="font-mono font-semibold text-slate-900">{user.referralId || 'None'}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Sponsor / Referred By</p>
+                <p className="font-semibold text-slate-900">
+                  {user.referredByName ? `${user.referredByName} (${user.referredBy})` : (user.referredBy || 'Direct Signup')}
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 sm:col-span-2">
+                <p className="text-xs text-slate-500 mb-1">Shipping / Contact Address</p>
+                <p className="font-semibold text-slate-900">{formatAddress(user.address, 'No address saved yet')}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Registration Date</p>
+                <p className="font-semibold text-slate-900">{safeFormatDate(user.createdAt, 'PPpp')}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                <p className="text-xs text-slate-500 mb-1">Last Updated</p>
+                <p className="font-semibold text-slate-900">{safeFormatDate(user.updatedAt || user.createdAt, 'PPpp')}</p>
+              </div>
             </div>
           </div>
 

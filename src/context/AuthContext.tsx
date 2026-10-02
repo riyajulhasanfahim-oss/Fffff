@@ -15,12 +15,19 @@ import {
   signInWithEmailAndPassword,
   updateProfile
 } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { rtdbGet, rtdbUpdate, rtdbSubscribe } from '../lib/rtdb';
 import { requestAndSaveFCMToken, removeFCMToken, onMessageListener } from '../lib/fcm';
 import toast from 'react-hot-toast';
 import { checkAccountStatus } from '../services/accountStatusService';
+
+const ADMIN_EMAILS = [
+  'riyajulhasanfahim@gmail.com',
+  'frofficialbd1@gmail.com',
+  'mdfahim776154@gmail.com',
+  'limonshik07@gmail.com'
+];
 
 export interface UserData {
   uid: string;
@@ -75,14 +82,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearAuthNotice = () => setAuthNotice(null);
 
-  // Loads current user's profile from Realtime Database users/{uid}
+  // Loads current user's profile from Cloud Firestore 'users/{uid}' & Realtime Database 'users/{uid}'
   const fetchUserData = async (uid: string): Promise<UserData | null> => {
     try {
-      const data = await rtdbGet<any>(`users/${uid}`);
+      let fsData: any = null;
+      try {
+        const fsSnap = await getDoc(doc(db, 'users', uid));
+        if (fsSnap.exists()) {
+          fsData = fsSnap.data();
+        }
+      } catch (fsErr) {
+        console.warn("Firestore user read notice:", fsErr);
+      }
+
+      let rtdbData: any = null;
+      try {
+        rtdbData = await rtdbGet<any>(`users/${uid}`);
+      } catch (rtdbErr) {
+        console.warn("RTDB user read notice:", rtdbErr);
+      }
+
+      const data = (fsData || rtdbData)
+        ? {
+            ...(rtdbData || {}),
+            ...(fsData || {}),
+            status: fsData?.status || rtdbData?.status || 'active',
+          }
+        : null;
+
       if (data) {
         const userEmail = (data.email || auth.currentUser?.email || '').toLowerCase();
-        const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-        const isAdminUser = adminEmails.includes(userEmail) || data.role === 'Admin';
+        const isAdminUser = ADMIN_EMAILS.includes(userEmail) || data.role === 'Admin';
         
         const statusResult = await checkAccountStatus(userEmail, uid);
         
@@ -90,9 +120,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let determinedRole = 'Customer';
         if (isAdminUser) {
           determinedRole = 'Admin';
-        } else if (data.role === 'Vendor' || statusResult.hasActiveVendor) {
+        } else if (data.role === 'Vendor' || data.role === 'vendor' || statusResult.hasActiveVendor) {
           determinedRole = 'Vendor';
-        } else if (data.role === 'Reseller' || statusResult.hasActiveReseller) {
+        } else if (data.role === 'Reseller' || data.role === 'reseller' || statusResult.hasActiveReseller) {
           determinedRole = 'Reseller';
         } else {
           determinedRole = 'Customer';
@@ -101,8 +131,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // If user is verified as Vendor or Reseller, ensure their users/{uid}.role matches
         if (determinedRole === 'Vendor' && data.role !== 'Vendor') {
           rtdbUpdate(`users/${uid}`, { role: 'Vendor', hasActiveVendor: true, updatedAt: Date.now() }).catch(() => {});
+          setDoc(doc(db, 'users', uid), { role: 'Vendor', hasActiveVendor: true, updatedAt: Date.now() }, { merge: true }).catch(() => {});
         } else if (determinedRole === 'Reseller' && data.role !== 'Reseller') {
           rtdbUpdate(`users/${uid}`, { role: 'Reseller', hasActiveReseller: true, updatedAt: Date.now() }).catch(() => {});
+          setDoc(doc(db, 'users', uid), { role: 'Reseller', hasActiveReseller: true, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+        }
+
+        // If user existed in RTDB but not yet in Firestore, sync to Firestore 'users' collection
+        if (!fsData && rtdbData) {
+          setDoc(doc(db, 'users', uid), {
+            ...rtdbData,
+            uid,
+            id: uid,
+            status: rtdbData.status || 'active',
+            updatedAt: Date.now(),
+          }, { merge: true }).catch(() => {});
         }
 
         try {
@@ -111,13 +154,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const loaded: UserData = {
           uid: uid,
-          name: data.name || 'RJ WORLD BD User',
+          name: data.name || data.displayName || 'RJ WORLD BD User',
           email: data.email || '',
-          phone: data.phone ?? null,
-          photo: data.photo ?? null,
+          phone: data.phone ?? data.mobileNumber ?? null,
+          photo: data.photo ?? data.photoURL ?? null,
           role: determinedRole,
           accountType: data.accountType || 'general',
-          status: data.status || 'active',
+          status: (data.status || 'active').toLowerCase(),
           balance: typeof data.balance === 'number' ? data.balance : (typeof data.wallet === 'number' ? data.wallet : 0),
           wallet: typeof data.wallet === 'number' ? data.wallet : (typeof data.balance === 'number' ? data.balance : 0),
           language: data.language || 'en',
@@ -131,7 +174,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return loaded;
       }
     } catch (error: any) {
-      console.warn("Could not fetch user profile from RTDB:", error?.message || error);
+      console.warn("Could not fetch user profile:", error?.message || error);
     }
     return null;
   };
@@ -145,16 +188,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const handleUserAuth = async (authUser: User) => {
     try {
-      let data: any = null;
+      let fsData: any = null;
       try {
-        data = await rtdbGet<any>(`users/${authUser.uid}`);
+        const fsSnap = await getDoc(doc(db, 'users', authUser.uid));
+        if (fsSnap.exists()) {
+          fsData = fsSnap.data();
+        }
+      } catch (fsErr) {
+        console.warn("Could not read user profile from Firestore directly:", fsErr);
+      }
+
+      let rtdbData: any = null;
+      try {
+        rtdbData = await rtdbGet<any>(`users/${authUser.uid}`);
       } catch (getErr: any) {
         console.warn("Could not read user profile from RTDB directly:", getErr?.message || getErr);
       }
 
+      const data = (fsData || rtdbData)
+        ? {
+            ...(rtdbData || {}),
+            ...(fsData || {}),
+            status: fsData?.status || rtdbData?.status || 'active',
+          }
+        : null;
+
       const userEmail = (authUser.email || '').toLowerCase();
-      const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-      const isAdminUser = adminEmails.includes(userEmail) || data?.role === 'Admin';
+      const isAdminUser = ADMIN_EMAILS.includes(userEmail) || data?.role === 'Admin';
       const statusResult = await checkAccountStatus(userEmail, authUser.uid);
 
       if (data) {
@@ -162,9 +222,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let determinedRole = 'Customer';
         if (isAdminUser) {
           determinedRole = 'Admin';
-        } else if (data.role === 'Vendor' || statusResult.hasActiveVendor) {
+        } else if (data.role === 'Vendor' || data.role === 'vendor' || statusResult.hasActiveVendor) {
           determinedRole = 'Vendor';
-        } else if (data.role === 'Reseller' || statusResult.hasActiveReseller) {
+        } else if (data.role === 'Reseller' || data.role === 'reseller' || statusResult.hasActiveReseller) {
           determinedRole = 'Reseller';
         } else {
           determinedRole = 'Customer';
@@ -173,8 +233,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // If user is verified as Vendor or Reseller, ensure their users/{uid}.role matches
         if (determinedRole === 'Vendor' && data.role !== 'Vendor') {
           rtdbUpdate(`users/${authUser.uid}`, { role: 'Vendor', hasActiveVendor: true, updatedAt: Date.now() }).catch(() => {});
+          setDoc(doc(db, 'users', authUser.uid), { role: 'Vendor', hasActiveVendor: true, updatedAt: Date.now() }, { merge: true }).catch(() => {});
         } else if (determinedRole === 'Reseller' && data.role !== 'Reseller') {
           rtdbUpdate(`users/${authUser.uid}`, { role: 'Reseller', hasActiveReseller: true, updatedAt: Date.now() }).catch(() => {});
+          setDoc(doc(db, 'users', authUser.uid), { role: 'Reseller', hasActiveReseller: true, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+        }
+
+        // Ensure Firestore 'users' collection always has this user document
+        if (!fsData) {
+          const resolvedName = data.name || data.displayName || authUser.displayName || authUser.email?.split('@')[0] || 'RJ WORLD BD User';
+          setDoc(doc(db, 'users', authUser.uid), {
+            ...data,
+            uid: authUser.uid,
+            id: authUser.uid,
+            name: resolvedName,
+            displayName: resolvedName,
+            email: data.email || authUser.email || '',
+            phone: data.phone ?? authUser.phoneNumber ?? null,
+            photo: data.photo ?? authUser.photoURL ?? null,
+            role: determinedRole,
+            status: (data.status || 'active').toLowerCase(),
+            referralId: data.referralId || authUser.uid.substring(0, 8).toUpperCase(),
+            createdAt: data.createdAt || Date.now(),
+            updatedAt: Date.now(),
+          }, { merge: true }).catch(() => {});
         }
 
         try {
@@ -183,13 +265,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const loaded: UserData = {
           uid: authUser.uid,
-          name: data.name || authUser.displayName || authUser.email?.split('@')[0] || 'RJ WORLD BD User',
+          name: data.name || data.displayName || authUser.displayName || authUser.email?.split('@')[0] || 'RJ WORLD BD User',
           email: data.email || authUser.email || '',
-          phone: data.phone ?? authUser.phoneNumber ?? null,
-          photo: data.photo ?? authUser.photoURL ?? null,
+          phone: data.phone ?? data.mobileNumber ?? authUser.phoneNumber ?? null,
+          photo: data.photo ?? data.photoURL ?? authUser.photoURL ?? null,
           role: determinedRole,
           accountType: data.accountType || 'general',
-          status: data.status || 'active',
+          status: (data.status || 'active').toLowerCase(),
           balance: typeof data.balance === 'number' ? data.balance : (typeof data.wallet === 'number' ? data.wallet : 0),
           wallet: typeof data.wallet === 'number' ? data.wallet : (typeof data.balance === 'number' ? data.balance : 0),
           language: data.language || 'en',
@@ -204,6 +286,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Brand new user: MUST strictly be Customer (unless super admin)
         const fallbackName = authUser.displayName || authUser.email?.split('@')[0] || 'RJ WORLD BD User';
         const determinedRole = isAdminUser ? 'Admin' : 'Customer';
+        const userRefCode = authUser.uid.substring(0, 8).toUpperCase();
+        const now = Date.now();
 
         try {
           localStorage.setItem('rj_user_role_' + authUser.uid, determinedRole);
@@ -221,8 +305,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           balance: 0,
           wallet: 0,
           language: 'en',
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          createdAt: now,
+          updatedAt: now,
           hasActiveVendor: false,
           hasActiveReseller: false,
         };
@@ -237,13 +321,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             displayName: fallbackName,
             email: authUser.email || '',
             phone: authUser.phoneNumber || null,
+            photo: authUser.photoURL || null,
             role: determinedRole,
             accountType: "general",
             status: "active",
             balance: 0,
             wallet: 0,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            referralId: userRefCode,
+            createdAt: now,
+            updatedAt: now,
           }, { merge: true });
         } catch (fsErr) {
           console.warn("Firestore user profile creation sync notice:", fsErr);
@@ -260,8 +346,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             accountType: "general",
             status: "active",
             balance: 0,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            referralId: userRefCode,
+            createdAt: now,
+            updatedAt: now,
           });
         } catch (rtdbWriteErr: any) {
           console.warn("RTDB user profile creation sync error:", rtdbWriteErr?.message || rtdbWriteErr);
@@ -269,11 +356,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // Auto-create referral code for user
         try {
-          const userRefCode = authUser.uid.substring(0, 8).toUpperCase();
           await rtdbUpdate(`referral_codes/${authUser.uid}`, {
             code: userRefCode,
             userId: authUser.uid,
-            createdAt: Date.now()
+            createdAt: now
           });
         } catch (refErr) {
           console.warn('Referral code creation deferred:', refErr);
@@ -282,8 +368,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error: any) {
       console.warn("Auth initialization notice:", error?.message || error);
       if (authUser) {
-        const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-        const isAdm = adminEmails.includes(authUser.email?.toLowerCase() || '');
+        const isAdm = ADMIN_EMAILS.includes(authUser.email?.toLowerCase() || '');
         setUserData({
           uid: authUser.uid,
           name: authUser.displayName || authUser.email?.split('@')[0] || 'RJ WORLD BD User',
@@ -343,6 +428,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, 1500);
 
     let unsubLiveUser: (() => void) | null = null;
+    let unsubFirestoreUser: (() => void) | null = null;
     let unsubDeletedVendor: (() => void) | null = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
@@ -350,6 +436,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (unsubLiveUser) {
         unsubLiveUser();
         unsubLiveUser = null;
+      }
+      if (unsubFirestoreUser) {
+        unsubFirestoreUser();
+        unsubFirestoreUser = null;
       }
       if (unsubDeletedVendor) {
         unsubDeletedVendor();
@@ -366,7 +456,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             requestAndSaveFCMToken(authUser.uid).catch(console.error);
           }, 2000);
 
-          // Subscribe to real-time user profile updates (e.g. role changes from Admin)
+          // Subscribe to real-time Firestore user profile updates (e.g. status active/inactive changes from Admin)
+          try {
+            unsubFirestoreUser = onSnapshot(
+              doc(db, 'users', authUser.uid),
+              (docSnap) => {
+                if (docSnap.exists()) {
+                  const fsData = docSnap.data();
+                  setUserData((prev) => {
+                    if (!prev) return prev;
+                    return {
+                      ...prev,
+                      name: fsData.name || fsData.displayName || prev.name,
+                      email: fsData.email || prev.email,
+                      phone: fsData.phone ?? fsData.mobileNumber ?? prev.phone,
+                      photo: fsData.photo ?? fsData.photoURL ?? prev.photo,
+                      status: (fsData.status || prev.status || 'active').toLowerCase(),
+                      role: prev.role === 'Admin' ? 'Admin' : (fsData.role || prev.role),
+                      balance: typeof fsData.balance === 'number' ? fsData.balance : prev.balance,
+                      wallet: typeof fsData.wallet === 'number' ? fsData.wallet : prev.wallet,
+                    };
+                  });
+                }
+              },
+              (err) => {
+                console.warn('Firestore user listener notice:', err);
+              }
+            );
+          } catch (_) {}
+
+          // Subscribe to real-time user profile updates in RTDB
           try {
             unsubLiveUser = rtdbSubscribe(`users/${authUser.uid}`, (liveUser) => {
               if (liveUser && typeof liveUser === 'object') {
@@ -398,6 +517,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clearTimeout(safetyTimer);
       unsubscribe();
       if (unsubLiveUser) unsubLiveUser();
+      if (unsubFirestoreUser) unsubFirestoreUser();
       if (unsubDeletedVendor) unsubDeletedVendor();
       if (unsubscribeFCM) unsubscribeFCM();
     };
@@ -573,7 +693,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const isAdmin = userData?.role === 'Admin' || user?.email?.toLowerCase() === 'riyajulhasanfahim@gmail.com' || user?.email?.toLowerCase() === 'frofficialbd1@gmail.com' || user?.email?.toLowerCase() === 'mdfahim776154@gmail.com' || false;
+  const isAdmin = userData?.role === 'Admin' || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || '') || false;
 
   return (
     <AuthContext.Provider

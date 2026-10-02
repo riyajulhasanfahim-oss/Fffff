@@ -4,8 +4,42 @@ import { useAuth } from '../context/AuthContext';
 import { rtdbGet } from '../lib/rtdb';
 import { checkAccountStatus } from '../services/accountStatusService';
 
+export const AccountInactiveScreen = ({ logout }: { logout: () => void }) => (
+  <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+    <div className="max-w-md w-full bg-white rounded-3xl shadow-xl border border-red-100 p-8 text-center">
+      <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-5">
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      </div>
+      <h2 className="text-xl font-extrabold text-slate-900 mb-2">অ্যাকাউন্ট আন-এক্টিভ (Account Inactive)</h2>
+      <p className="text-sm text-slate-600 leading-relaxed mb-6">
+        আপনার অ্যাকাউন্টটি বর্তমানে আন-এক্টিভ (Inactive) করা হয়েছে। এই অবস্থায় আপনি কোনো কার্যক্রম করতে পারবেন না। অ্যাকাউন্টটি পুনরায় সচল করতে অনুগ্রহ করে অ্যাডমিন বা সাপোর্ট টিমের সাথে যোগাযোগ করুন।
+      </p>
+      <div className="flex flex-col sm:flex-row gap-3 justify-center">
+        <button
+          onClick={() => logout()}
+          className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition-colors w-full"
+        >
+          লগআউট করুন (Logout)
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
+export const AccountStatusGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, userData, loading, isAdmin, logout } = useAuth();
+
+  if (!loading && user && !isAdmin && (userData?.status === 'inactive' || userData?.status === 'suspended')) {
+    return <AccountInactiveScreen logout={logout} />;
+  }
+
+  return <>{children}</>;
+};
+
 export const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, isAdmin, loading } = useAuth();
+  const { user, userData, isAdmin, loading, logout } = useAuth();
   
   if (loading) {
     return null;
@@ -19,17 +53,15 @@ export const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children
     return <Navigate to="/admin/dashboard" replace />;
   }
 
-  // If user is logged in but email is not verified, we can restrict access or redirect
-  // For now, we allow them to pass, or you can uncomment below to strictly require verification
-  // if (!user.emailVerified) {
-  //   return <Navigate to="/verify-email" replace />;
-  // }
-  
+  if (userData?.status === 'inactive' || userData?.status === 'suspended') {
+    return <AccountInactiveScreen logout={logout} />;
+  }
+
   return <>{children}</>;
 };
 
 export const UserPanelRoute: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const { isAdmin, loading } = useAuth();
+  const { userData, isAdmin, loading, logout } = useAuth();
   
   if (loading) {
     return null;
@@ -37,6 +69,10 @@ export const UserPanelRoute: React.FC<{ children?: React.ReactNode }> = ({ child
 
   if (isAdmin) {
     return <Navigate to="/admin/dashboard" replace />;
+  }
+
+  if (userData?.status === 'inactive' || userData?.status === 'suspended') {
+    return <AccountInactiveScreen logout={logout} />;
   }
 
   return children ? <>{children}</> : <Outlet />;

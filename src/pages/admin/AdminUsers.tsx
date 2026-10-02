@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { rtdbGet, rtdbList, rtdbUpdate } from '../../lib/rtdb';
 import { Search, Filter, Shield, ShieldAlert, CheckCircle, XCircle, MoreVertical, Eye, UserX, UserCheck, BadgeCheck } from 'lucide-react';
@@ -29,20 +29,60 @@ export default function AdminUsers() {
 
   useEffect(() => {
     fetchUsers();
+    const unsub = onSnapshot(
+      collection(db, 'users'),
+      (snap) => {
+        const fsMap = new Map<string, any>();
+        snap.forEach((docSnap) => {
+          const id = docSnap.id;
+          const data = docSnap.data();
+          if (!id || !data) return;
+          fsMap.set(id, {
+            id,
+            ...data,
+            name: data.name || data.displayName || data.fullName || 'Unnamed User',
+            email: data.email || '',
+            phone: data.phone || data.mobileNumber || '',
+            role: (data.role || 'customer').toLowerCase(),
+            status: (data.status || 'active').toLowerCase(),
+            createdAt: data.createdAt || null
+          });
+        });
+        setUsers((prev) => {
+          const mergedMap = new Map<string, any>();
+          prev.forEach((u) => mergedMap.set(u.id, u));
+          fsMap.forEach((fsUser, id) => {
+            const existing = mergedMap.get(id);
+            mergedMap.set(id, {
+              ...(existing || {}),
+              ...fsUser,
+              status: fsUser.status || existing?.status || 'active',
+            });
+          });
+          return Array.from(mergedMap.values());
+        });
+      },
+      (err) => {
+        console.warn('Firestore users live listener notice:', err);
+      }
+    );
+    return () => unsub();
   }, []);
 
   const fetchUsers = async () => {
     try {
       setLoading(true);
       const userMap = new Map<string, any>();
+      const firestoreIds = new Set<string>();
 
-      // 1. Fetch from Cloud Firestore 'users' collection
+      // 1. Fetch from Cloud Firestore 'users' collection (Primary Authoritative Source)
       try {
         const firestoreSnap = await getDocs(collection(db, 'users'));
         firestoreSnap.forEach((docSnap) => {
           const id = docSnap.id;
           const data = docSnap.data();
           if (!id || !data) return;
+          firestoreIds.add(id);
           userMap.set(id, {
             id,
             ...data,
@@ -50,7 +90,7 @@ export default function AdminUsers() {
             email: data.email || '',
             phone: data.phone || data.mobileNumber || '',
             role: (data.role || 'customer').toLowerCase(),
-            status: data.status || 'active',
+            status: (data.status || 'active').toLowerCase(),
             createdAt: data.createdAt || null
           });
         });
@@ -58,22 +98,39 @@ export default function AdminUsers() {
         console.warn('Error fetching Firestore users:', fsErr);
       }
 
-      // 2. Fetch from RTDB 'users' and merge
+      // 2. Fetch from RTDB 'users' and merge (Firestore status takes precedence)
       const rtdbUsers = await rtdbList<any>('users').catch(() => []);
       rtdbUsers.forEach(({ id, data }) => {
         if (!id || !data) return;
         const existing = userMap.get(id);
-        userMap.set(id, {
+        const merged = {
           id,
-          ...(existing || {}),
           ...data,
-          name: data.name || data.displayName || data.fullName || existing?.name || 'Unnamed User',
-          email: data.email || existing?.email || '',
-          phone: data.phone || data.mobileNumber || existing?.phone || '',
-          role: (data.role || existing?.role || 'customer').toLowerCase(),
-          status: data.status || existing?.status || 'active',
-          createdAt: data.createdAt || existing?.createdAt || null
-        });
+          ...(existing || {}),
+          name: existing?.name && existing.name !== 'Unnamed User' ? existing.name : (data.name || data.displayName || data.fullName || 'Unnamed User'),
+          email: existing?.email || data.email || '',
+          phone: existing?.phone || data.phone || data.mobileNumber || '',
+          role: (existing?.role || data.role || 'customer').toLowerCase(),
+          status: (existing?.status || data.status || 'active').toLowerCase(),
+          createdAt: existing?.createdAt || data.createdAt || null
+        };
+        userMap.set(id, merged);
+
+        // Sync any RTDB-only user into Firestore 'users' collection so Firestore collection is complete
+        if (!firestoreIds.has(id)) {
+          setDoc(doc(db, 'users', id), {
+            ...data,
+            uid: id,
+            id,
+            name: merged.name,
+            email: merged.email,
+            phone: merged.phone || null,
+            role: merged.role,
+            status: merged.status,
+            createdAt: merged.createdAt || Date.now(),
+            updatedAt: Date.now()
+          }, { merge: true }).catch(() => {});
+        }
       });
 
       // 2. Fetch from RTDB 'resellers' to include any resellers not in users

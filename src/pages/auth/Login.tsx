@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, getDocs, collection, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { rtdbGet, rtdbSet } from '../../lib/rtdb';
 import { useAuth } from '../../context/AuthContext';
@@ -51,8 +51,13 @@ export default function Login() {
 
   const syncUserProfile = async (user: any, loginEmail: string) => {
     try {
-      const existing = await rtdbGet<any>(`users/${user.uid}`);
-      if (!existing) {
+      const [fsSnap, rtdbExisting] = await Promise.all([
+        getDoc(doc(db, 'users', user.uid)).catch(() => null),
+        rtdbGet<any>(`users/${user.uid}`).catch(() => null)
+      ]);
+      const fsExisting = fsSnap && fsSnap.exists() ? fsSnap.data() : null;
+
+      if (!fsExisting && !rtdbExisting) {
         const fallbackName = user.displayName || user.email?.split('@')[0] || 'RJ WORLD BD User';
         const now = Date.now();
         const newProfile = {
@@ -76,9 +81,21 @@ export default function Login() {
           console.warn('Firestore user profile sync on login notice:', fsErr);
         }
         await rtdbSet(`users/${user.uid}`, newProfile);
+      } else if (!fsExisting && rtdbExisting) {
+        try {
+          await setDoc(doc(db, 'users', user.uid), {
+            ...rtdbExisting,
+            uid: user.uid,
+            id: user.uid,
+            status: rtdbExisting.status || 'active',
+            updatedAt: Date.now(),
+          }, { merge: true });
+        } catch (fsErr) {
+          console.warn('Firestore user sync notice:', fsErr);
+        }
       }
     } catch (rtdbErr: any) {
-      console.warn('RTDB user profile sync error on login:', rtdbErr);
+      console.warn('User profile sync error on login:', rtdbErr);
     }
   };
 
@@ -94,21 +111,36 @@ export default function Login() {
     try {
       let resolvedEmail = inputVal;
 
-      // If user typed a phone number instead of email, resolve it from RTDB
+      // If user typed a phone number instead of email, resolve it from Firestore 'users' or RTDB 'users'
       if (!inputVal.includes('@')) {
         const cleanPhone = inputVal.replace(/[^\d+]/g, '');
-        const allUsers = await rtdbGet<Record<string, any>>('users').catch(() => null);
         let foundEmail = '';
-        if (allUsers) {
-          for (const u of Object.values(allUsers) as any[]) {
-            if (u && (u.phone === inputVal || u.phone === cleanPhone || (u.phone && cleanPhone.endsWith(u.phone.replace(/^0+/, ''))))) {
-              if (u.email) {
-                foundEmail = u.email;
-                break;
+
+        try {
+          const fsUsersSnap = await getDocs(collection(db, 'users'));
+          fsUsersSnap.forEach((docSnap) => {
+            if (foundEmail) return;
+            const u = docSnap.data();
+            if (u && (u.phone === inputVal || u.phone === cleanPhone || (u.phone && cleanPhone.endsWith(String(u.phone).replace(/^0+/, ''))))) {
+              if (u.email) foundEmail = u.email;
+            }
+          });
+        } catch {}
+
+        if (!foundEmail) {
+          const allUsers = await rtdbGet<Record<string, any>>('users').catch(() => null);
+          if (allUsers) {
+            for (const u of Object.values(allUsers) as any[]) {
+              if (u && (u.phone === inputVal || u.phone === cleanPhone || (u.phone && cleanPhone.endsWith(u.phone.replace(/^0+/, ''))))) {
+                if (u.email) {
+                  foundEmail = u.email;
+                  break;
+                }
               }
             }
           }
         }
+
         if (foundEmail) {
           resolvedEmail = foundEmail;
         } else {

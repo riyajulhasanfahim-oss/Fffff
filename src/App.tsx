@@ -148,7 +148,7 @@ import AdminResellerReturns from "./pages/admin/AdminResellerReturns";
 import ResellerSupport from "./pages/reseller/support/ResellerSupport";
 
 // Routes
-import { PrivateRoute, PublicRoute, VendorRoute, ResellerRoute, AdminRoute, UserPanelRoute } from "./components/ProtectedRoute";
+import { PrivateRoute, PublicRoute, VendorRoute, ResellerRoute, AdminRoute, UserPanelRoute, AccountStatusGuard } from "./components/ProtectedRoute";
 import SplashScreen from "./components/common/SplashScreen";
 
 export default function App() {
@@ -168,6 +168,7 @@ export default function App() {
           <Router>
             <ScrollToTop />
             <Toaster position="top-right" />
+          <AccountStatusGuard>
           <ShopDomainWrapper>
           <Routes>
             <Route path="/" element={<RootRoute />} />
@@ -431,6 +432,7 @@ export default function App() {
         </Routes>
         <BottomNavigation />
           </ShopDomainWrapper>
+          </AccountStatusGuard>
       </Router>
       </WishlistProvider>
       </CartProvider>

@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { initializeFirestore, getFirestore, memoryLocalCache } from "firebase/firestore";
+import { initializeFirestore, getFirestore, memoryLocalCache, doc, getDocFromServer } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getDatabase } from "firebase/database";
 import { getAnalytics, isSupported } from "firebase/analytics";
@@ -14,18 +14,18 @@ const resolveAuthDomain = () => {
       return 'rjworldbd.com';
     }
   }
-  return config.authDomain;
+  return config.authDomain || "gen-lang-client-0902472299.firebaseapp.com";
 };
 
-// Firebase configuration dynamically loaded from firebase-applet-config.json
+// Firebase configuration connected to gen-lang-client-0902472299
 export const firebaseConfig = {
-  apiKey: config.apiKey,
+  apiKey: config.apiKey || "AIzaSyBRVKTyumBDPcXwbOOQ4Qg5QI62gwtSciQ",
   authDomain: resolveAuthDomain(),
-  databaseURL: (config as any).databaseURL || `https://${config.projectId}-default-rtdb.firebaseio.com`,
-  projectId: config.projectId,
-  storageBucket: config.storageBucket,
-  messagingSenderId: config.messagingSenderId,
-  appId: config.appId,
+  databaseURL: (config as any).databaseURL || "https://gen-lang-client-0902472299-default-rtdb.firebaseio.com",
+  projectId: config.projectId || "gen-lang-client-0902472299",
+  storageBucket: config.storageBucket || "gen-lang-client-0902472299.firebasestorage.app",
+  messagingSenderId: config.messagingSenderId || "1071719868207",
+  appId: config.appId || "1:1071719868207:web:a76607986f5edf8adae3da",
   measurementId: (config as any).measurementId || ""
 };
 
@@ -58,6 +58,19 @@ export const db = firestoreInstance;
 export const storage = getStorage(app);
 export const rtdb = getDatabase(app, firebaseConfig.databaseURL);
 export const RTDB_BASE_URL = (firebaseConfig.databaseURL ? firebaseConfig.databaseURL.replace(/\/$/, '') : `https://${firebaseConfig.projectId}-default-rtdb.firebaseio.com`);
+
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Please check your Firebase configuration.");
+    }
+  }
+}
+if (typeof window !== "undefined") {
+  testConnection();
+}
 
 let analytics: any = null;
 if (typeof window !== "undefined") {

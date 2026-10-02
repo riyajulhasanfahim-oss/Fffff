@@ -4,6 +4,8 @@ import Footer from '../../components/layout/Footer';
 import { Settings, ArrowLeft, User, Phone, Globe, Camera, Mail, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { db } from '../../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import { rtdbUpdate } from '../../lib/rtdb';
 import { updateProfile } from 'firebase/auth';
 import toast from 'react-hot-toast';
@@ -45,13 +47,18 @@ export default function SettingsPage() {
     if (!user) return;
     try {
       setLoading(true);
-      await rtdbUpdate(`users/${user.uid}`, {
+      const updatePayload = {
         name: formData.name.trim(),
+        displayName: formData.name.trim(),
         phone: formData.phone.trim(),
         language: formData.language,
         photo: formData.photo || null,
         updatedAt: Date.now()
-      });
+      };
+      await Promise.allSettled([
+        setDoc(doc(db, 'users', user.uid), updatePayload, { merge: true }),
+        rtdbUpdate(`users/${user.uid}`, updatePayload)
+      ]);
 
       try {
         await updateProfile(user, { 
@@ -76,10 +83,15 @@ export default function SettingsPage() {
     setFormData(prev => ({ ...prev, photo: url }));
     if (user) {
       try {
-        await rtdbUpdate(`users/${user.uid}`, { 
+        const photoPayload = { 
           photo: url,
+          photoURL: url,
           updatedAt: Date.now()
-        });
+        };
+        await Promise.allSettled([
+          setDoc(doc(db, 'users', user.uid), photoPayload, { merge: true }),
+          rtdbUpdate(`users/${user.uid}`, photoPayload)
+        ]);
         await updateProfile(user, { photoURL: url });
         await refreshUserData();
         toast.success('Profile photo updated!');
