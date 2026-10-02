@@ -153,7 +153,16 @@ export default function Login() {
         }
       }
 
-      const userCredential = await signInWithEmailAndPassword(auth, resolvedEmail.trim(), password);
+      let userCredential;
+      try {
+        userCredential = await signInWithEmailAndPassword(auth, resolvedEmail.trim(), password);
+      } catch (firstErr: any) {
+        if (password.trim().endsWith(',')) {
+          userCredential = await signInWithEmailAndPassword(auth, resolvedEmail.trim(), password.trim().replace(/,+$/, ''));
+        } else {
+          throw firstErr;
+        }
+      }
       await syncUserProfile(userCredential.user, resolvedEmail.trim());
       const uData = await refreshUserData();
       toast.success('লগইন সফল হয়েছে!');

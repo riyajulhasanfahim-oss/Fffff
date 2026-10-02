@@ -40,6 +40,7 @@ import {
   getAuthenticatedVendorIdsAsync,
   checkIsAdminUser,
   isOrderOwnedByVendor,
+  pickMoreAdvancedStatus,
   type VendorWalletBalances,
   type ResellerOrderEligibilityResult
 } from '../../../services/vendorResellerOrderService';
@@ -587,8 +588,30 @@ export default function OrderDetails() {
         isOnlyDeliveryChargeAdvance: vData?.isOnlyDeliveryChargeAdvance ?? breakdown.isOnlyDeliveryChargeAdvance ?? mData?.isOnlyDeliveryChargeAdvance,
         paymentMethod: vData?.paymentMethod || mData?.paymentMethod || rData?.paymentMethod || 'Cash on Delivery',
         paymentStatus: vData?.paymentStatus || mData?.paymentStatus || 'Pending',
-        status: isDelivered ? 'Delivered' : (vData?.status || mData?.status || rData?.orderStatus || 'Pending'),
-        vendorStatus: isDelivered ? 'Delivered' : (vData?.vendorStatus || mData?.vendorStatus || vData?.status || mData?.status || 'Pending'),
+        status: isDelivered
+          ? 'Delivered'
+          : pickMoreAdvancedStatus(
+              vData?.status,
+              mData?.status || rData?.orderStatus,
+              vData?.updatedAt,
+              mData?.updatedAt
+            ),
+        vendorStatus: isDelivered
+          ? 'Delivered'
+          : pickMoreAdvancedStatus(
+              vData?.vendorStatus || vData?.status,
+              mData?.vendorStatus || mData?.status || rData?.orderStatus,
+              vData?.updatedAt,
+              mData?.updatedAt
+            ),
+        vendorOrderStatus:
+          vData?.vendorOrderStatus === 'CONFIRMED' || mData?.vendorOrderStatus === 'CONFIRMED' || rData?.vendorOrderStatus === 'CONFIRMED'
+            ? 'CONFIRMED'
+            : (vData?.vendorOrderStatus || mData?.vendorOrderStatus || rData?.vendorOrderStatus || undefined),
+        profitStatus:
+          vData?.profitStatus === 'LOCKED' || mData?.profitStatus === 'LOCKED' || rData?.profitStatus === 'LOCKED'
+            ? 'LOCKED'
+            : (vData?.profitStatus || mData?.profitStatus || rData?.profitStatus || undefined),
         acceptedAt: vData?.acceptedAt || mData?.acceptedAt,
         shippedAt: vData?.shippedAt || mData?.shippedAt,
         inTransitAt: vData?.inTransitAt || mData?.inTransitAt,
@@ -795,6 +818,14 @@ export default function OrderDetails() {
       }
 
       toast.success(res.message || 'অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে!');
+      setOrder((prev: any) => prev ? {
+        ...prev,
+        status: 'Accepted',
+        vendorStatus: 'Accepted',
+        vendorOrderStatus: 'CONFIRMED',
+        profitStatus: 'LOCKED',
+        acceptedAt: Date.now()
+      } : prev);
       await refreshWalletAndOrder();
       setShowCourierModal(true);
       try {
@@ -1265,37 +1296,42 @@ export default function OrderDetails() {
 
     setUpdating(true);
     try {
+      const now = Date.now();
       const updateData: any = {
         status: targetStatus,
-        updatedAt: Date.now()
+        vendorStatus: targetStatus,
+        updatedAt: now
       };
       if (targetStatus === 'Accepted') {
-        updateData.acceptedAt = Date.now();
+        updateData.acceptedAt = now;
+        updateData.vendorOrderStatus = 'CONFIRMED';
       }
 
-      // Update vendor_orders in RTDB
-      const vendorDocId = order.id || `${order.mainOrderId || order.orderId}_${user?.uid}`;
+      const mainOrderId = order.mainOrderId || order.orderId || order.id;
+      const pureId = (String(mainOrderId).includes('_') ? String(mainOrderId).split('_')[0] : String(mainOrderId)).trim();
+      const targetVendorId = order.vendorId || user?.uid;
+      const vendorDocId = String(order.id || '').includes('_')
+        ? String(order.id)
+        : `${pureId}_${targetVendorId}`;
+
+      // Update vendor_orders in RTDB using canonical orderId_vendorId document key
       await rtdbUpdate(`vendor_orders/${vendorDocId}`, updateData);
-      if (order.id && order.id !== vendorDocId) {
+      if (order.id && String(order.id).includes('_') && order.id !== vendorDocId) {
         await rtdbUpdate(`vendor_orders/${order.id}`, updateData).catch(() => {});
       }
 
       // Update main orders collection for Customer's My Orders
-      const mainOrderId = order.mainOrderId || order.orderId || order.id;
-      const pureId = (String(mainOrderId).includes('_') ? String(mainOrderId).split('_')[0] : String(mainOrderId)).trim();
       try {
-        await rtdbUpdate(`orders/${mainOrderId}`, {
+        await rtdbUpdate(`orders/${pureId}`, {
+          ...updateData,
           status: targetStatus,
-          vendorStatus: targetStatus,
-          acceptedAt: targetStatus === 'Accepted' ? Date.now() : undefined,
-          updatedAt: Date.now()
+          vendorStatus: targetStatus
         });
-        if (pureId && pureId !== mainOrderId) {
-          await rtdbUpdate(`orders/${pureId}`, {
+        if (mainOrderId !== pureId && !String(mainOrderId).includes('_')) {
+          await rtdbUpdate(`orders/${mainOrderId}`, {
+            ...updateData,
             status: targetStatus,
-            vendorStatus: targetStatus,
-            acceptedAt: targetStatus === 'Accepted' ? Date.now() : undefined,
-            updatedAt: Date.now()
+            vendorStatus: targetStatus
           }).catch(() => {});
         }
       } catch (err) {
@@ -1304,13 +1340,13 @@ export default function OrderDetails() {
 
       // Add Log
       await rtdbPush('order_status_logs', {
-        orderId: order.id,
-        mainOrderId: mainOrderId,
+        orderId: pureId,
+        mainOrderId: pureId,
         vendorId: user?.uid,
         oldStatus: order.status || 'Pending',
         newStatus: targetStatus,
         note: targetStatus === 'Accepted' ? 'Order accepted by vendor. Awaiting courier tracking link.' : 'Order updated by vendor.',
-        timestamp: Date.now()
+        timestamp: now
       });
 
       // Notify Customer
@@ -1318,18 +1354,25 @@ export default function OrderDetails() {
         await rtdbPush('vendor_notifications', {
           userId: order.customerId, 
           title: `Order Status Updated: ${targetStatus}`,
-          message: `Your order #${order.orderId?.substring(0,8)} is now ${targetStatus}.`,
+          message: `Your order #${pureId.substring(0,8)} is now ${targetStatus}.`,
           read: false,
           type: 'order_update',
-          timestamp: Date.now(),
-          link: `/orders/${order.id}`
+          timestamp: now,
+          link: `/orders/${pureId}`
         });
       } catch (e) {
         console.warn('Error adding notification in RTDB', e);
       }
 
       if (targetStatus === 'Accepted') {
-        toast.success(`অর্ডার #${order.orderId?.substring(0, 8)} গ্রহণ করা হয়েছে!`);
+        setOrder((prev: any) => prev ? {
+          ...prev,
+          status: 'Accepted',
+          vendorStatus: 'Accepted',
+          vendorOrderStatus: 'CONFIRMED',
+          acceptedAt: now
+        } : prev);
+        toast.success(`অর্ডার #${pureId.substring(0, 8)} গ্রহণ করা হয়েছে!`);
         await fetchOrderDetails();
         // Immediately open existing Courier Tracking modal as per Requirement 2
         setShowCourierModal(true);

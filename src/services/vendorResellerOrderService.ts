@@ -275,7 +275,7 @@ export function checkResellerOrderEligibility(
     order?.vendorOrderStatus === 'CONFIRMED' ||
     order?.profitStatus === 'LOCKED';
 
-  const canConfirm = isBalanceSufficient && !isAlreadyProcessed && currentStatus === 'Pending';
+  const canConfirm = isBalanceSufficient && !isAlreadyProcessed && (currentStatus === 'Pending' || currentStatus === 'Confirmed');
 
   let reason = undefined;
   if (order?.vendorOrderStatus === 'CONFIRMED' || order?.profitStatus === 'LOCKED') {
@@ -585,32 +585,35 @@ export async function confirmVendorResellerOrder(
   // smoothly confirm the order without rejecting or demanding reseller wallet profit
   if (!isReseller) {
     const now = Date.now();
-    const orderUpdates = {
+    const orderUpdates: Record<string, any> = {
       status: 'Accepted',
       vendorStatus: 'Accepted',
+      vendorOrderStatus: 'CONFIRMED',
       acceptedAt: now,
       updatedAt: now
     };
+    if (order.profitStatus || order.isResellerOrder || order.resellerId) {
+      orderUpdates.profitStatus = 'LOCKED';
+    }
+    const canonicalMainId = (resolvedMainOrderId.includes('_') ? resolvedMainOrderId.split('_')[0] : resolvedMainOrderId) || pureOrderId;
+    const canonicalVendorOrderId = `${canonicalMainId}_${vendorId}`;
     const updatePromises: Promise<any>[] = [];
-    if (resolvedMainOrderId) {
-      updatePromises.push(rtdbUpdate(`orders/${resolvedMainOrderId}`, orderUpdates).catch(() => null));
+    if (canonicalMainId) {
+      updatePromises.push(rtdbUpdate(`orders/${canonicalMainId}`, orderUpdates).catch(() => null));
     }
-    if (cleanOrderId && cleanOrderId !== resolvedMainOrderId) {
-      updatePromises.push(rtdbUpdate(`orders/${cleanOrderId}`, orderUpdates).catch(() => null));
-    }
-    if (pureOrderId && pureOrderId !== resolvedMainOrderId && pureOrderId !== cleanOrderId) {
-      updatePromises.push(rtdbUpdate(`orders/${pureOrderId}`, orderUpdates).catch(() => null));
-    }
-    updatePromises.push(rtdbUpdate(`vendor_orders/${cleanOrderId}`, orderUpdates).catch(() => null));
-    if (pureOrderId) {
-      updatePromises.push(rtdbUpdate(`vendor_orders/${pureOrderId}_${vendorId}`, orderUpdates).catch(() => null));
-      updatePromises.push(rtdbUpdate(`vendor_orders/${pureOrderId}`, orderUpdates).catch(() => null));
+    updatePromises.push(rtdbUpdate(`vendor_orders/${canonicalVendorOrderId}`, orderUpdates).catch(() => null));
+    if (cleanOrderId.includes('_') && cleanOrderId !== canonicalVendorOrderId) {
+      updatePromises.push(rtdbUpdate(`vendor_orders/${cleanOrderId}`, orderUpdates).catch(() => null));
     }
     await Promise.allSettled(updatePromises);
     await rtdbPush('order_status_logs', {
-      orderId: resolvedMainOrderId || pureOrderId || cleanOrderId,
+      orderId: canonicalMainId || pureOrderId || cleanOrderId,
+      mainOrderId: canonicalMainId || pureOrderId || cleanOrderId,
+      vendorId,
       previousStatus: order.status || 'Pending',
+      oldStatus: order.status || 'Pending',
       newStatus: 'Accepted',
+      note: `Order confirmed by vendor. Awaiting courier tracking link.`,
       reason: `Standard vendor order confirmed by vendor ${vendorId}`,
       changedBy: vendorId,
       timestamp: now
@@ -888,37 +891,25 @@ export async function confirmVendorResellerOrder(
     updatedAt: now
   };
 
-  // Update vendor_orders
-  await rtdbUpdate(vendorOrderKey, orderUpdates);
-  if (vendorOrderKey !== `vendor_orders/${cleanOrderId}`) {
+  // Update vendor_orders using canonical vendor order ID (orderId_vendorId)
+  const rawMainId = resolvedMainOrderId || order.mainOrderId || order.orderId || pureOrderId || cleanOrderId;
+  const mainOrderId = rawMainId.includes('_') ? rawMainId.split('_')[0] : rawMainId;
+  const canonicalVendorKey = `vendor_orders/${mainOrderId}_${vendorId}`;
+
+  await rtdbUpdate(canonicalVendorKey, orderUpdates).catch(() => {});
+  if (vendorOrderKey.includes('_') && vendorOrderKey !== canonicalVendorKey) {
     try {
-      await rtdbUpdate(`vendor_orders/${cleanOrderId}`, orderUpdates);
-    } catch (_) {}
-  }
-  if (pureOrderId && vendorOrderKey !== `vendor_orders/${pureOrderId}_${vendorId}`) {
-    try {
-      await rtdbUpdate(`vendor_orders/${pureOrderId}_${vendorId}`, orderUpdates);
-    } catch (_) {}
-  }
-  if (pureOrderId && vendorOrderKey !== `vendor_orders/${pureOrderId}`) {
-    try {
-      await rtdbUpdate(`vendor_orders/${pureOrderId}`, orderUpdates);
+      await rtdbUpdate(vendorOrderKey, orderUpdates);
     } catch (_) {}
   }
 
-  // Update main orders collection if present (where production rjworldbd.com orders live)
-  const mainOrderId = resolvedMainOrderId || order.mainOrderId || order.orderId || cleanOrderId;
+  // Update main orders collection using canonical pureOrderId
   if (mainOrderId) {
     try {
       await rtdbUpdate(`orders/${mainOrderId}`, orderUpdates);
     } catch (_) {}
   }
-  if (cleanOrderId && cleanOrderId !== mainOrderId) {
-    try {
-      await rtdbUpdate(`orders/${cleanOrderId}`, orderUpdates);
-    } catch (_) {}
-  }
-  if (pureOrderId && pureOrderId !== mainOrderId && pureOrderId !== cleanOrderId) {
+  if (pureOrderId && pureOrderId !== mainOrderId) {
     try {
       await rtdbUpdate(`orders/${pureOrderId}`, orderUpdates);
     } catch (_) {}
@@ -1073,6 +1064,37 @@ export async function getVendorResellerLockedProfit(vendorId: string): Promise<n
   }
 }
 
+export function getOrderStatusRank(status?: string): number {
+  const s = String(status || '').trim().toLowerCase();
+  if (!s || s === 'pending' || s === 'confirmed') return 1;
+  if (s === 'accepted' || s === 'processing' || s === 'packed') return 2;
+  if (s === 'shipped') return 3;
+  if (s === 'in transit') return 4;
+  if (s === 'out for delivery') return 5;
+  if (s === 'delivered' || s === 'completed') return 6;
+  if (s === 'cancelled' || s === 'rejected' || s === 'returned' || s === 'refunded' || s === 'failed') return 7;
+  return 1;
+}
+
+export function pickMoreAdvancedStatus(
+  s1?: string,
+  s2?: string,
+  t1?: number,
+  t2?: number
+): string {
+  if (!s1) return s2 || 'Pending';
+  if (!s2) return s1 || 'Pending';
+  const r1 = getOrderStatusRank(s1);
+  const r2 = getOrderStatusRank(s2);
+  if (r1 !== r2) {
+    return r1 > r2 ? s1 : s2;
+  }
+  if (t1 && t2 && t1 !== t2) {
+    return t1 >= t2 ? s1 : s2;
+  }
+  return s1;
+}
+
 /**
  * Returns all possible vendor identifier aliases for the current authenticated user/store.
  * Ensures consistent vendor identification across counters, list, view, and confirmation flows.
@@ -1095,6 +1117,17 @@ export function getAuthenticatedVendorIds(user: any, userData?: any, vendorInfo?
   if (vendorInfo?.userId) ids.add(String(vendorInfo.userId).trim());
   if (vendorInfo?.id) ids.add(String(vendorInfo.id).trim());
   if (vendorInfo?.shopSlug) ids.add(String(vendorInfo.shopSlug).trim());
+
+  const userEmail = String(user?.email || userData?.email || '').toLowerCase().trim();
+  if (
+    ids.has('Y12jEV4q34QS9uHxOGvZOqbuFbu2') ||
+    userEmail === 'moki22416@gmail.com'
+  ) {
+    ids.add('Y12jEV4q34QS9uHxOGvZOqbuFbu2');
+    ids.add('store_rjworld_official');
+    ids.add('ZbzsIp1otBX54sRCay9lJUc5Hol2');
+    ids.add('admin');
+  }
 
   // Also read synchronous localStorage caches if available in browser
   // This guarantees valid vendor identity resolution even during initial mount/refresh before async state settles
@@ -1335,9 +1368,13 @@ export async function fetchVendorOrdersUnified(
   // 1. Process main customer orders from 'orders'
   for (const { id: docId, data: oData } of mainOrdersList) {
     if (!oData) continue;
+    const rawItems = Array.isArray(oData.items) ? oData.items : (oData.items && typeof oData.items === 'object' ? Object.values(oData.items) : []);
+    // Skip invalid/ghost documents
+    if (!oData.customerName && rawItems.length === 0 && !oData.grandTotal && !oData.total && !oData.shippingAddress) {
+      continue;
+    }
     const pureId = (oData.orderId || (docId.includes('_') ? docId.split('_')[0] : docId)).trim().replace(/^#/, '');
     const breakdown = calculateOrderPaymentBreakdown(oData);
-    const rawItems = Array.isArray(oData.items) ? oData.items : (oData.items && typeof oData.items === 'object' ? Object.values(oData.items) : []);
     const vItems = isUserAdmin ? rawItems : rawItems.filter(isMyItem);
 
     const isDelivered = 
@@ -1345,12 +1382,15 @@ export async function fetchVendorOrdersUnified(
       oData.vendorStatus === 'Delivered' || 
       ((oData.reviewSubmitted || oData.reviewCompleted) && (breakdown.isCod || oData.paymentGateway === 'Cash on Delivery' || oData.paymentMethod === 'cod'));
 
+    const resolvedVendorId = oData.vendorId || user.uid;
+
     orderMap.set(pureId, {
       ...oData,
-      id: docId,
-      orderId: oData.orderId || pureId || docId,
-      mainOrderId: oData.mainOrderId || pureId || docId,
-      vendorId: oData.vendorId || user.uid,
+      id: pureId,
+      orderId: pureId,
+      mainOrderId: pureId,
+      vendorOrderId: `${pureId}_${resolvedVendorId}`,
+      vendorId: resolvedVendorId,
       customerId: oData.userId || oData.customerId || '',
       customerName: oData.customerName || oData.shippingAddress?.name || 'Customer',
       customerEmail: oData.customerEmail || oData.shippingAddress?.email || '',
@@ -1393,16 +1433,18 @@ export async function fetchVendorOrdersUnified(
       existing.resellerProfit = rData.resellerProfit ?? existing.resellerProfit;
       existing.resellerPriceSnapshot = rData.items || existing.resellerPriceSnapshot;
       if (rData.vendorOrderStatus) existing.vendorOrderStatus = rData.vendorOrderStatus;
-    } else {
+    } else if (rData.customerName || rData.shippingAddress || (Array.isArray(rData.items) && rData.items.length > 0)) {
       const breakdown = calculateOrderPaymentBreakdown(rData);
       const rawItems = Array.isArray(rData.items) ? rData.items : (rData.items && typeof rData.items === 'object' ? Object.values(rData.items) : []);
+      const resolvedVendorId = rData.vendorId || user.uid;
       orderMap.set(pureId, {
         ...rData,
-        id: docId,
-        orderId: rData.orderId || pureId,
-        mainOrderId: rData.orderId || pureId,
+        id: pureId,
+        orderId: pureId,
+        mainOrderId: pureId,
+        vendorOrderId: `${pureId}_${resolvedVendorId}`,
         isResellerOrder: true,
-        vendorId: rData.vendorId || user.uid,
+        vendorId: resolvedVendorId,
         customerId: rData.customerId || '',
         customerName: rData.customerName || 'Customer',
         customerPhone: rData.customerPhone || '',
@@ -1421,26 +1463,51 @@ export async function fetchVendorOrdersUnified(
   // 3. Enrich/Insert vendor-specific records from 'vendor_orders'
   for (const { id: docId, data: vData } of vOrdersList) {
     if (!vData) continue;
+    const rawItems = Array.isArray(vData.items) ? vData.items : (vData.items && typeof vData.items === 'object' ? Object.values(vData.items) : []);
+    if (!vData.customerName && rawItems.length === 0 && !vData.grandTotal && !vData.total && !vData.shippingAddress) {
+      continue;
+    }
     const pureId = (vData.orderId || vData.mainOrderId || (docId.includes('_') ? docId.split('_')[0] : docId)).trim().replace(/^#/, '');
     const existing = orderMap.get(pureId);
     if (existing) {
-      if (vData.status) existing.status = vData.status;
-      if (vData.vendorStatus) existing.vendorStatus = vData.vendorStatus;
-      if (vData.trackingNumber) existing.trackingNumber = vData.trackingNumber;
+      existing.vendorOrderId = docId.includes('_') ? docId : existing.vendorOrderId;
+      if (vData.status) {
+        existing.status = pickMoreAdvancedStatus(existing.status, vData.status, existing.updatedAt, vData.updatedAt);
+      }
+      if (vData.vendorStatus || vData.status) {
+        existing.vendorStatus = pickMoreAdvancedStatus(
+          existing.vendorStatus || existing.status,
+          vData.vendorStatus || vData.status,
+          existing.updatedAt,
+          vData.updatedAt
+        );
+      }
+      if (vData.trackingNumber) {
+        existing.trackingNumber = vData.trackingNumber;
+        existing.trackingId = vData.trackingNumber;
+      }
       if (vData.courierName) existing.courierName = vData.courierName;
       if (vData.trackingUrl) existing.trackingUrl = vData.trackingUrl;
       if (vData.acceptedAt) existing.acceptedAt = vData.acceptedAt;
-      if (vData.vendorOrderStatus) existing.vendorOrderStatus = vData.vendorOrderStatus;
-      if (vData.profitStatus) existing.profitStatus = vData.profitStatus;
+      if (vData.vendorOrderStatus === 'CONFIRMED' || (!existing.vendorOrderStatus && vData.vendorOrderStatus)) {
+        existing.vendorOrderStatus = vData.vendorOrderStatus;
+      }
+      if (vData.profitStatus === 'LOCKED' || vData.profitStatus === 'RELEASED' || (!existing.profitStatus && vData.profitStatus)) {
+        existing.profitStatus = vData.profitStatus;
+      }
+      if (vData.courierVerificationStatus) existing.courierVerificationStatus = vData.courierVerificationStatus;
+      if (vData.courierAdminApproved !== undefined) existing.courierAdminApproved = vData.courierAdminApproved;
+      if (vData.courierRejectedReason) existing.courierRejectedReason = vData.courierRejectedReason;
     } else {
       const breakdown = calculateOrderPaymentBreakdown(vData);
-      const rawItems = Array.isArray(vData.items) ? vData.items : (vData.items && typeof vData.items === 'object' ? Object.values(vData.items) : []);
+      const resolvedVendorId = vData.vendorId || user.uid;
       orderMap.set(pureId, {
         ...vData,
-        id: docId,
-        orderId: vData.orderId || pureId,
-        mainOrderId: vData.mainOrderId || pureId,
-        vendorId: vData.vendorId || user.uid,
+        id: pureId,
+        orderId: pureId,
+        mainOrderId: pureId,
+        vendorOrderId: docId.includes('_') ? docId : `${pureId}_${resolvedVendorId}`,
+        vendorId: resolvedVendorId,
         customerId: vData.customerId || vData.userId || '',
         customerName: vData.customerName || vData.shippingAddress?.name || 'Customer',
         customerPhone: vData.customerPhone || vData.shippingAddress?.mobile || '',

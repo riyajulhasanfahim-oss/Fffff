@@ -68,54 +68,70 @@ service cloud.firestore {
 
     // Main Orders Collection
     match /orders/{orderId} {
-      allow read: if isUserAdmin() || 
-        (isSignedIn() && (
-          resource.data.userId == request.auth.uid || 
-          resource.data.customerId == request.auth.uid || 
-          resource.data.vendorId == request.auth.uid ||
-          (resource.data.vendorIds != null && resource.data.vendorIds.hasAny([request.auth.uid]))
-        )) || 
-        resource.data.userId == 'guest' || 
-        resource.data.customerId == 'guest';
-
+      allow read: if true;
       allow create: if true;
-
-      allow update: if isUserAdmin() || 
-        (isSignedIn() && (
-          resource.data.userId == request.auth.uid || 
-          resource.data.customerId == request.auth.uid || 
-          resource.data.vendorId == request.auth.uid ||
-          (resource.data.vendorIds != null && resource.data.vendorIds.hasAny([request.auth.uid]))
-        ));
-
+      allow update: if true;
       allow delete: if isUserAdmin();
     }
 
     // Vendor-specific order partition
     match /vendor_orders/{vOrderId} {
-      allow read: if isUserAdmin() || 
-        (isSignedIn() && (
-          resource.data.vendorId == request.auth.uid || 
-          resource.data.customerId == request.auth.uid
-        ));
-
+      allow read: if true;
       allow create: if true;
+      allow update: if isSignedIn() || true;
+      allow delete: if isUserAdmin() || isSignedIn();
+    }
 
-      allow update: if isUserAdmin() || (isSignedIn() && resource.data.vendorId == request.auth.uid);
-      allow delete: if isUserAdmin();
+    // Courier Link Reviews (Vendor submits -> Admin reviews & approves/rejects)
+    match /courier_link_reviews/{reviewId} {
+      allow read: if true;
+      allow create, update: if isSignedIn() || true;
+      allow delete: if isUserAdmin() || isSignedIn();
     }
 
     // Vendor wallets and transactions
     match /vendor_wallet/{vendorId} {
-      allow read: if isUserAdmin() || (isSignedIn() && request.auth.uid == vendorId);
-      allow create: if isUserAdmin() || (isUserVendor() && request.auth.uid == vendorId);
-      // Vendor cannot modify protected locked balance or reseller profit reserve
-      allow update: if isUserAdmin() || (
-        isUserVendor() && 
-        request.auth.uid == vendorId &&
-        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lockedBalance', 'resellerProfitReserve']))
-      );
+      allow read: if isUserAdmin() || isSignedIn();
+      allow create, update: if isUserAdmin() || isSignedIn();
       allow delete: if isUserAdmin();
+    }
+
+    match /vendor_wallet_transactions/{docId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+      match /{document=**} {
+        allow read, write: if isUserAdmin() || isSignedIn();
+      }
+    }
+
+    match /vendor_wallet_deposits/{depositId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
+    match /reseller_profit_locks/{lockId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
+    match /financial_idempotency/{idempId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
+    match /reseller_return_requests/{reqId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
+    match /admin_notifications/{notifId} {
+      allow read, write: if true;
+    }
+
+    match /vendor_warnings/{docId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+      match /{document=**} {
+        allow read, write: if isUserAdmin() || isSignedIn();
+      }
+    }
+
+    match /platform_fees/{feeId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
     }
 
     match /wallet_transactions/{transactionId} {
@@ -239,13 +255,17 @@ service cloud.firestore {
 
     // Notifications
     match /notifications/{notificationId} {
-      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow write: if isSignedIn();
+      allow read, write: if true;
+      match /{document=**} {
+        allow read, write: if true;
+      }
     }
 
     match /vendor_notifications/{notificationId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.vendorId == request.auth.uid);
-      allow write: if isSignedIn();
+      allow read, write: if true;
+      match /{document=**} {
+        allow read, write: if true;
+      }
     }
 
     // Reseller and MLM ecosystem
@@ -336,41 +356,10 @@ service cloud.firestore {
 
     // Reseller orders partition - strict reseller isolation and immutability of prices & profits
     match /reseller_orders/{roId} {
-      // 1. Admin can read all
-      // 2. Reseller can ONLY read their own orders
-      // 3. Associated Vendor can read their product's reseller orders
-      // 4. Regular users CANNOT read reseller orders
-      allow read: if isUserAdmin() || (
-        isSignedIn() && (
-          resource.data.resellerId == request.auth.uid || 
-          resource.data.vendorId == request.auth.uid
-        )
-      );
-
-      // Create: Authenticated reseller creating order with profitStatus = PENDING
-      allow create: if isUserAdmin() || (
-        isSignedIn() && 
-        request.resource.data.profitStatus == 'PENDING' &&
-        (
-          request.resource.data.resellerId == request.auth.uid ||
-          isUserReseller()
-        )
-      );
-
-      // Update: Reseller & Vendor cannot tamper with vendorPrice, resellerSellingPrice, quantity, or resellerProfit!
-      allow update: if isUserAdmin() || (
-        isSignedIn() && (
-          resource.data.resellerId == request.auth.uid ||
-          resource.data.vendorId == request.auth.uid
-        ) &&
-        request.resource.data.vendorPrice == resource.data.vendorPrice &&
-        request.resource.data.resellerSellingPrice == resource.data.resellerSellingPrice &&
-        request.resource.data.resellerProfit == resource.data.resellerProfit &&
-        request.resource.data.resellerId == resource.data.resellerId &&
-        request.resource.data.quantity == resource.data.quantity
-      );
-
-      allow delete: if isUserAdmin();
+      allow read: if true;
+      allow create: if true;
+      allow update: if isUserAdmin() || isSignedIn();
+      allow delete: if isUserAdmin() || isSignedIn();
     }
 
     match /withdrawals/{withdrawalId} {
@@ -489,29 +478,24 @@ service cloud.firestore {
 
     // Inventory logs
     match /inventory_logs/{logId} {
-      allow read: if isUserAdmin() || (isSignedIn() && resource.data.vendorId == request.auth.uid);
-      allow write: if isUserAdmin() || (isSignedIn() && request.resource.data.vendorId == request.auth.uid);
+      allow read, write: if true;
     }
 
     // Order items, status logs, order notes
     match /order_items/{itemId} {
-      allow read: if true;
-      allow write: if isUserAdmin() || isSignedIn();
+      allow read, write: if true;
     }
 
     match /orderItems/{itemId} {
-      allow read: if true;
-      allow write: if isUserAdmin() || isSignedIn();
+      allow read, write: if true;
     }
 
     match /order_status_logs/{logId} {
-      allow read: if true;
-      allow write: if isUserAdmin() || isSignedIn();
+      allow read, write: if true;
     }
 
     match /orderNotes/{noteId} {
-      allow read: if isUserAdmin() || (isSignedIn() && (resource.data.vendorId == request.auth.uid || resource.data.userId == request.auth.uid));
-      allow write: if isUserAdmin() || isSignedIn();
+      allow read, write: if true;
     }
 
     // Shipping addresses

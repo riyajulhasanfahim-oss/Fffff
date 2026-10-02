@@ -117,11 +117,15 @@ export async function submitVendorCourierLink(params: {
 
   const cleanOrderId = String(orderId).replace(/^#/, '').trim();
   const pureOrderId = cleanOrderId.includes('_') ? cleanOrderId.split('_')[0] : cleanOrderId;
-
+  const preliminaryVendorId = vendorId || order?.vendorId || '';
   // 1. Check if order already has a pending or verified tracking link to strictly enforce lock
-  const existingOrder = (await rtdbGet<any>(`orders/${cleanOrderId}`)) || (await rtdbGet<any>(`orders/${pureOrderId}`));
-  const existingVendorOrder = (await rtdbGet<any>(`vendor_orders/${cleanOrderId}`)) || (await rtdbGet<any>(`vendor_orders/${pureOrderId}`));
-  const existingResellerOrder = (await rtdbGet<any>(`reseller_orders/${cleanOrderId}`)) || (await rtdbGet<any>(`reseller_orders/${pureOrderId}`));
+  const existingOrder = (await rtdbGet<any>(`orders/${pureOrderId}`)) || (cleanOrderId !== pureOrderId ? await rtdbGet<any>(`orders/${cleanOrderId}`) : null);
+  const resolvedPreVendorId = preliminaryVendorId || existingOrder?.vendorId || '';
+  const vendorOrderDocId = cleanOrderId.includes('_')
+    ? cleanOrderId
+    : (resolvedPreVendorId ? `${pureOrderId}_${resolvedPreVendorId}` : cleanOrderId);
+  const existingVendorOrder = (await rtdbGet<any>(`vendor_orders/${vendorOrderDocId}`)) || (await rtdbGet<any>(`vendor_orders/${cleanOrderId}`));
+  const existingResellerOrder = (await rtdbGet<any>(`reseller_orders/${pureOrderId}`)) || (cleanOrderId !== pureOrderId ? await rtdbGet<any>(`reseller_orders/${cleanOrderId}`) : null);
 
   const existingStatus = existingOrder?.courierVerificationStatus || existingVendorOrder?.courierVerificationStatus;
   const isApproved = existingOrder?.courierAdminApproved || existingVendorOrder?.courierAdminApproved;
@@ -197,17 +201,27 @@ export async function submitVendorCourierLink(params: {
   const cleanCourier = courierName.trim();
   const cleanTrackingId = trackingId.trim();
 
-  const orderNum = order?.orderNumber || order?.id || cleanOrderId;
-  const customerName = order?.customerName || order?.shippingAddress?.name || order?.userName || order?.shippingAddress?.fullName || 'Customer';
-  const customerPhone = order?.customerPhone || order?.shippingAddress?.phone || order?.userPhone || '';
-  const district = order?.shippingAddress?.district || order?.district || order?.shippingAddress?.city || '';
-  const thana = order?.shippingAddress?.thana || order?.shippingAddress?.upazila || order?.thana || order?.shippingAddress?.subDistrict || '';
-  const area = order?.shippingAddress?.area || order?.area || order?.shippingAddress?.street || '';
-  const fullDeliveryAddress = order?.shippingAddress?.fullAddress || order?.shippingAddress?.address || order?.deliveryAddress || [area, thana, district].filter(Boolean).join(', ') || '';
-  const customerAddress = fullDeliveryAddress;
-  const totalAmount = Number(order?.total || order?.grandTotal || order?.amount || 0);
+  const fullOrder = {
+    ...(existingOrder || {}),
+    ...(existingVendorOrder || {}),
+    ...(order || {})
+  };
+  const resolvedVendorId = vendorId || fullOrder?.vendorId || '';
+  const finalVendorOrderDocId = cleanOrderId.includes('_')
+    ? cleanOrderId
+    : (resolvedVendorId ? `${pureOrderId}_${resolvedVendorId}` : pureOrderId);
 
-  const rawItems = Array.isArray(order?.items) ? order.items : [];
+  const orderNum = pureOrderId;
+  const customerName = fullOrder?.customerName || fullOrder?.shippingAddress?.name || fullOrder?.userName || fullOrder?.shippingAddress?.fullName || 'Customer';
+  const customerPhone = fullOrder?.customerPhone || fullOrder?.shippingAddress?.mobile || fullOrder?.shippingAddress?.phone || fullOrder?.userPhone || '';
+  const district = fullOrder?.shippingAddress?.district || fullOrder?.district || fullOrder?.shippingAddress?.city || '';
+  const thana = fullOrder?.shippingAddress?.thana || fullOrder?.shippingAddress?.upazila || fullOrder?.upazila || fullOrder?.thana || fullOrder?.shippingAddress?.subDistrict || '';
+  const area = fullOrder?.shippingAddress?.area || fullOrder?.area || fullOrder?.shippingAddress?.street || '';
+  const fullDeliveryAddress = fullOrder?.shippingAddress?.fullAddress || fullOrder?.shippingAddress?.address || fullOrder?.fullAddress || fullOrder?.deliveryAddress || [area, thana, district].filter(Boolean).join(', ') || '';
+  const customerAddress = fullDeliveryAddress;
+  const totalAmount = Number(fullOrder?.grandTotal || fullOrder?.total || fullOrder?.amount || 0);
+
+  const rawItems = Array.isArray(fullOrder?.items) ? fullOrder.items : [];
   const items: CourierReviewProductItem[] = rawItems.map((i: any) => ({
     id: i.id || i.productId || '',
     name: i.name || i.title || 'Product',
@@ -225,16 +239,16 @@ export async function submitVendorCourierLink(params: {
   const itemsSummary = items.map((i) => `${i.name || i.title || 'Product'} (x${i.quantity || 1})`).join(', ');
   const itemsCount = items.reduce((acc: number, curr) => acc + (Number(curr.quantity) || 1), 0) || 1;
 
-  // 1. Save / Update to RTDB courier_link_reviews/${cleanOrderId}
+  // 1. Save / Update canonical review record at courier_link_reviews/${pureOrderId}
   const reviewRecord: CourierLinkReviewItem = {
-    id: cleanOrderId,
-    orderId: cleanOrderId,
+    id: pureOrderId,
+    orderId: pureOrderId,
     orderNumber: orderNum,
-    vendorId: vendorId || order?.vendorId || '',
-    vendorName: order?.vendorName || order?.storeName || '',
-    vendorShopName: order?.shopName || order?.vendorShopName || order?.storeName || '',
-    vendorEmail: order?.vendorEmail || '',
-    vendorPhone: order?.vendorPhone || '',
+    vendorId: resolvedVendorId,
+    vendorName: fullOrder?.vendorName || fullOrder?.storeName || '',
+    vendorShopName: fullOrder?.shopName || fullOrder?.vendorShopName || fullOrder?.storeName || '',
+    vendorEmail: fullOrder?.vendorEmail || '',
+    vendorPhone: fullOrder?.vendorPhone || '',
     courierName: cleanCourier,
     trackingId: cleanTrackingId,
     trackingUrl: cleanUrl,
@@ -253,18 +267,9 @@ export async function submitVendorCourierLink(params: {
     submittedAt: now
   };
 
-  await rtdbSet(`courier_link_reviews/${cleanOrderId}`, reviewRecord);
-  if (cleanOrderId !== pureOrderId) {
-    await rtdbSet(`courier_link_reviews/${pureOrderId}`, {
-      ...reviewRecord,
-      id: pureOrderId,
-      orderId: pureOrderId,
-      orderNumber: pureOrderId
-    });
-  }
+  await rtdbSet(`courier_link_reviews/${pureOrderId}`, reviewRecord);
 
-  // 2. Update Order in RTDB (Both orders and vendor_orders collections)
-  // If order was Pending, mark Accepted and queue for Admin Review!
+  // 2. Update Order in Firestore & RTDB (Both orders/${pureOrderId} and vendor_orders/${finalVendorOrderDocId})
   const orderPendingPayload: any = {
     status: 'Accepted',
     vendorStatus: 'Accepted',
@@ -280,28 +285,23 @@ export async function submitVendorCourierLink(params: {
     updatedAt: now
   };
 
-  if (!order?.acceptedAt) {
+  if (!fullOrder?.acceptedAt) {
     orderPendingPayload.acceptedAt = now;
   }
 
   const pendingUpdates: Promise<any>[] = [
-    rtdbUpdate(`orders/${cleanOrderId}`, orderPendingPayload),
-    rtdbUpdate(`vendor_orders/${cleanOrderId}`, orderPendingPayload),
+    rtdbUpdate(`orders/${pureOrderId}`, orderPendingPayload),
+    rtdbUpdate(`vendor_orders/${finalVendorOrderDocId}`, orderPendingPayload),
     rtdbPush('order_status_logs', {
-      orderId: cleanOrderId,
+      orderId: pureOrderId,
       mainOrderId: pureOrderId,
-      vendorId: vendorId || order?.vendorId,
-      oldStatus: order?.status || 'Accepted',
+      vendorId: resolvedVendorId,
+      oldStatus: fullOrder?.status || 'Accepted',
       newStatus: 'Accepted',
       note: `কুরিয়ার ট্র্যাকিং লিংক জমা দেওয়া হয়েছে (${cleanCourier} - ${cleanTrackingId})। অ্যাডমিন পর্যালোচনায় রয়েছে (Pending Admin Review)।`,
       timestamp: now
     })
   ];
-
-  if (cleanOrderId !== pureOrderId) {
-    pendingUpdates.push(rtdbUpdate(`orders/${pureOrderId}`, orderPendingPayload));
-    pendingUpdates.push(rtdbUpdate(`vendor_orders/${pureOrderId}`, orderPendingPayload));
-  }
 
   await Promise.allSettled(pendingUpdates);
 
@@ -333,11 +333,98 @@ export async function fetchCourierLinkReviews(
   filterStatus?: 'all' | 'pending' | 'approved' | 'rejected'
 ): Promise<CourierLinkReviewItem[]> {
   try {
-    const list = await rtdbList<CourierLinkReviewItem>('courier_link_reviews');
-    let items = list.map(item => ({
-      ...item.data,
-      id: item.id || item.data?.orderId
-    }));
+    const [list, ordersList] = await Promise.all([
+      rtdbList<CourierLinkReviewItem>('courier_link_reviews').catch(() => []),
+      rtdbList<any>('orders').catch(() => [])
+    ]);
+
+    const reviewMap = new Map<string, CourierLinkReviewItem>();
+
+    // 1. Add explicit courier_link_reviews records deduplicated by pureOrderId
+    for (const item of list) {
+      if (!item?.data) continue;
+      const rawId = String(item.data.orderId || item.id || '').replace(/^#/, '').trim();
+      const pureId = rawId.includes('_') ? rawId.split('_')[0] : rawId;
+      if (!pureId) continue;
+      const existing = reviewMap.get(pureId);
+      if (!existing || (item.data.updatedAt || item.data.submittedAt || 0) >= (existing.submittedAt || 0)) {
+        reviewMap.set(pureId, {
+          ...item.data,
+          id: pureId,
+          orderId: pureId,
+          orderNumber: pureId
+        });
+      }
+    }
+
+    // 2. Also synthesize from 'orders' if any order has a submitted courier link not yet in reviewMap
+    for (const { id: oId, data: oData } of ordersList) {
+      if (!oData || oId.includes('_')) continue;
+      const hasCourierSubmission = Boolean(
+        oData.courierVerificationStatus === 'Pending — Admin Review' ||
+        oData.courierVerificationStatus === 'Verified' ||
+        oData.courierVerificationStatus === 'Rejected' ||
+        (oData.trackingUrl && oData.courierName)
+      );
+      if (!hasCourierSubmission) continue;
+
+      const pureId = String(oData.orderId || oId).replace(/^#/, '').trim();
+      if (!reviewMap.has(pureId)) {
+        const rawItems = Array.isArray(oData.items) ? oData.items : [];
+        const mappedItems: CourierReviewProductItem[] = rawItems.map((i: any) => ({
+          id: i.id || i.productId || '',
+          name: i.name || i.title || 'Product',
+          title: i.title || i.name || 'Product',
+          image: i.image || i.thumbnail || i.images?.[0] || '',
+          thumbnail: i.thumbnail || i.image || '',
+          quantity: Number(i.quantity) || 1,
+          price: Number(i.price) || 0,
+          color: i.color || i.selectedColor || '',
+          size: i.size || i.selectedSize || '',
+          variant: i.variant || i.variation || '',
+          sku: i.sku || ''
+        }));
+        const district = oData.shippingAddress?.district || oData.district || '';
+        const thana = oData.shippingAddress?.upazila || oData.shippingAddress?.thana || oData.upazila || '';
+        const area = oData.shippingAddress?.area || oData.area || '';
+        const fullAddr = oData.shippingAddress?.fullAddress || oData.fullAddress || [area, thana, district].filter(Boolean).join(', ');
+
+        reviewMap.set(pureId, {
+          id: pureId,
+          orderId: pureId,
+          orderNumber: pureId,
+          vendorId: oData.vendorId || '',
+          vendorName: oData.vendorName || oData.storeName || '',
+          vendorShopName: oData.shopName || oData.storeName || '',
+          courierName: oData.courierName || '',
+          trackingId: oData.trackingNumber || oData.trackingId || '',
+          trackingUrl: oData.trackingUrl || '',
+          status: oData.courierVerificationStatus === 'Verified' || oData.courierAdminApproved
+            ? 'approved'
+            : oData.courierVerificationStatus === 'Rejected'
+            ? 'rejected'
+            : 'pending',
+          customerName: oData.customerName || oData.shippingAddress?.name || 'Customer',
+          customerPhone: oData.customerPhone || oData.shippingAddress?.mobile || '',
+          district,
+          thana,
+          area,
+          fullDeliveryAddress: fullAddr,
+          customerAddress: fullAddr,
+          totalAmount: Number(oData.grandTotal || oData.total || 0),
+          items: mappedItems,
+          itemsSummary: mappedItems.map(i => `${i.name || i.title} (x${i.quantity})`).join(', '),
+          itemsCount: mappedItems.reduce((acc, c) => acc + (c.quantity || 1), 0) || 1,
+          submittedAt: oData.courierSubmittedAt || oData.updatedAt || oData.createdAt || Date.now(),
+          reviewedAt: oData.courierAdminApprovedAt || oData.courierAdminRejectedAt,
+          reviewedBy: oData.courierAdminApprovedBy,
+          reviewNotes: oData.courierAdminNotes,
+          rejectedReason: oData.courierRejectedReason
+        });
+      }
+    }
+
+    let items = Array.from(reviewMap.values());
 
     if (filterStatus && filterStatus !== 'all') {
       items = items.filter(item => item.status === filterStatus);
@@ -475,21 +562,33 @@ export async function fetchFullReviewDetails(orderId: string): Promise<CourierLi
 export function subscribeToCourierReviews(
   callback: (items: CourierLinkReviewItem[], pendingCount: number) => void
 ): () => void {
-  return rtdbSubscribe<Record<string, CourierLinkReviewItem>>('courier_link_reviews', (data) => {
-    if (!data) {
-      callback([], 0);
-      return;
-    }
-    const items: CourierLinkReviewItem[] = Object.keys(data).map(key => ({
-      ...data[key],
-      id: key,
-      orderId: data[key]?.orderId || key
-    }));
+  let timer: any = null;
+  const triggerRefresh = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(async () => {
+      try {
+        const items = await fetchCourierLinkReviews();
+        const pendingCount = items.filter(i => i.status === 'pending').length;
+        callback(items, pendingCount);
+      } catch (err) {
+        console.warn('Error refreshing courier reviews in subscription:', err);
+      }
+    }, 150);
+  };
 
-    items.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
-    const pendingCount = items.filter(i => i.status === 'pending').length;
-    callback(items, pendingCount);
+  const unsubReviews = rtdbSubscribe<Record<string, CourierLinkReviewItem>>('courier_link_reviews', () => {
+    triggerRefresh();
   });
+
+  const unsubOrders = rtdbSubscribe<Record<string, any>>('orders', () => {
+    triggerRefresh();
+  });
+
+  return () => {
+    if (timer) clearTimeout(timer);
+    unsubReviews();
+    unsubOrders();
+  };
 }
 
 /**
@@ -590,12 +689,17 @@ export async function adminApproveCourierReview(params: {
     updatedAt: now
   };
 
+  const resolvedVendorId = review?.vendorId || order?.vendorId || '';
+  const vendorOrderDocId = cleanId.includes('_')
+    ? cleanId
+    : (resolvedVendorId ? `${pureOrderId}_${resolvedVendorId}` : pureOrderId);
+
   const updatePromises: Promise<any>[] = [
-    rtdbUpdate(`orders/${cleanId}`, approvePayload),
-    rtdbUpdate(`vendor_orders/${cleanId}`, approvePayload),
-    rtdbUpdate(`reseller_orders/${cleanId}`, approvePayload),
+    rtdbUpdate(`orders/${pureOrderId}`, approvePayload),
+    rtdbUpdate(`vendor_orders/${vendorOrderDocId}`, approvePayload),
+    rtdbUpdate(`reseller_orders/${pureOrderId}`, approvePayload),
     rtdbPush('order_status_logs', {
-      orderId: cleanId,
+      orderId: pureOrderId,
       mainOrderId: pureOrderId,
       oldStatus: order?.status || 'Accepted',
       newStatus: 'Shipped',
@@ -603,21 +707,6 @@ export async function adminApproveCourierReview(params: {
       timestamp: now
     })
   ];
-
-  if (cleanId !== pureOrderId) {
-    updatePromises.push(rtdbUpdate(`orders/${pureOrderId}`, approvePayload));
-    updatePromises.push(rtdbUpdate(`vendor_orders/${pureOrderId}`, approvePayload));
-    updatePromises.push(rtdbUpdate(`reseller_orders/${pureOrderId}`, approvePayload));
-  }
-
-  if (order?.orderId && order.orderId !== cleanId && order.orderId !== pureOrderId) {
-    updatePromises.push(rtdbUpdate(`orders/${order.orderId}`, approvePayload));
-    updatePromises.push(rtdbUpdate(`vendor_orders/${order.orderId}`, approvePayload));
-  }
-  if (review?.orderId && review.orderId !== cleanId && review.orderId !== pureOrderId) {
-    updatePromises.push(rtdbUpdate(`orders/${review.orderId}`, approvePayload));
-    updatePromises.push(rtdbUpdate(`vendor_orders/${review.orderId}`, approvePayload));
-  }
 
   await Promise.allSettled(updatePromises);
 
@@ -757,12 +846,16 @@ export async function adminRejectCourierReview(params: {
     updatedAt: now
   };
 
+  const vendorOrderDocId = cleanId.includes('_')
+    ? cleanId
+    : (vendorId ? `${pureOrderId}_${vendorId}` : pureOrderId);
+
   const rejectPromises: Promise<any>[] = [
-    rtdbUpdate(`orders/${cleanId}`, rejectPayload),
-    rtdbUpdate(`vendor_orders/${cleanId}`, rejectPayload),
-    rtdbUpdate(`reseller_orders/${cleanId}`, rejectPayload),
+    rtdbUpdate(`orders/${pureOrderId}`, rejectPayload),
+    rtdbUpdate(`vendor_orders/${vendorOrderDocId}`, rejectPayload),
+    rtdbUpdate(`reseller_orders/${pureOrderId}`, rejectPayload),
     rtdbPush('order_status_logs', {
-      orderId: cleanId,
+      orderId: pureOrderId,
       mainOrderId: pureOrderId,
       oldStatus: order?.status || 'Accepted',
       newStatus: 'Accepted',
@@ -770,12 +863,6 @@ export async function adminRejectCourierReview(params: {
       timestamp: now
     })
   ];
-
-  if (cleanId !== pureOrderId) {
-    rejectPromises.push(rtdbUpdate(`orders/${pureOrderId}`, rejectPayload));
-    rejectPromises.push(rtdbUpdate(`vendor_orders/${pureOrderId}`, rejectPayload));
-    rejectPromises.push(rtdbUpdate(`reseller_orders/${pureOrderId}`, rejectPayload));
-  }
 
   await Promise.allSettled(rejectPromises);
 

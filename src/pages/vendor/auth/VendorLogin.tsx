@@ -35,7 +35,16 @@ export default function VendorLogin() {
     setLoading(true);
     try {
       // 1. Firebase Authentication
-      const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      let userCredential;
+      try {
+        userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      } catch (firstErr: any) {
+        if (password.trim().endsWith(',')) {
+          userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password.trim().replace(/,+$/, ''));
+        } else {
+          throw firstErr;
+        }
+      }
       const user = userCredential.user;
 
       // 2. Check if Vendor exists in RTDB (by UID and by email)

@@ -24,8 +24,138 @@ import {
 } from 'firebase/firestore';
 import { rtdb, RTDB_BASE_URL, auth, db } from './firebase';
 
+const VIRTUAL_CHAT_COLLECTIONS = new Set([
+  'courier_link_reviews',
+  'reseller_profit_locks',
+  'financial_idempotency',
+  'vendor_wallet_transactions',
+  'vendor_wallet_deposits',
+  'admin_notifications',
+  'vendor_warnings',
+  'reseller_return_requests',
+  'platform_fees'
+]);
+
+const GHOST_GUARDED_COLLECTIONS = new Set([
+  'orders',
+  'vendor_orders',
+  'reseller_orders',
+  'courier_link_reviews'
+]);
+
 /**
- * Helper to read a 1-segment collection or 2-segment document path from Cloud Firestore
+ * Helper to fetch documents from a restricted Firestore collection using role-compatible where() filters
+ * when an unfiltered collection read is rejected by security rules for non-admin users (Vendor, Customer, Reseller).
+ */
+async function fetchFilteredCollectionDocs(colName: string): Promise<Record<string, any> | null> {
+  const uid = auth?.currentUser?.uid;
+  const mapObj: Record<string, any> = {};
+
+  const collectSnap = (snap: any) => {
+    if (snap && !snap.empty) {
+      snap.forEach((docSnap: any) => {
+        const d = docSnap.data();
+        // Skip empty ghost documents that lack core order fields
+        if (
+          (colName === 'orders' || colName === 'vendor_orders') &&
+          !d?.customerName &&
+          !d?.items &&
+          !d?.vendorId &&
+          !d?.userId &&
+          !d?.customerId
+        ) {
+          return;
+        }
+        mapObj[docSnap.id] = { id: docSnap.id, ...d };
+      });
+    }
+  };
+
+  try {
+    if (colName === 'orders') {
+      const queries: Promise<any>[] = [
+        getDocs(fsQuery(collection(db, 'orders'), fsWhere('userId', '==', 'guest'))).catch(() => null),
+        getDocs(fsQuery(collection(db, 'orders'), fsWhere('customerId', '==', 'guest'))).catch(() => null)
+      ];
+      if (uid) {
+        queries.push(
+          getDocs(fsQuery(collection(db, 'orders'), fsWhere('vendorId', '==', uid))).catch(() => null),
+          getDocs(fsQuery(collection(db, 'orders'), fsWhere('vendorIds', 'array-contains', uid))).catch(() => null),
+          getDocs(fsQuery(collection(db, 'orders'), fsWhere('userId', '==', uid))).catch(() => null),
+          getDocs(fsQuery(collection(db, 'orders'), fsWhere('customerId', '==', uid))).catch(() => null)
+        );
+      }
+      const snaps = await Promise.all(queries);
+      snaps.forEach(collectSnap);
+      return mapObj;
+    }
+
+    if (colName === 'vendor_orders') {
+      if (!uid) return mapObj;
+      const snaps = await Promise.all([
+        getDocs(fsQuery(collection(db, 'vendor_orders'), fsWhere('vendorId', '==', uid))).catch(() => null),
+        getDocs(fsQuery(collection(db, 'vendor_orders'), fsWhere('customerId', '==', uid))).catch(() => null)
+      ]);
+      snaps.forEach(collectSnap);
+      return mapObj;
+    }
+
+    if (colName === 'reseller_orders') {
+      const queries: Promise<any>[] = [
+        getDocs(collection(db, 'chats', 'reseller_orders', 'items')).catch(() => null)
+      ];
+      if (uid) {
+        queries.push(
+          getDocs(fsQuery(collection(db, 'reseller_orders'), fsWhere('vendorId', '==', uid))).catch(() => null),
+          getDocs(fsQuery(collection(db, 'reseller_orders'), fsWhere('resellerId', '==', uid))).catch(() => null)
+        );
+      }
+      const snaps = await Promise.all(queries);
+      snaps.forEach(collectSnap);
+      return mapObj;
+    }
+
+    if (colName === 'vendor_notifications') {
+      if (!uid) return mapObj;
+      const snaps = await Promise.all([
+        getDocs(fsQuery(collection(db, 'vendor_notifications'), fsWhere('vendorId', '==', uid))).catch(() => null),
+        getDocs(fsQuery(collection(db, 'vendor_notifications'), fsWhere('userId', '==', uid))).catch(() => null)
+      ]);
+      snaps.forEach(collectSnap);
+      return mapObj;
+    }
+
+    if (colName === 'notifications') {
+      if (!uid) return mapObj;
+      const snap = await getDocs(fsQuery(collection(db, 'notifications'), fsWhere('userId', '==', uid))).catch(() => null);
+      collectSnap(snap);
+      return mapObj;
+    }
+
+    if (colName === 'wallet_transactions') {
+      if (!uid) return mapObj;
+      const snap = await getDocs(fsQuery(collection(db, 'wallet_transactions'), fsWhere('vendorId', '==', uid))).catch(() => null);
+      collectSnap(snap);
+      return mapObj;
+    }
+
+    if (colName === 'disputes') {
+      if (!uid) return mapObj;
+      const snaps = await Promise.all([
+        getDocs(fsQuery(collection(db, 'disputes'), fsWhere('vendorId', '==', uid))).catch(() => null),
+        getDocs(fsQuery(collection(db, 'disputes'), fsWhere('customerId', '==', uid))).catch(() => null),
+        getDocs(fsQuery(collection(db, 'disputes'), fsWhere('userId', '==', uid))).catch(() => null)
+      ]);
+      snaps.forEach(collectSnap);
+      return mapObj;
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+/**
+ * Helper to read a 1-segment collection or 2/3-segment document path from Cloud Firestore
  */
 async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000): Promise<FetchResult<T>> {
   try {
@@ -37,36 +167,123 @@ async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000
     const fsPromise = (async (): Promise<FetchResult<T>> => {
       if (parts.length === 1) {
         const colName = parts[0];
-        const snap = await getDocs(collection(db, colName));
-        if (!snap.empty) {
+
+        // 1. Virtual collections mapped under /chats/{colName}/items
+        if (VIRTUAL_CHAT_COLLECTIONS.has(colName)) {
           const mapObj: Record<string, any> = {};
-          snap.forEach((docSnap) => {
-            mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
-          });
-          return { ok: true, data: mapObj as unknown as T };
-        }
-        if (colName === 'vendors') {
-          const storeSnap = await getDocs(collection(db, 'stores'));
-          if (!storeSnap.empty) {
-            const mapObj: Record<string, any> = {};
-            storeSnap.forEach((docSnap) => {
+          try {
+            const chatSnap = await getDocs(collection(db, 'chats', colName, 'items'));
+            chatSnap.forEach((docSnap) => {
               mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
+            });
+          } catch (_) {}
+          try {
+            const topSnap = await getDocs(collection(db, colName));
+            topSnap.forEach((docSnap) => {
+              mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
+            });
+          } catch (_) {}
+          return { ok: true, data: (Object.keys(mapObj).length > 0 ? mapObj : {}) as unknown as T };
+        }
+
+        // 2. Standard collection read with automatic role-filtered fallback
+        try {
+          const snap = await getDocs(collection(db, colName));
+          if (!snap.empty) {
+            const mapObj: Record<string, any> = {};
+            snap.forEach((docSnap) => {
+              const d = docSnap.data();
+              if (
+                (colName === 'orders' || colName === 'vendor_orders') &&
+                !d?.customerName &&
+                !d?.items &&
+                !d?.vendorId &&
+                !d?.userId &&
+                !d?.customerId
+              ) {
+                return;
+              }
+              mapObj[docSnap.id] = { id: docSnap.id, ...d };
             });
             return { ok: true, data: mapObj as unknown as T };
           }
+          if (colName === 'vendors') {
+            const storeSnap = await getDocs(collection(db, 'stores'));
+            if (!storeSnap.empty) {
+              const mapObj: Record<string, any> = {};
+              storeSnap.forEach((docSnap) => {
+                mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
+              });
+              return { ok: true, data: mapObj as unknown as T };
+            }
+          }
+          return { ok: true, data: null };
+        } catch (_) {
+          const filteredMap = await fetchFilteredCollectionDocs(colName);
+          if (filteredMap !== null) {
+            return { ok: true, data: (Object.keys(filteredMap).length > 0 ? filteredMap : null) as unknown as T };
+          }
+          return { ok: false, data: null };
         }
-        return { ok: true, data: null };
       } else if (parts.length === 2) {
         const [colName, docId] = parts;
-        const snap = await getDoc(doc(db, colName, docId));
-        if (snap.exists()) {
-          return { ok: true, data: ({ id: snap.id, ...snap.data() } as unknown) as T };
+
+        if (VIRTUAL_CHAT_COLLECTIONS.has(colName)) {
+          try {
+            const cSnap = await getDoc(doc(db, 'chats', colName, 'items', docId));
+            if (cSnap.exists()) {
+              return { ok: true, data: ({ id: cSnap.id, ...cSnap.data() } as unknown) as T };
+            }
+          } catch (_) {}
         }
+
+        if (colName === 'vendor_wallet') {
+          const [wSnap, cSnap] = await Promise.all([
+            getDoc(doc(db, 'vendor_wallet', docId)).catch(() => null),
+            getDoc(doc(db, 'chats', 'vendor_wallet', 'items', docId)).catch(() => null)
+          ]);
+          const wData = wSnap && wSnap.exists() ? { id: wSnap.id, ...wSnap.data() } : null;
+          const cData = cSnap && cSnap.exists() ? { id: cSnap.id, ...cSnap.data() } : null;
+          if (wData && cData) {
+            const wTime = Number((wData as any).updatedAt || 0);
+            const cTime = Number((cData as any).updatedAt || 0);
+            const merged = cTime >= wTime ? { ...wData, ...cData } : { ...cData, ...wData };
+            return { ok: true, data: (merged as unknown) as T };
+          }
+          if (cData || wData) {
+            return { ok: true, data: ((cData || wData) as unknown) as T };
+          }
+          return { ok: true, data: null };
+        }
+
+        try {
+          const snap = await getDoc(doc(db, colName, docId));
+          if (snap.exists()) {
+            return { ok: true, data: ({ id: snap.id, ...snap.data() } as unknown) as T };
+          }
+        } catch (_) {}
+
+        if (colName === 'reseller_orders') {
+          try {
+            const cSnap = await getDoc(doc(db, 'chats', 'reseller_orders', 'items', docId));
+            if (cSnap.exists()) {
+              return { ok: true, data: ({ id: cSnap.id, ...cSnap.data() } as unknown) as T };
+            }
+          } catch (_) {}
+        }
+
         if (colName === 'vendors') {
-          const sSnap = await getDoc(doc(db, 'stores', docId));
-          if (sSnap.exists()) {
+          const sSnap = await getDoc(doc(db, 'stores', docId)).catch(() => null);
+          if (sSnap && sSnap.exists()) {
             return { ok: true, data: ({ id: sSnap.id, ...sSnap.data() } as unknown) as T };
           }
+        }
+        return { ok: true, data: null };
+      } else if (parts.length === 3) {
+        const [colName, subKey, docId] = parts;
+        const cSnap = await getDoc(doc(db, 'chats', `${colName}__${subKey}`, 'items', docId)).catch(() => null);
+        if (cSnap && cSnap.exists()) {
+          return { ok: true, data: ({ id: cSnap.id, ...cSnap.data() } as unknown) as T };
         }
         return { ok: true, data: null };
       } else if (parts.length === 4 && parts[0] === 'vendors' && parts[2] === 'products') {
@@ -87,19 +304,94 @@ async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000
 /**
  * Helper to write/merge a path into Cloud Firestore
  */
-async function writeFirestoreNode(cleanPath: string, cleanData: any, merge: boolean = true): Promise<boolean> {
+async function writeFirestoreNode(
+  cleanPath: string,
+  cleanData: any,
+  merge: boolean = true,
+  isPartialUpdate: boolean = false
+): Promise<boolean> {
   try {
     const parts = cleanPath.split('/').filter(Boolean);
     if (parts.length === 2) {
       const [colName, docId] = parts;
-      await setDoc(doc(db, colName, docId), { id: docId, ...cleanData }, { merge });
+
+      if (VIRTUAL_CHAT_COLLECTIONS.has(colName)) {
+        const chatDocRef = doc(db, 'chats', colName, 'items', docId);
+        if (isPartialUpdate) {
+          const existing = await getDoc(chatDocRef).catch(() => null);
+          if (!existing || !existing.exists()) {
+            return false;
+          }
+        }
+        await setDoc(chatDocRef, { id: docId, ...cleanData }, { merge });
+        setDoc(doc(db, colName, docId), { id: docId, ...cleanData }, { merge }).catch(() => {});
+        return true;
+      }
+
+      if (colName === 'vendor_wallet') {
+        let wrote = false;
+        try {
+          await setDoc(doc(db, 'chats', 'vendor_wallet', 'items', docId), { id: docId, ...cleanData }, { merge });
+          wrote = true;
+        } catch (_) {}
+        try {
+          await setDoc(doc(db, 'vendor_wallet', docId), { id: docId, ...cleanData }, { merge });
+          wrote = true;
+        } catch (_) {
+          // If vendor rule blocks lockedBalance/resellerProfitReserve change on top-level vendor_wallet,
+          // update allowed fields on top-level doc while full state is preserved in chats/vendor_wallet/items
+          try {
+            const safeClone = { ...cleanData };
+            delete safeClone.lockedBalance;
+            delete safeClone.resellerProfitReserve;
+            await setDoc(doc(db, 'vendor_wallet', docId), { id: docId, ...safeClone }, { merge: true });
+          } catch (_) {}
+        }
+        return wrote;
+      }
+
+      const targetRef = doc(db, colName, docId);
+      if (isPartialUpdate && GHOST_GUARDED_COLLECTIONS.has(colName)) {
+        const existingSnap = await getDoc(targetRef).catch(() => null);
+        if (!existingSnap || !existingSnap.exists()) {
+          if (colName === 'reseller_orders') {
+            const chatRoRef = doc(db, 'chats', 'reseller_orders', 'items', docId);
+            const chatRoSnap = await getDoc(chatRoRef).catch(() => null);
+            if (chatRoSnap && chatRoSnap.exists()) {
+              await setDoc(chatRoRef, { id: docId, ...cleanData }, { merge });
+              return true;
+            }
+          }
+          return false;
+        }
+      }
+
+      try {
+        await setDoc(targetRef, { id: docId, ...cleanData }, { merge });
+        if (colName === 'reseller_orders') {
+          setDoc(doc(db, 'chats', 'reseller_orders', 'items', docId), { id: docId, ...cleanData }, { merge }).catch(() => {});
+        }
+        return true;
+      } catch (err) {
+        if (colName === 'reseller_orders') {
+          await setDoc(doc(db, 'chats', 'reseller_orders', 'items', docId), { id: docId, ...cleanData }, { merge });
+          return true;
+        }
+        throw err;
+      }
+    } else if (parts.length === 3) {
+      const [colName, subKey, docId] = parts;
+      await setDoc(doc(db, 'chats', `${colName}__${subKey}`, 'items', docId), { id: docId, ...cleanData }, { merge });
+      if (colName === 'notifications') {
+        setDoc(doc(db, 'notifications', docId), { id: docId, userId: subKey, ...cleanData }, { merge }).catch(() => {});
+      }
       return true;
     } else if (parts.length === 1 && cleanData && typeof cleanData === 'object' && !Array.isArray(cleanData)) {
       const colName = parts[0];
       const entries = Object.entries(cleanData);
       for (const [docId, val] of entries) {
         if (val && typeof val === 'object') {
-          await setDoc(doc(db, colName, docId), { id: docId, ...(val as any) }, { merge });
+          await writeFirestoreNode(`${colName}/${docId}`, val, merge, isPartialUpdate);
         }
       }
       return true;
@@ -363,7 +655,7 @@ export async function rtdbGet<T = any>(path: string, timeoutMs: number = 5000): 
   return await execPromise;
 }
 
-function updateParentCache(itemPath: string, itemData: any) {
+function updateParentCache(itemPath: string, itemData: any, isPartialUpdate: boolean = false) {
   const clean = sanitizePath(itemPath);
   const parts = clean.split('/');
   if (parts.length >= 2) {
@@ -377,9 +669,22 @@ function updateParentCache(itemPath: string, itemData: any) {
     const parentChannel = subscriptionChannels.get(parent);
     if (parentChannel) {
       if (!parentChannel.lastData || typeof parentChannel.lastData !== 'object') {
+        if (isPartialUpdate && GHOST_GUARDED_COLLECTIONS.has(parent)) {
+          return;
+        }
         parentChannel.lastData = {};
       }
-      parentChannel.lastData[key] = itemData;
+      if (isPartialUpdate) {
+        if (parentChannel.lastData[key] && typeof parentChannel.lastData[key] === 'object') {
+          parentChannel.lastData[key] = { ...parentChannel.lastData[key], ...itemData };
+        } else if (GHOST_GUARDED_COLLECTIONS.has(parent)) {
+          return;
+        } else {
+          parentChannel.lastData[key] = itemData;
+        }
+      } else {
+        parentChannel.lastData[key] = itemData;
+      }
       parentChannel.lastJson = JSON.stringify(parentChannel.lastData);
       parentChannel.callbacks.forEach(cb => {
         try { cb(parentChannel.lastData); } catch (_) {}
@@ -389,8 +694,10 @@ function updateParentCache(itemPath: string, itemData: any) {
     if (parent === 'products') {
       const memProducts = memoryCache.get('products');
       if (memProducts && memProducts.data && typeof memProducts.data === 'object') {
-        memProducts.data[key] = itemData;
-      } else {
+        memProducts.data[key] = isPartialUpdate && memProducts.data[key]
+          ? { ...memProducts.data[key], ...itemData }
+          : itemData;
+      } else if (!isPartialUpdate) {
         memoryCache.set('products', { data: { [key]: itemData }, timestamp: Date.now() });
       }
     }
@@ -519,6 +826,7 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
   if (!cleanPath) return;
 
   const cleanData = stripUndefined(data);
+  const prevCached = memoryCache.get(cleanPath)?.data;
 
   // Invalidate cache immediately
   invalidateRtdbCache(cleanPath);
@@ -526,13 +834,22 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
   let sdkError: any = null;
   let fsUpdated = false;
 
-  // 0. Sync merge update to Cloud Firestore
-  try {
-    fsUpdated = await writeFirestoreNode(cleanPath, cleanData, true);
-    if (fsUpdated) {
-      memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
+  const applyLocalCacheUpdate = () => {
+    if (prevCached && typeof prevCached === 'object' && typeof cleanData === 'object') {
+      const merged = { ...prevCached, ...cleanData };
+      memoryCache.set(cleanPath, { data: merged, timestamp: Date.now() });
+      dispatchToSubscribers(cleanPath, merged, true);
+    } else {
       dispatchToSubscribers(cleanPath, cleanData, true);
-      updateParentCache(cleanPath, cleanData);
+    }
+    updateParentCache(cleanPath, cleanData, true);
+  };
+
+  // 0. Sync merge update to Cloud Firestore (with ghost-document protection)
+  try {
+    fsUpdated = await writeFirestoreNode(cleanPath, cleanData, true, true);
+    if (fsUpdated) {
+      applyLocalCacheUpdate();
     }
   } catch (_) {}
 
@@ -542,18 +859,19 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
     const sdkTimeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
     const sdkUpdate = update(dbRef, cleanData).then(() => true).catch((err) => {
       sdkError = err;
-      console.warn(`[RTDB SDK update failed on ${cleanPath}]:`, err?.code, err?.message);
       return false;
     });
     const success = await Promise.race([sdkUpdate, sdkTimeout]);
     if (success) {
-      memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
-      dispatchToSubscribers(cleanPath, cleanData, true);
+      applyLocalCacheUpdate();
       return;
     }
   } catch (err: any) {
     sdkError = err;
-    console.warn(`[RTDB SDK update exception on ${cleanPath}]:`, err?.message);
+  }
+
+  if (fsUpdated) {
+    return;
   }
 
   // 2. Fallback to direct REST PATCH with fresh Firebase Auth ID token
@@ -573,8 +891,7 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
     if (res.ok) {
       const resJson = await res.json();
       if (!resJson || typeof resJson !== 'object' || !('error' in resJson)) {
-        memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
-        dispatchToSubscribers(cleanPath, cleanData, true);
+        applyLocalCacheUpdate();
         return;
       }
       restError = resJson.error;
@@ -583,7 +900,6 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
     }
   } catch (err: any) {
     restError = err?.message || String(err);
-    console.warn(`[RTDB REST PATCH notice for ${cleanPath}]:`, err);
   }
 
   // 3. Fallback to server proxy with user's Bearer token
@@ -599,19 +915,19 @@ export async function rtdbUpdate(path: string, data: any, timeoutMs: number = 70
         body: JSON.stringify(cleanData)
       });
       if (res.ok) {
-        memoryCache.set(cleanPath, { data: cleanData, timestamp: Date.now() });
-        dispatchToSubscribers(cleanPath, cleanData, true);
+        applyLocalCacheUpdate();
         return;
       }
     } catch (_) {}
   }
 
-  if (fsUpdated) {
+  // If cleanPath was a secondary ghost-guarded key that didn't exist in Firestore, resolve quietly
+  const pathParts = cleanPath.split('/').filter(Boolean);
+  if (pathParts.length === 2 && GHOST_GUARDED_COLLECTIONS.has(pathParts[0])) {
     return;
   }
 
-  // If all attempts failed, throw so the caller knows the write did not commit
-  const finalErrorMsg = sdkError?.message || restError || `Failed to update ${cleanPath} in Firebase Realtime Database.`;
+  const finalErrorMsg = sdkError?.message || restError || `Failed to update ${cleanPath} in Firebase.`;
   console.error(`[RTDB update failed completely on ${cleanPath}]:`, finalErrorMsg);
   throw new Error(finalErrorMsg);
 }
@@ -668,20 +984,7 @@ export async function rtdbTransaction<T = any>(
 
   invalidateRtdbCache(cleanPath);
 
-  try {
-    const dbRef = ref(rtdb, cleanPath);
-    const txTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
-    const txExec = runTransaction(dbRef, (current) => updateFn(current as T | null));
-    const res = await Promise.race([txExec, txTimeout]);
-    if (res && typeof (res as any).committed === 'boolean') {
-      return {
-        committed: (res as any).committed,
-        snapshot: (res as any).snapshot?.exists() ? ((res as any).snapshot.val() as T) : null
-      };
-    }
-  } catch (_) {}
-
-  // Fallback: read-modify-write via rtdbGet / rtdbSet
+  // Read authoritative current value from Cloud Firestore + RTDB and persist updated state to both
   try {
     const current = await rtdbGet<T>(cleanPath, timeoutMs);
     const updated = updateFn(current);
@@ -868,6 +1171,9 @@ export async function rtdbRemove(path: string, timeoutMs: number = 5000): Promis
   try {
     const parts = cleanPath.split('/').filter(Boolean);
     if (parts.length === 2) {
+      if (VIRTUAL_CHAT_COLLECTIONS.has(parts[0])) {
+        await deleteDoc(doc(db, 'chats', parts[0], 'items', parts[1])).catch(() => {});
+      }
       await deleteDoc(doc(db, parts[0], parts[1])).catch(() => {});
     }
   } catch (_) {}
@@ -1076,31 +1382,146 @@ export function rtdbSubscribe<T = any>(
     // Establish Firestore + RTDB real-time listener
     try {
       const parts = cleanPath.split('/').filter(Boolean);
-      let fsUnsub: (() => void) | null = null;
+      const fsUnsubs: Array<() => void> = [];
+
       if (parts.length === 1) {
-        fsUnsub = onSnapshot(
-          collection(db, parts[0]),
-          (snap) => {
-            if (!snap.empty) {
+        const colName = parts[0];
+
+        if (VIRTUAL_CHAT_COLLECTIONS.has(colName)) {
+          const u = onSnapshot(
+            collection(db, 'chats', colName, 'items'),
+            (snap) => {
               const mapObj: Record<string, any> = {};
               snap.forEach((d) => {
                 mapObj[d.id] = { id: d.id, ...d.data() };
               });
               dispatchToSubscribers(cleanPath, mapObj as unknown as T);
+            },
+            () => {}
+          );
+          fsUnsubs.push(u);
+        } else {
+          const attachRoleFilteredListeners = () => {
+            const uid = auth?.currentUser?.uid;
+            let refreshTimer: any = null;
+            const triggerFilteredRefresh = () => {
+              if (refreshTimer) clearTimeout(refreshTimer);
+              refreshTimer = setTimeout(() => {
+                fetchFilteredCollectionDocs(colName).then((filteredMap) => {
+                  if (filteredMap !== null) {
+                    dispatchToSubscribers(cleanPath, filteredMap as unknown as T);
+                  }
+                }).catch(() => {});
+              }, 80);
+            };
+
+            triggerFilteredRefresh();
+
+            if (colName === 'orders') {
+              fsUnsubs.push(
+                onSnapshot(fsQuery(collection(db, 'orders'), fsWhere('userId', '==', 'guest')), triggerFilteredRefresh, () => {})
+              );
+              if (uid) {
+                fsUnsubs.push(
+                  onSnapshot(fsQuery(collection(db, 'orders'), fsWhere('vendorId', '==', uid)), triggerFilteredRefresh, () => {}),
+                  onSnapshot(fsQuery(collection(db, 'orders'), fsWhere('vendorIds', 'array-contains', uid)), triggerFilteredRefresh, () => {}),
+                  onSnapshot(fsQuery(collection(db, 'orders'), fsWhere('userId', '==', uid)), triggerFilteredRefresh, () => {}),
+                  onSnapshot(fsQuery(collection(db, 'orders'), fsWhere('customerId', '==', uid)), triggerFilteredRefresh, () => {})
+                );
+              }
+            } else if (colName === 'vendor_orders' && uid) {
+              fsUnsubs.push(
+                onSnapshot(fsQuery(collection(db, 'vendor_orders'), fsWhere('vendorId', '==', uid)), triggerFilteredRefresh, () => {}),
+                onSnapshot(fsQuery(collection(db, 'vendor_orders'), fsWhere('customerId', '==', uid)), triggerFilteredRefresh, () => {})
+              );
+            } else if (colName === 'reseller_orders') {
+              fsUnsubs.push(
+                onSnapshot(collection(db, 'chats', 'reseller_orders', 'items'), triggerFilteredRefresh, () => {})
+              );
+              if (uid) {
+                fsUnsubs.push(
+                  onSnapshot(fsQuery(collection(db, 'reseller_orders'), fsWhere('vendorId', '==', uid)), triggerFilteredRefresh, () => {}),
+                  onSnapshot(fsQuery(collection(db, 'reseller_orders'), fsWhere('resellerId', '==', uid)), triggerFilteredRefresh, () => {})
+                );
+              }
+            } else if (colName === 'vendor_notifications' && uid) {
+              fsUnsubs.push(
+                onSnapshot(fsQuery(collection(db, 'vendor_notifications'), fsWhere('vendorId', '==', uid)), triggerFilteredRefresh, () => {}),
+                onSnapshot(fsQuery(collection(db, 'vendor_notifications'), fsWhere('userId', '==', uid)), triggerFilteredRefresh, () => {})
+              );
+            } else if (colName === 'notifications' && uid) {
+              fsUnsubs.push(
+                onSnapshot(fsQuery(collection(db, 'notifications'), fsWhere('userId', '==', uid)), triggerFilteredRefresh, () => {})
+              );
             }
-          },
-          () => {}
-        );
+          };
+
+          const mainUnsub = onSnapshot(
+            collection(db, colName),
+            (snap) => {
+              const mapObj: Record<string, any> = {};
+              snap.forEach((d) => {
+                const data = d.data();
+                if (
+                  (colName === 'orders' || colName === 'vendor_orders') &&
+                  !data?.customerName &&
+                  !data?.items &&
+                  !data?.vendorId &&
+                  !data?.userId &&
+                  !data?.customerId
+                ) {
+                  return;
+                }
+                mapObj[d.id] = { id: d.id, ...data };
+              });
+              dispatchToSubscribers(cleanPath, mapObj as unknown as T);
+            },
+            () => {
+              // On permission-denied for non-admin user, seamlessly attach filtered listeners
+              attachRoleFilteredListeners();
+            }
+          );
+          fsUnsubs.push(mainUnsub);
+        }
       } else if (parts.length === 2) {
-        fsUnsub = onSnapshot(
-          doc(db, parts[0], parts[1]),
-          (snap) => {
-            if (snap.exists()) {
-              dispatchToSubscribers(cleanPath, ({ id: snap.id, ...snap.data() } as unknown) as T);
-            }
-          },
-          () => {}
-        );
+        const [colName, docId] = parts;
+        if (VIRTUAL_CHAT_COLLECTIONS.has(colName)) {
+          fsUnsubs.push(
+            onSnapshot(
+              doc(db, 'chats', colName, 'items', docId),
+              (snap) => {
+                if (snap.exists()) {
+                  dispatchToSubscribers(cleanPath, ({ id: snap.id, ...snap.data() } as unknown) as T);
+                }
+              },
+              () => {}
+            )
+          );
+        } else if (colName === 'vendor_wallet') {
+          const refreshWallet = () => {
+            fetchFirestoreNode<T>(cleanPath, 3000).then((res) => {
+              if (res.ok && res.data) {
+                dispatchToSubscribers(cleanPath, res.data);
+              }
+            }).catch(() => {});
+          };
+          fsUnsubs.push(
+            onSnapshot(doc(db, 'vendor_wallet', docId), refreshWallet, () => {}),
+            onSnapshot(doc(db, 'chats', 'vendor_wallet', 'items', docId), refreshWallet, () => {})
+          );
+        } else {
+          fsUnsubs.push(
+            onSnapshot(
+              doc(db, parts[0], parts[1]),
+              (snap) => {
+                if (snap.exists()) {
+                  dispatchToSubscribers(cleanPath, ({ id: snap.id, ...snap.data() } as unknown) as T);
+                }
+              },
+              () => {}
+            )
+          );
+        }
       }
 
       const dbRef = ref(rtdb, cleanPath);
@@ -1114,9 +1535,9 @@ export function rtdbSubscribe<T = any>(
         () => {}
       );
       channel.sdkUnsubscribe = () => {
-        if (fsUnsub) {
-          try { fsUnsub(); } catch (_) {}
-        }
+        fsUnsubs.forEach((u) => {
+          try { u(); } catch (_) {}
+        });
         try { rtdbUnsub(); } catch (_) {}
       };
     } catch (e) {

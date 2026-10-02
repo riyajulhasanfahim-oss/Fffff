@@ -804,7 +804,14 @@ export default function CheckoutPage() {
             chosenStoreId = pkg.vendorId;
           }
         }
-        chosenStoreId = chosenStoreId || 'admin';
+        if (
+          !chosenStoreId ||
+          chosenStoreId === 'admin' ||
+          chosenStoreId === 'store_rjworld_official' ||
+          chosenStoreId === 'ZbzsIp1otBX54sRCay9lJUc5Hol2'
+        ) {
+          chosenStoreId = 'Y12jEV4q34QS9uHxOGvZOqbuFbu2';
+        }
 
         const rawVendorPrice = item.vendorPrice !== undefined 
           ? Number(item.vendorPrice) 
@@ -904,13 +911,21 @@ export default function CheckoutPage() {
       // Calculate vendor items mapping for held payout
       const vendorItemsMap: Record<string, { items: any[]; total: number }> = {};
       cleanItems.forEach(it => {
-        const vId = it.vendorId || 'admin';
+        const rawVid = it.vendorId || 'Y12jEV4q34QS9uHxOGvZOqbuFbu2';
+        const vId = (rawVid === 'admin' || rawVid === 'store_rjworld_official' || rawVid === 'ZbzsIp1otBX54sRCay9lJUc5Hol2')
+          ? 'Y12jEV4q34QS9uHxOGvZOqbuFbu2'
+          : rawVid;
+        it.vendorId = vId;
+        it.storeId = vId;
         if (!vendorItemsMap[vId]) {
           vendorItemsMap[vId] = { items: [], total: 0 };
         }
         vendorItemsMap[vId].items.push(it);
         vendorItemsMap[vId].total += (it.price || 0) * (it.quantity || 1);
       });
+      if (resellerOrderRecord && (!resellerOrderRecord.vendorId || resellerOrderRecord.vendorId === 'admin' || resellerOrderRecord.vendorId === 'store_rjworld_official' || resellerOrderRecord.vendorId === 'ZbzsIp1otBX54sRCay9lJUc5Hol2')) {
+        resellerOrderRecord.vendorId = 'Y12jEV4q34QS9uHxOGvZOqbuFbu2';
+      }
 
       let finalPaymentStatus = 'Pending';
       let finalOrderStatus = 'Confirmed';
@@ -1146,12 +1161,14 @@ export default function CheckoutPage() {
         autoReleaseAt: paymentMethod !== 'cod' && finalPaymentStatus === 'Paid' 
           ? (paidAtTimestamp || Date.now()) + (96 * 60 * 60 * 1000) 
           : null,
-        vendorIds: Object.keys(vendorItemsMap).filter(v => v && v !== 'admin'),
+        vendorIds: Object.keys(vendorItemsMap).filter(v => v && v !== 'admin').length > 0
+          ? Object.keys(vendorItemsMap).filter(v => v && v !== 'admin')
+          : ['Y12jEV4q34QS9uHxOGvZOqbuFbu2'],
         referralId: referralId || null,
         invoiceId: currentInvoiceId || null,
         isResellerOrder: Boolean(resellerOrderRecord),
         resellerId: resellerOrderRecord ? resellerOrderRecord.resellerId : null,
-        vendorId: resellerOrderRecord ? resellerOrderRecord.vendorId : (cleanItems[0]?.vendorId || 'admin'),
+        vendorId: resellerOrderRecord ? resellerOrderRecord.vendorId : (cleanItems[0]?.vendorId || 'Y12jEV4q34QS9uHxOGvZOqbuFbu2'),
         productId: resellerOrderRecord ? resellerOrderRecord.productId : (cleanItems[0]?.productId || ''),
         quantity: resellerOrderRecord ? resellerOrderRecord.quantity : (cleanItems.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0)),
         vendorPrice: resellerOrderRecord ? resellerOrderRecord.vendorPrice : null,
@@ -1160,6 +1177,7 @@ export default function CheckoutPage() {
         resellerProfit: resellerOrderRecord ? resellerOrderRecord.resellerProfit : null,
         profitStatus: resellerOrderRecord ? 'PENDING' : null,
         orderStatus: finalOrderStatus,
+        priceSnapshot: resellerOrderRecord || null,
         resellerPriceSnapshot: resellerOrderRecord || null
       };
 

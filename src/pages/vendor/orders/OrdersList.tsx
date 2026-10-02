@@ -235,23 +235,28 @@ export default function OrdersList() {
 
     setProcessingId(order.id);
     try {
-      const mainOrderId = order.mainOrderId || order.orderId || order.id;
+      const rawMainId = order.mainOrderId || order.orderId || order.id;
+      const mainOrderId = String(rawMainId).includes('_') ? String(rawMainId).split('_')[0] : String(rawMainId);
+      const vendorOrderDocId = order.vendorOrderId || (String(order.id).includes('_') ? order.id : `${mainOrderId}_${order.vendorId || user.uid}`);
       const now = Date.now();
 
       await Promise.allSettled([
-        rtdbUpdate(`vendor_orders/${order.id}`, {
+        rtdbUpdate(`vendor_orders/${vendorOrderDocId}`, {
           status: 'Accepted',
+          vendorStatus: 'Accepted',
+          vendorOrderStatus: 'CONFIRMED',
           acceptedAt: now,
           updatedAt: now
         }),
         rtdbUpdate(`orders/${mainOrderId}`, {
           status: 'Accepted',
           vendorStatus: 'Accepted',
+          vendorOrderStatus: 'CONFIRMED',
           acceptedAt: now,
           updatedAt: now
         }),
         rtdbPush('order_status_logs', {
-          orderId: order.id,
+          orderId: mainOrderId,
           mainOrderId: mainOrderId,
           vendorId: user.uid,
           oldStatus: order.status || 'Pending',
@@ -261,10 +266,12 @@ export default function OrdersList() {
         })
       ]);
 
-      toast.success(`অর্ডার #${order.orderId?.substring(0, 8)} গ্রহণ করা হয়েছে! এখন কুরিয়ার ট্র্যাকিং লিংক যুক্ত করুন।`);
+      invalidateRtdbCache('orders');
+      invalidateRtdbCache('vendor_orders');
+      toast.success(`অর্ডার #${mainOrderId.substring(0, 8)} গ্রহণ করা হয়েছে! এখন কুরিয়ার ট্র্যাকিং লিংক যুক্ত করুন।`);
       await fetchOrders();
       // Prompt vendor to add courier link immediately
-      setSelectedOrder({ ...order, status: 'Accepted' });
+      setSelectedOrder({ ...order, status: 'Accepted', vendorStatus: 'Accepted', vendorOrderStatus: 'CONFIRMED', acceptedAt: now });
       setCourierModalOpen(true);
     } catch (error) {
       console.error("Failed to accept order:", error);
@@ -283,12 +290,15 @@ export default function OrdersList() {
 
     setProcessingId(order.id);
     try {
-      const mainOrderId = order.mainOrderId || order.orderId || order.id;
+      const rawMainId = order.mainOrderId || order.orderId || order.id;
+      const mainOrderId = String(rawMainId).includes('_') ? String(rawMainId).split('_')[0] : String(rawMainId);
+      const vendorOrderDocId = order.vendorOrderId || (String(order.id).includes('_') ? order.id : `${mainOrderId}_${order.vendorId || user.uid}`);
       
       // 1. Update vendor_orders and main orders in RTDB
       await Promise.allSettled([
-        rtdbUpdate(`vendor_orders/${order.id}`, {
+        rtdbUpdate(`vendor_orders/${vendorOrderDocId}`, {
           status: 'Rejected',
+          vendorStatus: 'Rejected',
           rejectedAt: Date.now(),
           updatedAt: Date.now()
         }),
@@ -299,7 +309,7 @@ export default function OrdersList() {
           updatedAt: Date.now()
         }),
         rtdbPush('order_status_logs', {
-          orderId: order.id,
+          orderId: mainOrderId,
           mainOrderId: mainOrderId,
           vendorId: user.uid,
           oldStatus: order.status || 'Pending',

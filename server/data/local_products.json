@@ -45,18 +45,19 @@
     "status": "Published",
     "stock": 500,
     "stockCount": 500,
-    "storeId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+    "storeId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
     "title": "WhitePlus Daily Enamel Repair Calci Strong Toothpaste 200g |",
     "updatedAt": 1790417289500,
+    "vendorEmail": "moki22416@gmail.com",
     "vendor": {
-      "id": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+      "id": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
       "joined": "2026",
       "name": "RJ WORLD BD",
       "rating": 5,
-      "storeId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+      "storeId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
       "storeName": "RJ WORLD BD"
     },
-    "vendorId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+    "vendorId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
     "weight": "200"
   },
   "prod-apple-iphone-15-pro": {
@@ -87,7 +88,7 @@
     "status": "Published",
     "stock": 24,
     "stockCount": 24,
-    "storeId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+    "storeId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
     "tags": [
       "iPhone",
       "iPhone 15",
@@ -98,13 +99,15 @@
     ],
     "title": "Apple iPhone 15 Pro (128GB) - Natural Titanium",
     "updatedAt": 1790409337068,
+    "vendorEmail": "moki22416@gmail.com",
     "vendor": {
-      "id": "JSt02WL05Na8WU4DkG2E1Ln7iJq2",
+      "id": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
       "joined": "2026",
       "name": "RJ WORLD BD",
       "rating": 5,
+      "storeId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
       "storeName": "RJ WORLD BD"
     },
-    "vendorId": "JSt02WL05Na8WU4DkG2E1Ln7iJq2"
+    "vendorId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2"
   }
 }
