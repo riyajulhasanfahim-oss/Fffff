@@ -59,55 +59,5 @@
     },
     "vendorId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
     "weight": "200"
-  },
-  "prod-apple-iphone-15-pro": {
-    "brand": "Apple",
-    "category": "Electronics",
-    "categorySlug": "electronics",
-    "codEnabled": true,
-    "createdAt": 1790409337068,
-    "description": "Official Apple iPhone 15 Pro with A17 Pro Chip, 48MP Camera System, Super Retina XDR Display, and Action button.",
-    "discount": 7,
-    "discountPercent": 7,
-    "featuredImage": "https://images.unsplash.com/photo-1695048133142-1a20484d2569?auto=format&fit=crop&q=80&w=800",
-    "id": "prod-apple-iphone-15-pro",
-    "image": "https://images.unsplash.com/photo-1695048133142-1a20484d2569?auto=format&fit=crop&q=80&w=800",
-    "imageUrl": "https://images.unsplash.com/photo-1695048133142-1a20484d2569?auto=format&fit=crop&q=80&w=800",
-    "images": [
-      "https://images.unsplash.com/photo-1695048133142-1a20484d2569?auto=format&fit=crop&q=80&w=800"
-    ],
-    "inStock": true,
-    "isCodEnabled": true,
-    "name": "Apple iPhone 15 Pro (128GB) - Natural Titanium",
-    "originalPrice": 149999,
-    "price": 139999,
-    "productId": "prod-apple-iphone-15-pro",
-    "productName": "Apple iPhone 15 Pro (128GB) - Natural Titanium",
-    "regularPrice": 149999,
-    "salePrice": 139999,
-    "status": "Published",
-    "stock": 24,
-    "stockCount": 24,
-    "storeId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
-    "tags": [
-      "iPhone",
-      "iPhone 15",
-      "iPhone 15 Pro",
-      "Apple",
-      "SmartPhone",
-      "Mobile"
-    ],
-    "title": "Apple iPhone 15 Pro (128GB) - Natural Titanium",
-    "updatedAt": 1790409337068,
-    "vendorEmail": "moki22416@gmail.com",
-    "vendor": {
-      "id": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
-      "joined": "2026",
-      "name": "RJ WORLD BD",
-      "rating": 5,
-      "storeId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2",
-      "storeName": "RJ WORLD BD"
-    },
-    "vendorId": "Y12jEV4q34QS9uHxOGvZOqbuFbu2"
   }
 }
