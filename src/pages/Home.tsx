@@ -146,92 +146,94 @@ export default function Home() {
         </div>
 
         {/* 5. FLASH SALE (হলুদ ও আকর্ষণীয় ফ্ল্যাশ সেল) */}
-        <section className="py-2.5 sm:py-5 bg-gradient-to-b from-amber-50/50 to-slate-50">
-          <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
-            
-            {/* Attractive, Yellow-Themed, Compact Flash Sale Header */}
-            <div className="relative overflow-hidden bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 rounded-2xl p-3 sm:p-4 border-2 border-yellow-300 shadow-md mb-2.5 sm:mb-4">
-              {/* Subtle ambient light reflections */}
-              <div className="absolute -right-8 -top-8 w-28 h-28 bg-white/35 rounded-full blur-xl pointer-events-none" />
-              <div className="absolute -left-6 -bottom-6 w-24 h-24 bg-amber-500/20 rounded-full blur-lg pointer-events-none" />
+        {flashSaleProducts.length > 0 && (
+          <section className="py-2.5 sm:py-5 bg-gradient-to-b from-amber-50/50 to-slate-50">
+            <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
               
-              <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
+              {/* Attractive, Yellow-Themed, Compact Flash Sale Header */}
+              <div className="relative overflow-hidden bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 rounded-2xl p-3 sm:p-4 border-2 border-yellow-300 shadow-md mb-2.5 sm:mb-4">
+                {/* Subtle ambient light reflections */}
+                <div className="absolute -right-8 -top-8 w-28 h-28 bg-white/35 rounded-full blur-xl pointer-events-none" />
+                <div className="absolute -left-6 -bottom-6 w-24 h-24 bg-amber-500/20 rounded-full blur-lg pointer-events-none" />
                 
-                {/* Left: Big Bold Title + Countdown + Mega Discount Tag */}
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className="p-1 sm:p-1.5 rounded-xl bg-slate-950 text-amber-400 shadow-xs flex items-center justify-center">
-                      <Flame className="w-5 h-5 sm:w-6 sm:h-6 fill-amber-400 text-amber-400 animate-pulse" />
+                <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
+                  
+                  {/* Left: Big Bold Title + Countdown + Mega Discount Tag */}
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="p-1 sm:p-1.5 rounded-xl bg-slate-950 text-amber-400 shadow-xs flex items-center justify-center">
+                        <Flame className="w-5 h-5 sm:w-6 sm:h-6 fill-amber-400 text-amber-400 animate-pulse" />
+                      </span>
+                      <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-950 tracking-tight">
+                        ফ্ল্যাশ সেল
+                      </h2>
+                    </div>
+
+                    {/* Live Countdown Timer in High-Contrast Black & Yellow */}
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 text-amber-300 text-xs sm:text-sm font-bold shadow-xs border border-slate-900">
+                      <Clock className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                      <span className="text-slate-300 text-[11px] hidden xs:inline">বাকি:</span>
+                      <span className="font-mono font-black text-amber-300 tracking-wider">
+                        {String(timeLeft.hours).padStart(2, '0')}:{String(timeLeft.minutes).padStart(2, '0')}:{String(timeLeft.seconds).padStart(2, '0')}
+                      </span>
+                    </div>
+
+                    <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-slate-950 text-amber-300 shadow-2xs">
+                      ৫০% পর্যন্ত ছাড়! ({flashSaleProducts.length}টি অফার)
                     </span>
-                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-950 tracking-tight">
-                      ফ্ল্যাশ সেল
-                    </h2>
                   </div>
 
-                  {/* Live Countdown Timer in High-Contrast Black & Yellow */}
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 text-amber-300 text-xs sm:text-sm font-bold shadow-xs border border-slate-900">
-                    <Clock className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
-                    <span className="text-slate-300 text-[11px] hidden xs:inline">বাকি:</span>
-                    <span className="font-mono font-black text-amber-300 tracking-wider">
-                      {String(timeLeft.hours).padStart(2, '0')}:{String(timeLeft.minutes).padStart(2, '0')}:{String(timeLeft.seconds).padStart(2, '0')}
-                    </span>
-                  </div>
-
-                  <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-slate-950 text-amber-300 shadow-2xs">
-                    ৫০% পর্যন্ত ছাড়! ({flashSaleProducts.length}টি অফার)
-                  </span>
+                  {/* Right: Compelling Click Button */}
+                  <Link
+                    to="/deals"
+                    className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 sm:px-5 sm:py-2 bg-slate-950 hover:bg-slate-900 text-amber-300 hover:text-amber-200 text-xs sm:text-sm font-black rounded-xl shadow-md transition-all active:scale-95 whitespace-nowrap self-start sm:self-auto cursor-pointer group"
+                  >
+                    <span>সব ডিল দেখুন</span>
+                    <ArrowRight className="w-3.5 h-3.5 transform group-hover:translate-x-1 transition-transform" />
+                  </Link>
                 </div>
-
-                {/* Right: Compelling Click Button */}
-                <Link
-                  to="/deals"
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 sm:px-5 sm:py-2 bg-slate-950 hover:bg-slate-900 text-amber-300 hover:text-amber-200 text-xs sm:text-sm font-black rounded-xl shadow-md transition-all active:scale-95 whitespace-nowrap self-start sm:self-auto cursor-pointer group"
-                >
-                  <span>সব ডিল দেখুন</span>
-                  <ArrowRight className="w-3.5 h-3.5 transform group-hover:translate-x-1 transition-transform" />
-                </Link>
               </div>
-            </div>
 
-            {/* Product Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4 lg:gap-5">
-              {displayedFlashSale.map((product, index) => (
-                <motion.div
-                  key={product.id}
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.25) }}
-                >
-                  <ProductCard product={product} badgeText="ফ্ল্যাশ ডিল" />
-                </motion.div>
-              ))}
-            </div>
-
-            {/* Flash Sale Expand / Show More Toggle */}
-            {flashSaleProducts.length > 8 && (
-              <div className="mt-3 sm:mt-5 text-center">
-                <button
-                  type="button"
-                  onClick={() => setIsFlashExpanded(!isFlashExpanded)}
-                  className="inline-flex items-center gap-1.5 px-5 py-2 bg-white hover:bg-amber-100/70 text-slate-900 text-xs sm:text-sm font-black rounded-full border border-amber-300 shadow-xs hover:shadow-md transition-all cursor-pointer"
-                >
-                  {isFlashExpanded ? (
-                    <>
-                      <span>কম দেখুন</span>
-                      <ChevronUp className="w-4 h-4" />
-                    </>
-                  ) : (
-                    <>
-                      <span>আরও {flashSaleProducts.length - 8}টি ফ্ল্যাশ ডিল দেখুন</span>
-                      <ChevronDown className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
+              {/* Product Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4 lg:gap-5">
+                {displayedFlashSale.map((product, index) => (
+                  <motion.div
+                    key={product.id}
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.25) }}
+                  >
+                    <ProductCard product={product} badgeText="ফ্ল্যাশ ডিল" />
+                  </motion.div>
+                ))}
               </div>
-            )}
 
-          </div>
-        </section>
+              {/* Flash Sale Expand / Show More Toggle */}
+              {flashSaleProducts.length > 8 && (
+                <div className="mt-3 sm:mt-5 text-center">
+                  <button
+                    type="button"
+                    onClick={() => setIsFlashExpanded(!isFlashExpanded)}
+                    className="inline-flex items-center gap-1.5 px-5 py-2 bg-white hover:bg-amber-100/70 text-slate-900 text-xs sm:text-sm font-black rounded-full border border-amber-300 shadow-xs hover:shadow-md transition-all cursor-pointer"
+                  >
+                    {isFlashExpanded ? (
+                      <>
+                        <span>কম দেখুন</span>
+                        <ChevronUp className="w-4 h-4" />
+                      </>
+                    ) : (
+                      <>
+                        <span>আরও {flashSaleProducts.length - 8}টি ফ্ল্যাশ ডিল দেখুন</span>
+                        <ChevronDown className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+            </div>
+          </section>
+        )}
 
         {/* 6. NEW ARRIVALS */}
         <ProductSection 

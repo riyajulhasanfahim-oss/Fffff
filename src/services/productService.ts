@@ -150,6 +150,20 @@ function parseRTDBProducts(rtdbData: Record<string, any>, vendors: Record<string
       if (statusLower === 'archived' || statusLower === 'inactive' || statusLower === 'deleted') {
         continue;
       }
+      // Strictly skip placeholder, blank, dummy, or corrupt items without a real product name
+      const candidateName = String(val.name || val.productName || val.title || '').trim();
+      const lowerName = candidateName.toLowerCase();
+      if (
+        !candidateName ||
+        lowerName === 'product' ||
+        lowerName === 'demo' ||
+        lowerName === 'dummy' ||
+        lowerName === 'placeholder' ||
+        lowerName === 'sample product' ||
+        lowerName === 'test product'
+      ) {
+        continue;
+      }
       const norm = normalizeProduct(val, key);
       const vId = norm.vendorId || val.storeId;
       if (vId) {
@@ -248,6 +262,19 @@ function ensureGlobalRTDBListener(): void {
  * Guarantees 0ms immediate rendering on the Homepage, Shop, and all product grids.
  */
 export function notifyMarketplaceProductChange(rawProduct: any, id?: string): void {
+  const candidateName = String(rawProduct?.name || rawProduct?.productName || rawProduct?.title || '').trim();
+  const lowerName = candidateName.toLowerCase();
+  if (
+    !candidateName ||
+    lowerName === 'product' ||
+    lowerName === 'demo' ||
+    lowerName === 'dummy' ||
+    lowerName === 'placeholder' ||
+    lowerName === 'sample product' ||
+    lowerName === 'test product'
+  ) {
+    return;
+  }
   const norm = normalizeProduct(rawProduct, id || rawProduct.id || rawProduct.productId);
   if (!norm || !norm.id) return;
 
