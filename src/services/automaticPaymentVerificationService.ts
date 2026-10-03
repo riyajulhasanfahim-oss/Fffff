@@ -289,6 +289,38 @@ async function executeBusinessActionSafely(
         }
 
         try {
+          const { db } = await import('../lib/firebase');
+          const { doc, setDoc } = await import('firebase/firestore');
+          await Promise.allSettled([
+            setDoc(doc(db, 'vendors', vendorId), vendorPayload, { merge: true }),
+            setDoc(doc(db, 'stores', vendorId), {
+              id: vendorId,
+              vendorId,
+              status: 'active',
+              updatedAt: now,
+              ...(req.contextData?.storeName ? { storeName: req.contextData.storeName, shopName: req.contextData.storeName } : {})
+            }, { merge: true })
+          ]);
+        } catch (_) {}
+
+        try {
+          const { notifyStoreUpdated } = await import('./storeCache');
+          notifyStoreUpdated({
+            id: vendorId,
+            vendorId,
+            storeId: vendorId,
+            shopName: req.contextData?.storeName || 'Vendor Shop',
+            storeName: req.contextData?.storeName || 'Vendor Shop',
+            name: req.contextData?.ownerName || 'Vendor',
+            ownerName: req.contextData?.ownerName || 'Vendor',
+            phone: req.contextData?.mobileNumber || '',
+            mobileNumber: req.contextData?.mobileNumber || '',
+            status: 'active',
+            ...vendorPayload
+          });
+        } catch (_) {}
+
+        try {
           await rtdbUpdate(`users/${vendorId}`, {
             role: 'Vendor',
             updatedAt: now

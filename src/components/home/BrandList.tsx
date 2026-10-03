@@ -64,12 +64,26 @@ export default function BrandList() {
       }
     };
 
+    const handleStoreUpdated = (e: any) => {
+      const updatedStore = e.detail?.store;
+      if (updatedStore && (updatedStore.id || updatedStore.vendorId)) {
+        setBrands(prev => {
+          const sId = updatedStore.id || updatedStore.vendorId;
+          const filtered = prev.filter(b => b.id !== sId && b.vendorId !== sId && b.storeId !== sId);
+          return sortStoresByVerifiedFirst([updatedStore, ...filtered]);
+        });
+      }
+      loadOfficialStores();
+    };
+
     window.addEventListener('rj_store_deleted', handleStoreDeleted);
+    window.addEventListener('rj_store_updated', handleStoreUpdated);
     window.addEventListener('storage', loadOfficialStores);
 
     return () => { 
       isMounted = false;
       window.removeEventListener('rj_store_deleted', handleStoreDeleted);
+      window.removeEventListener('rj_store_updated', handleStoreUpdated);
       window.removeEventListener('storage', loadOfficialStores);
     };
   }, []);
@@ -77,12 +91,7 @@ export default function BrandList() {
   // Guarantee that verified stores are placed at the very front
   const sortedBrands = useMemo(() => {
     return sortStoresByVerifiedFirst(
-      brands.filter(b => 
-        b &&
-        b.status !== 'deleted' &&
-        b.status !== 'rejected' &&
-        !isStoreDeletedFromCache(b.id)
-      )
+      brands.filter(isStoreNotDeleted)
     );
   }, [brands]);
 

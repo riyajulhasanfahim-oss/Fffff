@@ -70,12 +70,26 @@ export default function AllBrands() {
       }
     };
 
+    const handleStoreUpdated = (e: any) => {
+      const updatedStore = e.detail?.store;
+      if (updatedStore && (updatedStore.id || updatedStore.vendorId)) {
+        setBrands(prev => {
+          const sId = updatedStore.id || updatedStore.vendorId;
+          const filtered = prev.filter(b => b.id !== sId && b.vendorId !== sId && b.storeId !== sId);
+          return sortStoresByVerifiedFirst([updatedStore, ...filtered]);
+        });
+      }
+      fetchBrands();
+    };
+
     window.addEventListener('rj_store_deleted', handleStoreDeleted);
+    window.addEventListener('rj_store_updated', handleStoreUpdated);
     window.addEventListener('storage', fetchBrands);
 
     return () => { 
       isMounted = false;
       window.removeEventListener('rj_store_deleted', handleStoreDeleted);
+      window.removeEventListener('rj_store_updated', handleStoreUpdated);
       window.removeEventListener('storage', fetchBrands);
     };
   }, []);

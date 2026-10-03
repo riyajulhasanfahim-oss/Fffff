@@ -24,6 +24,12 @@ import {
   generateUniqueVendorSlug, 
   PRIMARY_DOMAIN 
 } from '../../../utils/subdomain';
+import { 
+  notifyStoreUpdated, 
+  fetchOfficialStoresFromRTDB, 
+  saveStoreToCache, 
+  type CachedStore 
+} from '../../../services/storeCache';
 
 export default function VendorRegistration() {
   const { user, userData, logout, refreshUserData } = useAuth();
@@ -452,15 +458,21 @@ export default function VendorRegistration() {
           localStorage.setItem('rj_vendor_profile_' + currentUserId, JSON.stringify(initialProfilePayload));
         } catch (_) {}
 
-        // 1. Save to Cloud Firestore: collection 'vendors', document id = currentUserId
+        // 1. Save to Cloud Firestore: collections 'vendors' and 'stores', document id = currentUserId
         try {
-          await setDoc(doc(db, 'vendors', currentUserId), {
-            id: currentUserId,
-            ...activeVendorPayload,
-            totalSales: 0,
-            totalOrders: 0,
-            totalProducts: 0
-          }, { merge: true });
+          await Promise.allSettled([
+            setDoc(doc(db, 'vendors', currentUserId), {
+              id: currentUserId,
+              ...activeVendorPayload,
+              totalSales: 0,
+              totalOrders: 0,
+              totalProducts: 0
+            }, { merge: true }),
+            setDoc(doc(db, 'stores', currentUserId), {
+              id: currentUserId,
+              ...storePayload
+            }, { merge: true })
+          ]);
         } catch (fsErr) {
           console.warn('Firestore vendor registration save error:', fsErr);
         }
@@ -499,6 +511,41 @@ export default function VendorRegistration() {
             updatedAt: Date.now()
           })
         ]);
+
+        // 4. Immediately cache registered store & broadcast to Home Page & Vendor List
+        const fullRegisteredStore: CachedStore = {
+          id: currentUserId,
+          vendorId: currentUserId,
+          storeId: currentUserId,
+          userId: currentUserId,
+          shopName: formData.storeName.trim(),
+          storeName: formData.storeName.trim(),
+          ownerName: formData.ownerName.trim(),
+          name: formData.ownerName.trim(),
+          phone: formData.mobileNumber.trim(),
+          mobileNumber: formData.mobileNumber.trim(),
+          email: formData.email.trim() || user?.email || '',
+          address: structuredAddress,
+          district: finalDistrict,
+          upazila: finalUpazila,
+          division: finalDivision,
+          storeSlug: storeSlug,
+          description: `Welcome to ${formData.storeName.trim()}`,
+          status: 'active',
+          isVerified: false,
+          verified: false,
+          logo: '',
+          shopLogo: '',
+          profileImage: '',
+          banner: '',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          ...activeVendorPayload,
+          ...storePayload
+        };
+        saveStoreToCache(currentUserId, fullRegisteredStore);
+        notifyStoreUpdated(fullRegisteredStore);
+        fetchOfficialStoresFromRTDB(true).catch(() => {});
 
         // Server-side synchronization
         try {

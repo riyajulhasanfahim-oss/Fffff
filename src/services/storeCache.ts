@@ -1,6 +1,8 @@
 import { rtdbGet, rtdbList, rtdbSubscribe } from '../lib/rtdb';
 import { INITIAL_VENDORS, INITIAL_VENDOR_PROFILES, INITIAL_VENDOR_THEMES } from '../lib/firebaseSeed';
 import { enrichProductsWithRealMetrics } from './productMetricsService';
+import { db } from '../lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
 
 export interface CachedStore {
   id: string;
@@ -572,20 +574,24 @@ export function saveStoreToCache(storeId: string, data: any): CachedStore {
 
       // Automatically sync and prioritize into official stores list if store is active (no mutual recursion)
       const storedList = localStorage.getItem('rj_official_stores_list');
+      let parsed: any[] = [];
       if (storedList) {
-        const parsed = JSON.parse(storedList);
-        if (Array.isArray(parsed)) {
-          const idx = parsed.findIndex((s: any) => s.id === storeId || s.id === merged.id);
-          let updatedList = [...parsed];
-          if (idx >= 0) {
-            updatedList[idx] = mergeStoreObjects(updatedList[idx], merged);
-          } else if (isStorePlanVerified(merged) || merged.shopName || merged.storeName) {
-            updatedList.unshift(merged);
-          }
-          const sortedList = sortStoresByVerifiedFirst(updatedList);
-          localStorage.setItem('rj_official_stores_list', JSON.stringify(sortedList));
+        try {
+          const raw = JSON.parse(storedList);
+          if (Array.isArray(raw)) parsed = raw;
+        } catch (_) {
+          parsed = [];
         }
       }
+      const idx = parsed.findIndex((s: any) => s.id === storeId || s.id === merged.id || (merged.vendorId && s.vendorId === merged.vendorId));
+      let updatedList = [...parsed];
+      if (idx >= 0) {
+        updatedList[idx] = mergeStoreObjects(updatedList[idx], merged);
+      } else if (merged.shopName || merged.storeName || isStorePlanVerified(merged)) {
+        updatedList.unshift(merged);
+      }
+      const sortedList = sortStoresByVerifiedFirst(updatedList);
+      localStorage.setItem('rj_official_stores_list', JSON.stringify(sortedList));
     } catch (_) {}
   }
 
@@ -1003,13 +1009,33 @@ export function saveOfficialStoresToCache(stores: CachedStore[]): void {
   }
 }
 
+/**
+ * Globally broadcasts and caches a newly registered or updated vendor store
+ * so it immediately reflects under Official Stores on Home Page and in Vendor List.
+ */
+export function notifyStoreUpdated(store: CachedStore): void {
+  if (!store || !store.id) return;
+  saveStoreToCache(store.id, store);
+  const current = getOfficialStoresFromCache();
+  const filtered = current.filter(s => s.id !== store.id && s.vendorId !== store.id && s.storeId !== store.id);
+  const updated = sortStoresByVerifiedFirst([store, ...filtered]);
+  saveOfficialStoresToCache(updated);
+  lastFetchOfficialStoresTime = 0;
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('rj_store_updated', { detail: { store, storeId: store.id } }));
+      window.dispatchEvent(new CustomEvent('storage'));
+    } catch (_) {}
+  }
+}
+
 // In-flight fetch promise and timestamp to throttle RTDB calls
 let lastFetchOfficialStoresTime = 0;
 let inflightOfficialStoresFetch: Promise<CachedStore[]> | null = null;
 
 /**
- * Fetches all official & registered stores directly from Firebase Realtime Database (RTDB)
- * Only uses RTDB (zero Firestore). Merges 'stores', 'vendors', and 'vendor_profiles'.
+ * Fetches all official & registered stores directly from Firebase (RTDB & Cloud Firestore)
+ * Merges Cloud Firestore 'vendors' and 'stores' collections with RTDB 'stores', 'vendors', and 'vendor_profiles'.
  * Stores with active verified badges are sorted to the very front.
  */
 export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise<CachedStore[]> {
@@ -1026,26 +1052,66 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
 
   inflightOfficialStoresFetch = (async () => {
     try {
-      const [storesSnap, vendorsSnap, profilesSnap, deletedSnap] = await Promise.all([
+      const [storesSnap, vendorsSnap, profilesSnap, deletedSnap, fsVendorsSnap, fsStoresSnap] = await Promise.all([
         rtdbGet<Record<string, any>>('stores', 4000).catch(() => null),
-        rtdbGet<Record<string, any>>('vendors', 2000).catch(() => null),
-        rtdbGet<Record<string, any>>('vendor_profiles', 2000).catch(() => null),
-        rtdbGet<Record<string, any>>('deleted_vendors', 2000).catch(() => null)
+        rtdbGet<Record<string, any>>('vendors', 4000).catch(() => null),
+        rtdbGet<Record<string, any>>('vendor_profiles', 3000).catch(() => null),
+        rtdbGet<Record<string, any>>('deleted_vendors', 3000).catch(() => null),
+        getDocs(collection(db, 'vendors')).catch(() => null),
+        getDocs(collection(db, 'stores')).catch(() => null)
       ]);
 
-      const safeStores = storesSnap && typeof storesSnap === 'object' && !('error' in storesSnap) ? storesSnap : {};
-      const safeVendors = vendorsSnap && typeof vendorsSnap === 'object' && !('error' in vendorsSnap) ? vendorsSnap : {};
-      const safeProfiles = profilesSnap && typeof profilesSnap === 'object' && !('error' in profilesSnap) ? profilesSnap : {};
-      const safeDeleted = deletedSnap && typeof deletedSnap === 'object' && !('error' in deletedSnap) ? deletedSnap : {};
+      const safeStores: Record<string, any> = storesSnap && typeof storesSnap === 'object' && !('error' in storesSnap) ? { ...storesSnap } : {};
+      const safeVendors: Record<string, any> = vendorsSnap && typeof vendorsSnap === 'object' && !('error' in vendorsSnap) ? { ...vendorsSnap } : {};
+      const safeProfiles: Record<string, any> = profilesSnap && typeof profilesSnap === 'object' && !('error' in profilesSnap) ? { ...profilesSnap } : {};
+      const safeDeleted: Record<string, any> = deletedSnap && typeof deletedSnap === 'object' && !('error' in deletedSnap) ? { ...deletedSnap } : {};
+
+      // Merge Cloud Firestore registered vendors
+      if (fsVendorsSnap && !fsVendorsSnap.empty) {
+        fsVendorsSnap.forEach(docSnap => {
+          const vData = docSnap.data();
+          if (vData && docSnap.id) {
+            const rawStatus = (vData.status || 'active').toLowerCase();
+            if (rawStatus !== 'deleted' && rawStatus !== 'rejected') {
+              safeVendors[docSnap.id] = {
+                id: docSnap.id,
+                vendorId: docSnap.id,
+                status: rawStatus,
+                ...vData,
+                ...(safeVendors[docSnap.id] || {})
+              };
+            }
+          }
+        });
+      }
+
+      // Merge Cloud Firestore registered stores
+      if (fsStoresSnap && !fsStoresSnap.empty) {
+        fsStoresSnap.forEach(docSnap => {
+          const sData = docSnap.data();
+          if (sData && docSnap.id) {
+            const rawStatus = (sData.status || 'active').toLowerCase();
+            if (rawStatus !== 'deleted' && rawStatus !== 'rejected') {
+              safeStores[docSnap.id] = {
+                id: docSnap.id,
+                storeId: docSnap.id,
+                status: rawStatus,
+                ...sData,
+                ...(safeStores[docSnap.id] || {})
+              };
+            }
+          }
+        });
+      }
 
       const deletedIds = new Set<string>(
         Object.keys(safeDeleted).filter(k => k && k !== 'error' && !PROTECTED_ACTIVE_STORE_IDS.has(String(k).trim().toLowerCase()))
       );
 
       // Do not allow actively registered stores to be in deletedIds
-      Object.keys(safeStores).forEach(sId => {
-        const st = safeStores[sId];
-        if (sId && st && (st.status === 'active' || st.verified === true || st.isVerified === true || st.verificationStatus === 'verified')) {
+      [...Object.keys(safeStores), ...Object.keys(safeVendors)].forEach(sId => {
+        const st = safeStores[sId] || safeVendors[sId];
+        if (sId && st && (st.status === 'active' || st.status === 'approved' || st.verified === true || st.isVerified === true || st.verificationStatus === 'verified')) {
           deletedIds.delete(sId);
           deletedStoreIdsSet.delete(sId);
           deletedStoreIdsSet.delete(sId.toLowerCase());
