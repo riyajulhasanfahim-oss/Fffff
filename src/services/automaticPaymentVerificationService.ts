@@ -2,22 +2,34 @@
  * Automatic Payment Verification Service
  * 
  * Strict Verification Engine:
- * - Single Source of Truth: Firebase Realtime Database `payments` node
- * - NO Firestore collection for payments (payment_verifications / payments collection completely removed)
+ * - Single Source of Truth: Cloud Firestore `payments` collection (/payments/{paymentId})
+ *   Database ID: ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c
+ *   Project ID: gen-lang-client-0902472299
+ * - Verified ONLY when a real matching payment record from SMS Reader exists in Firestore
  * - verifiedAt is written ONLY upon final successful business verification
  * 
  * Step-by-step verification pipeline:
  * 1. Read pending request (TrxID, Method, Amount, Invoice, User, UserType)
- * 2. Query Firebase RTDB `payments` node for matching TrxID
+ * 2. Query Firestore `payments` collection for matching TrxID
  * 3. Validate Payment Method (bKash/Nagad/Rocket/Upay)
  * 4. Validate Amount (exact match)
  * 5. Validate Duplicate Protection (not verified for different invoice/user)
  * 6. Execute Business Action (Activate Vendor / Confirm Customer Order / Approve Reseller)
- * 7. Write status: 'VERIFIED' and verifiedAt timestamp to RTDB `payments/{pushKey}`
+ * 7. Write status: 'VERIFIED' and verifiedAt timestamp to Firestore `/payments/{docId}`
  * 8. Return success to user UI with instant navigation
  */
 
-import { rtdbSet, rtdbUpdate, rtdbGet, rtdbList } from '../lib/rtdb';
+import { rtdbUpdate, rtdbGet, rtdbList } from '../lib/rtdb';
+import { db } from '../lib/firebase';
+import {
+  doc,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc
+} from 'firebase/firestore';
 import {
   PaymentMethodType,
   PaymentUserType
@@ -57,9 +69,6 @@ export interface VerificationResult {
   diagnostic?: any;
 }
 
-import { RTDB_BASE_URL as BASE_URL } from '../lib/firebase';
-const RTDB_BASE_URL = `${BASE_URL}/payments`;
-
 /**
  * Normalizes payment method string into standard lowercase enum
  */
@@ -72,54 +81,77 @@ export function normalizeMethod(method: string | PaymentMethodType): PaymentMeth
   return 'bkash';
 }
 
-/**
- * Direct query to Firebase Realtime Database `payments` node
- * Single Source of Truth
- */
-async function queryRtdbPaymentsNode(cleanTrxId: string): Promise<{
+export interface FirestorePaymentRecord {
   pushKey: string;
   amount: number;
   paymentMethod: string;
   senderNumber: string;
   status: string;
+  syncStatus: string;
   syncedAt?: number;
   receivedAt?: number;
   verifiedAt?: number | null;
   verifiedFor?: any;
-} | null> {
+  rawMessage?: string;
+}
+
+function parseFirestorePaymentItem(id: string, data: any): FirestorePaymentRecord {
+  const rawAmt = data.amount ?? data.receivedAmount ?? data.paidAmount ?? data.totalAmount ?? data.fee ?? data.total ?? 0;
+  const parsedAmt = typeof rawAmt === 'number'
+    ? rawAmt
+    : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0;
+
+  const rawMethod = data.paymentMethod || data.payment_method || data.method || data.channel || data.provider || data.gateway || '';
+  const rawReceivedAt = data.receivedAt || data.syncedAt || data.createdAt || 0;
+  const receivedAt = typeof rawReceivedAt === 'number'
+    ? rawReceivedAt
+    : (rawReceivedAt?.toMillis ? rawReceivedAt.toMillis() : Date.parse(rawReceivedAt) || 0);
+
+  return {
+    pushKey: id,
+    amount: parsedAmt,
+    paymentMethod: String(rawMethod).toLowerCase().trim(),
+    senderNumber: String(data.senderNumber || data.sender || data.mobileNumber || data.phone || '').trim(),
+    status: String(data.status || data.syncStatus || 'SYNCED').toUpperCase(),
+    syncStatus: String(data.syncStatus || data.status || 'SYNCED').toUpperCase(),
+    syncedAt: Number(data.syncedAt || receivedAt),
+    receivedAt,
+    verifiedAt: data.verifiedAt ? Number(data.verifiedAt) : null,
+    verifiedFor: data.verifiedFor || null,
+    rawMessage: data.rawMessage || ''
+  };
+}
+
+/**
+ * Direct query to Cloud Firestore `payments` collection
+ * Single Source of Truth
+ */
+async function queryFirestorePaymentsNode(cleanTrxId: string): Promise<FirestorePaymentRecord | null> {
   try {
-    const res = await fetch(`${RTDB_BASE_URL}.json`, {
-      signal: AbortSignal.timeout(2500)
-    });
-
-    if (!res.ok) return null;
-    const paymentsData = await res.json();
-    if (!paymentsData || typeof paymentsData !== 'object') return null;
-
-    for (const [key, item] of Object.entries<any>(paymentsData)) {
-      if (item) {
-        const rawTrx = item.transactionId || item.trxId || item.txnId || item.txId || item.transactionID || item.trnxId || item.transId || item.paymentId || key || '';
-        const itemTrx = String(rawTrx).trim().replace(/^#/, '').replace(/\s+/g, '').toUpperCase();
-        if (itemTrx && itemTrx === cleanTrxId) {
-          const rawAmt = item.amount ?? item.receivedAmount ?? item.paidAmount ?? item.totalAmount ?? item.fee ?? item.total ?? 0;
-          const parsedAmt = typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0;
-          const rawMethod = item.paymentMethod || item.payment_method || item.method || item.channel || item.provider || item.gateway || '';
-          return {
-            pushKey: key,
-            amount: parsedAmt,
-            paymentMethod: String(rawMethod || item.paymentMethod || item.method || item.channel || '').toLowerCase().trim(),
-            senderNumber: String(item.senderNumber || item.sender || item.mobileNumber || item.phone || '').trim(),
-            status: String(item.status || 'SYNCED').toUpperCase(),
-            syncedAt: Number(item.syncedAt || item.receivedAt || 0),
-            receivedAt: Number(item.receivedAt || item.syncedAt || 0),
-            verifiedAt: item.verifiedAt ? Number(item.verifiedAt) : null,
-            verifiedFor: item.verifiedFor || null
-          };
-        }
+    // 1. Direct document fetch by ID (SMS Reader writes document with docId == cleanTrxId)
+    const directDocRef = doc(db, 'payments', cleanTrxId);
+    const directDoc = await getDoc(directDocRef);
+    if (directDoc.exists()) {
+      const data = directDoc.data();
+      const rawTrx = data.transactionId || data.trxId || directDoc.id;
+      const itemTrx = String(rawTrx).trim().replace(/^#/, '').replace(/\s+/g, '').toUpperCase();
+      if (itemTrx === cleanTrxId) {
+        return parseFirestorePaymentItem(directDoc.id, data);
       }
     }
+
+    // 2. Query Firestore 'payments' collection where transactionId == cleanTrxId
+    const q = query(
+      collection(db, 'payments'),
+      where('transactionId', '==', cleanTrxId)
+    );
+    const qSnap = await getDocs(q);
+    if (!qSnap.empty) {
+      const firstDoc = qSnap.docs[0];
+      return parseFirestorePaymentItem(firstDoc.id, firstDoc.data());
+    }
   } catch (err) {
-    console.warn('[VERIFY] RTDB query notice:', err);
+    console.warn('[VERIFY] Firestore payments query notice:', err);
   }
   return null;
 }
@@ -333,19 +365,19 @@ async function executeBusinessActionSafely(
 }
 
 /**
- * Updates the RTDB `payments` node with status: 'VERIFIED' and verifiedAt timestamp
+ * Updates the Firestore `payments` document with status: 'VERIFIED' and verifiedAt timestamp
  * Called ONLY AFTER business action is confirmed.
  * Uses parallel dispatch (Promise.allSettled) for instantaneous completion.
  */
-async function markRtdbPaymentVerified(
-  pushKey: string,
+async function markPaymentVerified(
+  docId: string,
   cleanTrxId: string,
   req: VerifyPaymentRequest,
   verifiedAmount: number,
   senderNumber: string
 ): Promise<number> {
   const verifiedAt = Date.now();
-  console.log('[VERIFY] Updating payment status');
+  console.log('[VERIFY] Updating payment status in Firestore payments collection');
 
   const updateData = {
     status: 'VERIFIED',
@@ -357,9 +389,14 @@ async function markRtdbPaymentVerified(
     }
   };
 
-  // Parallelize server endpoint update and direct RTDB update
+  // Parallelize Firestore update, server endpoint confirmation, and RTDB mirror
   await Promise.allSettled([
-    // 1. Update via server endpoint if in browser environment
+    // 1. Direct Firestore document update (Single Source of Truth)
+    updateDoc(doc(db, 'payments', docId), updateData).catch(err => {
+      console.warn('[VERIFY] Firestore doc update notice:', err);
+    }),
+
+    // 2. Update via server endpoint if running in browser
     (async () => {
       try {
         if (typeof window !== 'undefined') {
@@ -369,7 +406,7 @@ async function markRtdbPaymentVerified(
             signal: AbortSignal.timeout(2000),
             body: JSON.stringify({
               transactionId: cleanTrxId,
-              pushKey,
+              pushKey: docId,
               invoiceId: req.invoiceId,
               userId: req.userId,
               userType: req.userType,
@@ -383,8 +420,8 @@ async function markRtdbPaymentVerified(
       }
     })(),
 
-    // 2. Direct RTDB update for guaranteed SDK + REST persistence
-    rtdbUpdate(`payments/${pushKey}`, updateData)
+    // 3. Mirror update to RTDB payments node if it exists
+    rtdbUpdate(`payments/${docId}`, updateData).catch(() => {})
   ]);
 
   try {
@@ -396,7 +433,7 @@ async function markRtdbPaymentVerified(
 
 /**
  * Main Automatic Payment Verification Entry Point
- * Strictly follows the 12-step trace logs and eliminates unnecessary delays.
+ * Reads from existing Firestore database and payments collection
  */
 export async function verifyPaymentAutomatic(
   req: VerifyPaymentRequest
@@ -417,7 +454,7 @@ export async function verifyPaymentAutomatic(
     console.log('[VERIFY] Final response sent');
     return {
       success: false,
-      status: 'rejected',
+      status: 'pending',
       message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন',
       rejectionReason: 'transaction_not_found'
     };
@@ -435,18 +472,15 @@ export async function verifyPaymentAutomatic(
     };
   }
 
-  // Polling loop against RTDB payments node (Single Source of Truth)
-  // Queries both RTDB directly and server in parallel with zero unnecessary wait.
+  // Polling loop against Firestore payments collection (Single Source of Truth)
   const startTime = Date.now();
-  const MAX_WAIT_MS = 5500;
-  let attemptCount = 0;
+  const MAX_WAIT_MS = 6000;
 
   while (Date.now() - startTime < MAX_WAIT_MS) {
-    attemptCount++;
-    console.log('[VERIFY] Querying payments node');
+    console.log('[VERIFY] Querying Firestore payments collection');
 
-    // Run Server API and Direct RTDB Query in Parallel for maximum speed
-    const [serverResData, rtdbRecord] = await Promise.all([
+    // Run Server API and Direct Firestore Query in Parallel for maximum speed
+    const [serverResData, firestoreRecord] = await Promise.all([
       (async () => {
         try {
           if (typeof window !== 'undefined') {
@@ -473,12 +507,12 @@ export async function verifyPaymentAutomatic(
         }
         return null;
       })(),
-      queryRtdbPaymentsNode(cleanTrxId)
+      queryFirestorePaymentsNode(cleanTrxId)
     ]);
 
     console.log('[VERIFY] Payment query completed');
 
-    // If server returned explicit mismatch rejection, fail fast!
+    // If server returned explicit mismatch rejection (amount or method mismatch, or duplicate), fail fast!
     if (serverResData?.status === 'rejected' && serverResData?.rejectionReason !== 'record_not_found') {
       console.warn(`[VERIFY] Server returned rejection: ${serverResData.message}`);
       console.log('[VERIFY] Final response sent');
@@ -490,16 +524,17 @@ export async function verifyPaymentAutomatic(
       };
     }
 
-    const foundMatch = (serverResData?.status === 'matched' || serverResData?.status === 'verified')
-      ? serverResData
-      : rtdbRecord;
+    const foundMatch = firestoreRecord || (
+      (serverResData?.status === 'matched' || serverResData?.status === 'verified') ? serverResData : null
+    );
 
     if (foundMatch) {
-      console.log('[VERIFY] Payment found');
-      const pushKey = foundMatch.pushKey || rtdbRecord?.pushKey || `KEY-${cleanTrxId}`;
-      const receivedAmount = Math.round(Number(foundMatch.receivedAmount || foundMatch.amount || 0) * 100) / 100;
-      const senderNumber = foundMatch.senderNumber || rtdbRecord?.senderNumber || '';
-      const paymentMethod = normalizeMethod(foundMatch.paymentMethod || rtdbRecord?.paymentMethod || reqMethod);
+      console.log('[VERIFY] Payment found in Firestore payments collection');
+      const docId = foundMatch.pushKey || foundMatch.id || cleanTrxId;
+      const rawAmt = foundMatch.amount ?? foundMatch.receivedAmount ?? 0;
+      const receivedAmount = Math.round((typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0) * 100) / 100;
+      const senderNumber = foundMatch.senderNumber || '';
+      const paymentMethod = normalizeMethod(foundMatch.paymentMethod || reqMethod);
 
       // 1. Amount Validation (Exact match required: Transaction ID, Method, and Amount all must match)
       if (Math.abs(receivedAmount - expectedAmount) >= 0.01) {
@@ -531,7 +566,7 @@ export async function verifyPaymentAutomatic(
       // 3. Duplicate Protection Validation
       const isAlreadyVerified = (foundMatch.status === 'VERIFIED' || foundMatch.status === 'verified') && (foundMatch.verifiedAt && foundMatch.verifiedAt > 0);
       if (isAlreadyVerified) {
-        const verifiedFor = foundMatch.verifiedFor || rtdbRecord?.verifiedFor;
+        const verifiedFor = foundMatch.verifiedFor;
         const isSameInvoice = Boolean(req.invoiceId && verifiedFor?.invoiceId && verifiedFor?.invoiceId === req.invoiceId);
 
         if (!isSameInvoice) {
@@ -595,8 +630,8 @@ export async function verifyPaymentAutomatic(
       }
       console.log('[VERIFY] Service/order activation completed');
 
-      // 5. Updating payment status in RTDB
-      const verifiedAt = await markRtdbPaymentVerified(pushKey, cleanTrxId, req, receivedAmount, senderNumber);
+      // 5. Updating payment status in Firestore (and mirroring)
+      const verifiedAt = await markPaymentVerified(docId, cleanTrxId, req, receivedAmount, senderNumber);
 
       // 6. Return Final Verified Response
       console.log('[VERIFY] Final response sent');
@@ -608,24 +643,24 @@ export async function verifyPaymentAutomatic(
         verifiedAt,
         receivedAmount,
         senderNumber,
-        pushKey
+        pushKey: docId
       };
     }
 
-    // If not found yet and still within timeout window, short 750ms sleep before re-polling
+    // If not found yet and still within timeout window, short 800ms sleep before re-polling
     if (Date.now() - startTime < MAX_WAIT_MS - 1000) {
-      await new Promise(resolve => setTimeout(resolve, 750));
+      await new Promise(resolve => setTimeout(resolve, 800));
     } else {
       break;
     }
   }
 
-  // Timeout reached and no payment record found in RTDB payments node
-  console.warn(`[VERIFY] Payment record not found in RTDB payments node for TrxID: ${cleanTrxId}`);
+  // Timeout reached and no matching payment record found in Firestore payments collection
+  console.warn(`[VERIFY] Payment record not found in Firestore payments collection for TrxID: ${cleanTrxId}`);
   console.log('[VERIFY] Final response sent');
   return {
     success: false,
-    status: 'rejected',
+    status: 'pending',
     rejectionReason: 'record_not_found',
     message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন',
     diagnostic: {

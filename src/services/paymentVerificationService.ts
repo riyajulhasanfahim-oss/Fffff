@@ -6,9 +6,17 @@ import {
   PaymentUserType,
   PaymentMethodType
 } from '../types/paymentVerification';
-import { RTDB_BASE_URL as BASE_URL } from '../lib/firebase';
-
-const RTDB_BASE_URL = `${BASE_URL}/payments`;
+import { db } from '../lib/firebase';
+import {
+  doc,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  limit
+} from 'firebase/firestore';
 
 /**
  * Normalizes payment method string into standard lowercase enum
@@ -32,8 +40,8 @@ export function generatePaymentId(): string {
 }
 
 /**
- * Fetches a single payment record from Firebase Realtime Database by Transaction ID
- * Single Source of Truth: Realtime Database 'payments' node
+ * Fetches a single payment record from Cloud Firestore `payments` collection by Transaction ID
+ * Single Source of Truth: Firestore 'payments' collection
  */
 export async function getPaymentVerificationByTransactionId(
   transactionId: string
@@ -42,29 +50,35 @@ export async function getPaymentVerificationByTransactionId(
   if (!cleanTrxId) return null;
 
   try {
-    const res = await fetch(`${RTDB_BASE_URL}.json`);
-    if (!res.ok) return null;
-    const payments = await res.json();
-    if (!payments || typeof payments !== 'object') return null;
+    // 1. Direct doc lookup by ID
+    const directDocRef = doc(db, 'payments', cleanTrxId);
+    const directDoc = await getDoc(directDocRef);
+    if (directDoc.exists()) {
+      return { pushKey: directDoc.id, data: directDoc.data() };
+    }
 
-    for (const [key, item] of Object.entries<any>(payments)) {
-      if (item && item.transactionId) {
-        const itemTrx = String(item.transactionId).trim().replace(/\s+/g, '').toUpperCase();
-        if (itemTrx === cleanTrxId) {
-          return { pushKey: key, data: item };
-        }
-      }
+    // 2. Query where transactionId == cleanTrxId
+    const q = query(
+      collection(db, 'payments'),
+      where('transactionId', '==', cleanTrxId),
+      limit(1)
+    );
+    const qSnap = await getDocs(q);
+    if (!qSnap.empty) {
+      const firstDoc = qSnap.docs[0];
+      return { pushKey: firstDoc.id, data: firstDoc.data() };
     }
   } catch (err) {
-    console.warn('[PAYMENT-SERVICE] Error fetching payment by TrxID from RTDB:', err);
+    console.warn('[PAYMENT-SERVICE] Error fetching payment by TrxID from Firestore:', err);
   }
   return null;
 }
 
 /**
- * Creates a payment verification record in Firebase Realtime Database (payments node)
- * Default status is strictly 'SYNCED'.
- * NEVER sets verifiedAt upon creation.
+ * Creates/opens a payment verification request object
+ * Default status is strictly 'pending'.
+ * NEVER writes a fake payment record into Firestore `/payments` collection!
+ * The SMS Reader is the only entity that writes payment records into `/payments`.
  */
 export async function createPaymentVerificationRecord(
   input: CreatePaymentVerificationInput
@@ -91,101 +105,86 @@ export async function createPaymentVerificationRecord(
     ...(input.metadata ? { metadata: input.metadata } : {})
   };
 
-  try {
-    // Save to RTDB payments node
-    await fetch(`${RTDB_BASE_URL}.json`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: record.expectedAmount,
-        paymentMethod: normalizedMethod,
-        receivedAt: now,
-        senderNumber: record.senderNumber || '',
-        status: 'SYNCED',
-        syncedAt: now,
-        transactionId: cleanTrxId
-      })
-    });
-  } catch (err) {
-    console.warn('[PAYMENT-SERVICE] Error writing payment record to RTDB:', err);
-  }
-
+  // Website does NOT write fake records to /payments; returns pending request
   return record;
 }
 
 /**
- * Updates payment verification status in Firebase Realtime Database (payments/{pushKey})
+ * Updates payment verification status in Cloud Firestore (payments/{docId})
  * Only writes verifiedAt during final successful verification.
  */
 export async function updatePaymentVerificationStatus(
   pushKeyOrTrxId: string,
   update: UpdateVerificationStatusInput & { pushKey?: string }
 ): Promise<boolean> {
-  let targetPushKey = update.pushKey;
+  let targetDocId = update.pushKey;
 
-  if (!targetPushKey) {
+  if (!targetDocId) {
     const existing = await getPaymentVerificationByTransactionId(pushKeyOrTrxId);
     if (existing) {
-      targetPushKey = existing.pushKey;
+      targetDocId = existing.pushKey;
+    } else {
+      targetDocId = pushKeyOrTrxId;
     }
   }
 
-  if (!targetPushKey) return false;
+  if (!targetDocId) return false;
 
-  const patchBody: any = {
+  const updateFields: any = {
     status: update.status === 'verified' ? 'VERIFIED' : 'SYNCED'
   };
 
   if (update.status === 'verified') {
-    patchBody.verifiedAt = Date.now();
+    updateFields.verifiedAt = Date.now();
   }
 
   try {
-    const res = await fetch(`${RTDB_BASE_URL}/${targetPushKey}.json`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patchBody)
-    });
-    return res.ok;
+    await updateDoc(doc(db, 'payments', targetDocId), updateFields);
+    return true;
   } catch (err) {
-    console.warn('[PAYMENT-SERVICE] Error updating payment status in RTDB:', err);
+    console.warn('[PAYMENT-SERVICE] Error updating payment status in Firestore:', err);
     return false;
   }
 }
 
 /**
- * Lists payment verification records directly from Firebase Realtime Database (payments node)
+ * Lists payment verification records directly from Cloud Firestore `payments` collection
  */
 export async function listPaymentVerifications(options?: { limitCount?: number }): Promise<PaymentVerificationRecord[]> {
   try {
-    const res = await fetch(`${RTDB_BASE_URL}.json`);
-    if (!res.ok) return [];
-    const payments = await res.json();
-    if (!payments || typeof payments !== 'object') return [];
-
+    const q = query(
+      collection(db, 'payments'),
+      limit(options?.limitCount || 50)
+    );
+    const snap = await getDocs(q);
     const list: PaymentVerificationRecord[] = [];
-    for (const [key, item] of Object.entries<any>(payments)) {
-      if (item && item.transactionId) {
-        list.push({
-          paymentId: key,
-          invoiceId: item.verifiedFor?.invoiceId || `INV-${item.transactionId}`,
-          userId: item.verifiedFor?.userId || 'system',
-          userType: item.verifiedFor?.userType || 'customer',
-          paymentMethod: normalizePaymentMethod(item.paymentMethod || 'bkash'),
-          expectedAmount: Number(item.amount || 0),
-          receivedAmount: Number(item.amount || 0),
-          transactionId: String(item.transactionId).trim().toUpperCase(),
-          status: item.status === 'VERIFIED' ? 'verified' : 'pending',
-          senderNumber: item.senderNumber || null,
-          verifiedAt: item.verifiedAt || null,
-          createdAt: item.receivedAt || item.syncedAt || Date.now(),
-          rejectionReason: null
-        });
-      }
-    }
-    return list.slice(0, options?.limitCount || 50);
+
+    snap.forEach((d) => {
+      const item = d.data();
+      const rawAmt = item.amount ?? item.receivedAmount ?? 0;
+      const amt = typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0;
+      const rawTrx = item.transactionId || d.id;
+
+      list.push({
+        paymentId: d.id,
+        invoiceId: item.verifiedFor?.invoiceId || `INV-${rawTrx}`,
+        userId: item.verifiedFor?.userId || 'system',
+        userType: item.verifiedFor?.userType || 'customer',
+        paymentMethod: normalizePaymentMethod(item.paymentMethod || 'bkash'),
+        expectedAmount: amt,
+        receivedAmount: amt,
+        transactionId: String(rawTrx).trim().toUpperCase(),
+        status: (item.status === 'VERIFIED' || item.verifiedAt) ? 'verified' : 'pending',
+        senderNumber: item.senderNumber || null,
+        verifiedAt: item.verifiedAt || null,
+        createdAt: item.receivedAt || item.syncedAt || Date.now(),
+        rejectionReason: null
+      });
+    });
+
+    return list;
   } catch (err) {
-    console.warn('[PAYMENT-SERVICE] Error listing payments from RTDB:', err);
+    console.warn('[PAYMENT-SERVICE] Error listing payments from Firestore:', err);
     return [];
   }
 }

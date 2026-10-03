@@ -2695,13 +2695,14 @@ app.use((req, res, next) => {
         return res.status(200).json(rejRes);
       }
 
-      console.log('[VERIFY] Querying payments node');
+      console.log('[VERIFY] Querying payments collection in Firestore');
       let foundRecord: {
         paymentMethod: string;
         amount: number;
         senderNumber?: string | null;
         source: string;
         status?: string;
+        syncStatus?: string;
         verificationStatus?: string;
         paymentAvailability?: string;
         pushKey?: string | null;
@@ -2709,57 +2710,103 @@ app.use((req, res, next) => {
         verifiedFor?: any;
       } | null = null;
 
-      // 1. Check in-memory + disk cache from RJ World BD Android SMS Reader
-      if (syncedSmsRecords.has(cleanTrx)) {
-        const cached = syncedSmsRecords.get(cleanTrx)!;
-        foundRecord = {
-          paymentMethod: cached.paymentMethod,
-          amount: cached.amount,
-          senderNumber: cached.senderNumber || null,
-          source: 'RJ World BD Android SMS Reader Cache',
-          status: cached.status,
-          verificationStatus: cached.verificationStatus,
-          paymentAvailability: cached.paymentAvailability
-        };
+      // Cloud Firestore REST API lookup (ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c)
+      const apiKey = appletFirebaseConfig.apiKey || '';
+      const fsBase = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents`;
+
+      // 1. Direct document lookup by ID
+      try {
+        const fsDocRes = await fetch(`${fsBase}/payments/${encodeURIComponent(cleanTrx)}?key=${apiKey}`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (fsDocRes.ok) {
+          const docObj = await fsDocRes.json();
+          if (docObj?.fields) {
+            const fields = docObj.fields;
+            const rawAmt = fields.amount?.doubleValue ?? fields.amount?.integerValue ?? fields.receivedAmount?.doubleValue ?? fields.receivedAmount?.integerValue ?? 0;
+            const amt = Number(rawAmt);
+            const meth = fields.paymentMethod?.stringValue || fields.channel?.stringValue || '';
+            const stat = fields.status?.stringValue || fields.syncStatus?.stringValue || 'SYNCED';
+            const syncStat = fields.syncStatus?.stringValue || fields.status?.stringValue || 'SYNCED';
+            const verAt = fields.verifiedAt?.integerValue ? Number(fields.verifiedAt.integerValue) : null;
+            const sndNum = fields.senderNumber?.stringValue || null;
+
+            foundRecord = {
+              paymentMethod: String(meth).toLowerCase().trim(),
+              amount: amt,
+              senderNumber: sndNum,
+              source: 'Cloud Firestore (payments)',
+              status: stat,
+              syncStatus: syncStat,
+              verificationStatus: stat === 'VERIFIED' ? 'verified' : 'pending',
+              paymentAvailability: 'available',
+              pushKey: cleanTrx,
+              verifiedAt: verAt,
+              verifiedFor: null
+            };
+          }
+        }
+      } catch (fsErr) {
+        console.warn('[VERIFY] Firestore direct lookup notice:', fsErr);
       }
 
-      // 2. Check Firebase Realtime Database: 'payments' node (3.5-second timeout)
+      // 2. Query Firestore 'payments' collection where transactionId == cleanTrx
       if (!foundRecord) {
         try {
-          const rtdbRes = await fetch(`${CURRENT_RTDB_BASE}/payments.json`, {
-            signal: AbortSignal.timeout(3500)
-          });
-          if (rtdbRes.ok) {
-            const paymentsData = await rtdbRes.json();
-            if (paymentsData && typeof paymentsData === 'object') {
-              for (const [key, item] of Object.entries<any>(paymentsData)) {
-                if (item) {
-                  const rawTrx = item.transactionId || item.trxId || item.txnId || item.txId || item.transactionID || item.trnxId || item.transId || item.paymentId || key || '';
-                  const recordTrx = String(rawTrx).trim().replace(/^#/, '').replace(/\s+/g, '').toUpperCase();
-                  if (recordTrx && recordTrx === cleanTrx) {
-                    const rawAmt = item.amount ?? item.receivedAmount ?? item.paidAmount ?? item.totalAmount ?? item.fee ?? item.total ?? 0;
-                    const amt = typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0;
-                    const rawMeth = item.paymentMethod || item.payment_method || item.method || item.channel || item.provider || item.gateway || '';
-                    foundRecord = {
-                      paymentMethod: String(rawMeth || item.paymentMethod || item.method || item.channel || '').toLowerCase().trim(),
-                      amount: amt,
-                      senderNumber: item.senderNumber || item.sender || item.mobileNumber || item.phone || null,
-                      source: 'Firebase Realtime Database (payments)',
-                      status: item.status,
-                      verificationStatus: item.status === 'VERIFIED' ? 'verified' : 'pending',
-                      paymentAvailability: 'available',
-                      pushKey: key,
-                      verifiedAt: item.verifiedAt || null,
-                      verifiedFor: item.verifiedFor || null
-                    };
-                    break;
+          const fsQueryRes = await fetch(`${fsBase}:runQuery?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(3500),
+            body: JSON.stringify({
+              structuredQuery: {
+                from: [{ collectionId: 'payments' }],
+                where: {
+                  fieldFilter: {
+                    field: { fieldPath: 'transactionId' },
+                    op: 'EQUAL',
+                    value: { stringValue: cleanTrx }
                   }
+                },
+                limit: 1
+              }
+            })
+          });
+
+          if (fsQueryRes.ok) {
+            const qRows = await fsQueryRes.json();
+            if (Array.isArray(qRows)) {
+              for (const row of qRows) {
+                if (row?.document?.fields) {
+                  const fields = row.document.fields;
+                  const docId = row.document.name ? row.document.name.split('/').pop()! : cleanTrx;
+                  const rawAmt = fields.amount?.doubleValue ?? fields.amount?.integerValue ?? fields.receivedAmount?.doubleValue ?? fields.receivedAmount?.integerValue ?? 0;
+                  const amt = Number(rawAmt);
+                  const meth = fields.paymentMethod?.stringValue || fields.channel?.stringValue || '';
+                  const stat = fields.status?.stringValue || fields.syncStatus?.stringValue || 'SYNCED';
+                  const syncStat = fields.syncStatus?.stringValue || fields.status?.stringValue || 'SYNCED';
+                  const verAt = fields.verifiedAt?.integerValue ? Number(fields.verifiedAt.integerValue) : null;
+                  const sndNum = fields.senderNumber?.stringValue || null;
+
+                  foundRecord = {
+                    paymentMethod: String(meth).toLowerCase().trim(),
+                    amount: amt,
+                    senderNumber: sndNum,
+                    source: 'Cloud Firestore (payments)',
+                    status: stat,
+                    syncStatus: syncStat,
+                    verificationStatus: stat === 'VERIFIED' ? 'verified' : 'pending',
+                    paymentAvailability: 'available',
+                    pushKey: docId,
+                    verifiedAt: verAt,
+                    verifiedFor: null
+                  };
+                  break;
                 }
               }
             }
           }
-        } catch (rtdbErr) {
-          console.warn('[VERIFY] RTDB payments query notice:', rtdbErr);
+        } catch (fsQErr) {
+          console.warn('[VERIFY] Firestore runQuery notice:', fsQErr);
         }
       }
 
@@ -2767,7 +2814,7 @@ app.use((req, res, next) => {
 
       // If matching payment record found, evaluate matching rules
       if (foundRecord) {
-        console.log(`[VERIFY] Payment found: pushKey=${foundRecord.pushKey}, TrxID=${cleanTrx}, Method=${foundRecord.paymentMethod}, Amount=${foundRecord.amount}`);
+        console.log(`[VERIFY] Payment found in Firestore: pushKey=${foundRecord.pushKey}, TrxID=${cleanTrx}, Method=${foundRecord.paymentMethod}, Amount=${foundRecord.amount}`);
         const recordMethod = (foundRecord.paymentMethod || '').toLowerCase().trim();
         const rawAmt = foundRecord.amount ?? 0;
         const recordAmount = Math.round((typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0) * 100) / 100;
@@ -2834,7 +2881,24 @@ app.use((req, res, next) => {
           const verifiedAt = Date.now();
           console.log('[VERIFY] Service/order activation completed');
 
-          console.log('[VERIFY] Updating payment status');
+          console.log('[VERIFY] Updating payment status in Firestore');
+          const targetKey = foundRecord.pushKey || cleanTrx;
+          try {
+            await fetch(`${fsBase}/payments/${encodeURIComponent(targetKey)}?updateMask.fieldPaths=status&updateMask.fieldPaths=verifiedAt&key=${apiKey}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(3000),
+              body: JSON.stringify({
+                fields: {
+                  status: { stringValue: 'VERIFIED' },
+                  verifiedAt: { integerValue: String(verifiedAt) }
+                }
+              })
+            });
+          } catch (patchErr) {
+            console.warn('[VERIFY] Firestore patch notice:', patchErr);
+          }
+
           if (foundRecord.pushKey) {
             await fetch(`${CURRENT_RTDB_BASE}/payments/${foundRecord.pushKey}.json`, {
               method: 'PATCH',
@@ -2900,8 +2964,8 @@ app.use((req, res, next) => {
         return res.status(200).json(matchedRes);
       }
 
-      // If record is not found in RTDB payments node yet
-      console.log(`[VERIFY] Payment pending SMS arrival in payments node: TrxID=${cleanTrx}`);
+      // If record is not found in Firestore payments collection yet
+      console.log(`[VERIFY] Payment pending SMS arrival in Firestore payments collection: TrxID=${cleanTrx}`);
       const pendingRes = {
         success: false,
         status: 'pending',
@@ -2931,7 +2995,7 @@ app.use((req, res, next) => {
   });
 
   // 4b. Explicit Service Confirmation Endpoint:
-  // Saves verifiedAt and status: 'VERIFIED' to payments/{pushKey} ONLY AFTER business action (order/vendor/reseller) succeeds
+  // Saves verifiedAt and status: 'VERIFIED' to payments collection ONLY AFTER business action (order/vendor/reseller) succeeds
   app.post('/api/payment/confirm-completion', async (req, res) => {
     try {
       const { transactionId, pushKey, invoiceId, userId, userType, receivedAmount, senderNumber } = req.body || {};
@@ -2957,7 +3021,27 @@ app.use((req, res, next) => {
         saveSyncedSmsRecordsToDisk();
       }
 
-      // If pushKey not provided, look it up in RTDB payments
+      // Update Cloud Firestore 'payments' collection
+      try {
+        const apiKey = appletFirebaseConfig.apiKey || '';
+        const fsBase = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents`;
+        const fsDocId = pushKey || cleanTrx;
+        await fetch(`${fsBase}/payments/${encodeURIComponent(fsDocId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=verifiedAt&key=${apiKey}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(3000),
+          body: JSON.stringify({
+            fields: {
+              status: { stringValue: 'VERIFIED' },
+              verifiedAt: { integerValue: String(now) }
+            }
+          })
+        });
+      } catch (fsErr) {
+        console.warn('[CONFIRM-COMPLETION] Firestore patch notice:', fsErr);
+      }
+
+      // Mirror to RTDB payments node if targetPushKey exists
       let targetPushKey = pushKey;
       if (!targetPushKey) {
         try {
