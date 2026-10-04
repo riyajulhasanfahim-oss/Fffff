@@ -55,6 +55,10 @@ service cloud.firestore {
         (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']) || request.resource.data.status == resource.data.status)
       );
       allow delete: if isUserAdmin();
+
+      match /followed_stores/{storeId} {
+        allow read, write: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
+      }
     }
 
     // User carts & wishlists
@@ -165,7 +169,9 @@ service cloud.firestore {
 
     match /vendors/{vendorId} {
       allow read: if true;
-      allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == vendorId);
+      allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == vendorId) || (
+        isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followersCount', 'followers', 'updatedAt'])
+      );
 
       match /store/{storeId} {
         allow read: if true;
@@ -180,7 +186,9 @@ service cloud.firestore {
 
     match /vendor_profiles/{vendorId} {
       allow read: if true;
-      allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == vendorId);
+      allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == vendorId) || (
+        isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followersCount', 'followers', 'updatedAt'])
+      );
 
       match /{document=**} {
         allow read: if true;
@@ -201,7 +209,16 @@ service cloud.firestore {
     // Stores collection (Vendor and Reseller stores)
     match /stores/{storeId} {
       allow read: if true;
-      allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == storeId);
+      allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == storeId) || (
+        isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followersCount', 'followers', 'updatedAt'])
+      );
+    }
+
+    // Store Followers collection (Facebook-style Store Follower System)
+    match /store_followers/{followerDocId} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && (request.auth.uid == request.resource.data.userId || isUserAdmin());
+      allow delete: if isSignedIn() && (request.auth.uid == resource.data.userId || isUserAdmin());
     }
 
     match /vendor_statistics/{vendorId} {
