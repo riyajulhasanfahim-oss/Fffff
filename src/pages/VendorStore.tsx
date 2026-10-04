@@ -30,6 +30,13 @@ import {
   isStoreDeletedFromCache
 } from '../services/storeCache';
 import { 
+  getCachedVendorFollowersCount, 
+  getVendorRealFollowersCount, 
+  subscribeVendorFollowersCount,
+  subscribeUserFollowStatus,
+  toggleFollowVendor
+} from '../services/vendorFollowerService';
+import { 
   Star, 
   Heart, 
   Share2, 
@@ -167,11 +174,34 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
     return () => window.removeEventListener('rj_store_deleted', handleStoreDeleted);
   }, [vendorId]);
 
-  // Follower State initialized synchronously
+  // Authentic follower count state initialized strictly from database cache
   const [isFollowing, setIsFollowing] = useState<boolean>(() => initialFollowing);
+  const [isTogglingFollow, setIsTogglingFollow] = useState<boolean>(false);
   const [followersCount, setFollowersCount] = useState<number>(() => {
-    return Number(initialCached?.followersCount ?? initialCached?.followers ?? 0);
+    return getCachedVendorFollowersCount(vendorId);
   });
+
+  // Keep user follow relationship synchronized in real time with actual database state
+  useEffect(() => {
+    const currentUid = user?.uid || auth.currentUser?.uid;
+    if (!vendorId || !currentUid) {
+      setIsFollowing(false);
+      return;
+    }
+    const unsubscribe = subscribeUserFollowStatus(vendorId, currentUid, (status) => {
+      setIsFollowing(status);
+    });
+    return () => unsubscribe();
+  }, [vendorId, user?.uid]);
+
+  // Keep follower count synchronized in real time with actual database state
+  useEffect(() => {
+    if (!vendorId) return;
+    const unsubscribe = subscribeVendorFollowersCount(vendorId, (count) => {
+      setFollowersCount(count);
+    });
+    return () => unsubscribe();
+  }, [vendorId]);
 
   // UI Modals
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -307,35 +337,15 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
           console.warn('Error fetching theme from RTDB:', themeErr);
         }
 
-        // 2. Determine Follower Count & User Following Status strictly from RTDB
+        // 2. Determine Follower Count strictly from actual database state
         try {
-          const effectiveUid = user?.uid || auth.currentUser?.uid;
-          const [followersList, followRecord, userFollowRecord] = await Promise.all([
-            rtdbList<any>('store_followers', (f: any) =>
-              f?.vendorId === vendorId ||
-              f?.storeId === vendorId ||
-              String(f?.id || '').startsWith(`${vendorId}_`)
-            ),
-            effectiveUid ? rtdbGet<any>(`store_followers/${vendorId}_${effectiveUid}`).catch(() => null) : Promise.resolve(null),
-            effectiveUid ? rtdbGet<any>(`users/${effectiveUid}/followed_stores/${vendorId}`).catch(() => null) : Promise.resolve(null)
-          ]);
-
-          const realFollowersCount = followersList ? followersList.length : 0;
+          const realFollowersCount = await getVendorRealFollowersCount(vendorId);
           if (isMounted) {
             setFollowersCount(realFollowersCount);
           }
-          saveStoreToCache(vendorId, { followersCount: realFollowersCount });
-
-          if (effectiveUid && isMounted) {
-            const isFollowedInRTDB = !!followRecord || !!userFollowRecord;
-            setIsFollowing(isFollowedInRTDB);
-            saveStoreFollowStatusToCache(vendorId, effectiveUid, isFollowedInRTDB);
-          } else if (isMounted) {
-            const cachedFollow = getStoreFollowStatusFromCache(vendorId, null);
-            setIsFollowing(cachedFollow);
-          }
+          saveStoreToCache(vendorId, { followersCount: realFollowersCount, followers: realFollowersCount });
         } catch (fErr) {
-          console.warn('Error fetching store followers from RTDB:', fErr);
+          console.warn('Error fetching authentic store followers from database:', fErr);
         }
 
         // 3. Fetch Products for this Vendor strictly from RTDB
@@ -686,55 +696,31 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
       return;
     }
 
-    const nextState = !isFollowing;
-    setIsFollowing(nextState);
-    const nextCount = nextState ? followersCount + 1 : Math.max(0, followersCount - 1);
-    setFollowersCount(nextCount);
-    saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, nextState);
-
-    // Sync follower count in cached store object
-    const cachedStore = getStoreFromCache(vendorId);
-    if (cachedStore) {
-      saveStoreToCache(vendorId, {
-        ...cachedStore,
-        followersCount: nextCount,
-        followers: nextCount
-      });
-    }
+    if (isTogglingFollow) return;
+    setIsTogglingFollow(true);
 
     try {
-      if (nextState) {
-        await Promise.allSettled([
-          rtdbSet(`store_followers/${vendorId}_${effectiveUser.uid}`, {
-            vendorId,
-            userId: effectiveUser.uid,
-            customerName: userData?.name || effectiveUser.displayName || 'সম্মানিত ক্রেতা',
-            customerEmail: effectiveUser.email || '',
-            followedAt: Date.now()
-          }),
-          rtdbSet(`users/${effectiveUser.uid}/followed_stores/${vendorId}`, {
-            storeId: vendorId,
-            storeName: storeName || 'Store',
-            storeLogo: storeLogo || '',
-            followedAt: Date.now()
-          }),
-          rtdbUpdate(`vendors/${vendorId}`, { followersCount: nextCount }),
-          rtdbUpdate(`vendor_profiles/${vendorId}`, { followersCount: nextCount }),
-          rtdbUpdate(`stores/${vendorId}`, { followersCount: nextCount })
-        ]);
+      const res = await toggleFollowVendor(vendorId, effectiveUser, {
+        storeName: storeName || 'Store',
+        storeLogo: storeLogo || ''
+      });
+      setIsFollowing(res.isFollowing);
+      setFollowersCount(res.followersCount);
+      saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, res.isFollowing);
+
+      if (res.isFollowing) {
         toast.success(`আপনি এখন "${storeName}" এর ফলোয়ার!`);
       } else {
-        await Promise.allSettled([
-          rtdbRemove(`store_followers/${vendorId}_${effectiveUser.uid}`),
-          rtdbRemove(`users/${effectiveUser.uid}/followed_stores/${vendorId}`),
-          rtdbUpdate(`vendors/${vendorId}`, { followersCount: nextCount }),
-          rtdbUpdate(`vendor_profiles/${vendorId}`, { followersCount: nextCount }),
-          rtdbUpdate(`stores/${vendorId}`, { followersCount: nextCount })
-        ]);
         toast.success('স্টোর আনফলো করা হয়েছে');
       }
-    } catch (err) {
-      console.error('Error updating follow state in RTDB:', err);
+    } catch (err: any) {
+      if (err?.message === 'REQUEST_IN_PROGRESS') {
+        return;
+      }
+      console.error('Error toggling follow status:', err);
+      toast.error('ফলো স্টেট আপডেট করতে সমস্যা হয়েছে, পুনরায় চেষ্টা করুন');
+    } finally {
+      setIsTogglingFollow(false);
     }
   };
 
@@ -960,13 +946,14 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                 </div>
               </div>
 
-              {/* Store Header Actions (Follow, Chat, Share, Customize) */}
+              {/* Store Header Actions (Follow/Unfollow, Chat, Share, Customize) */}
               <div className="flex items-center gap-2 shrink-0 self-stretch sm:self-auto justify-end pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-100">
                 
                 {/* Follow / Unfollow Button */}
                 <button
                   type="button"
                   onClick={handleToggleFollow}
+                  disabled={isTogglingFollow}
                   className={`flex-1 sm:flex-none px-3.5 sm:px-4 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs ${
                     isFollowing
                       ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300'
@@ -977,12 +964,12 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                   {isFollowing ? (
                     <>
                       <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[3]" />
-                      <span>Following</span>
+                      <span>Unfollow</span>
                     </>
                   ) : (
                     <>
                       <Heart className="w-3.5 h-3.5 fill-current" />
-                      <span>Follow Store</span>
+                      <span>Follow</span>
                     </>
                   )}
                 </button>

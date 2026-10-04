@@ -3,6 +3,7 @@ import { INITIAL_VENDORS, INITIAL_VENDOR_PROFILES, INITIAL_VENDOR_THEMES } from 
 import { enrichProductsWithRealMetrics } from './productMetricsService';
 import { db } from '../lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
+import { getVendorRealFollowersCount } from './vendorFollowerService';
 
 export interface CachedStore {
   id: string;
@@ -1360,12 +1361,11 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
         ...(resolvedProfile || {})
       });
 
-      // Synchronize exact real followers count from RTDB store_followers
+      // Synchronize exact real followers count from actual database state
       try {
-        const followersSnap = await rtdbList<any>('store_followers', (f: any) =>
-          f?.vendorId === storeId || f?.storeId === storeId || String(f?.id || '').startsWith(`${storeId}_`)
-        );
-        merged.followersCount = followersSnap ? followersSnap.length : 0;
+        const realCount = await getVendorRealFollowersCount(storeId);
+        merged.followersCount = realCount;
+        merged.followers = realCount;
       } catch (_) {}
 
       // Synchronize authentic store rating & reviews count from RTDB vendor_reviews

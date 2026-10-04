@@ -7,6 +7,7 @@ import {
   slugifyVendorName, 
   PRIMARY_DOMAIN 
 } from '../utils/subdomain';
+import { getVendorRealFollowersCount } from '../services/vendorFollowerService';
 
 export interface VendorStoreData {
   storeId?: string;
@@ -388,6 +389,12 @@ export const VendorStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
             finalData.storeSlug = finalData.storeSlug || derivedSlug;
           }
         }
+        // Ensure authentic followers count from database state
+        try {
+          const authenticFollowers = await getVendorRealFollowersCount(uid);
+          finalData.followers = authenticFollowers;
+          finalData.followersCount = authenticFollowers;
+        } catch (_) {}
       }
       
       // Update state and save to cache

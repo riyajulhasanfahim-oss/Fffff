@@ -59,6 +59,7 @@ import PaymentSuccessModal from '../../components/payment/PaymentSuccessModal';
 import { verifyPaymentAutomatic, type VerificationResult } from '../../services/automaticPaymentVerificationService';
 import { isStorePlanVerified, saveStoreToCache } from '../../services/storeCache';
 import { clearVendorLocationCache } from '../../services/vendorLocationService';
+import { getCachedVendorFollowersCount, subscribeVendorFollowersCount } from '../../services/vendorFollowerService';
 import { 
   getVerifiedBadgeSettings, 
   calculateBadgeExpiry, 
@@ -126,6 +127,19 @@ export default function VendorDashboard() {
   const [isTogglingCod, setIsTogglingCod] = useState<boolean>(false);
   const isTogglingCodRef = useRef<boolean>(false);
   const isFetchingVendorDataRef = useRef<boolean>(false);
+
+  // Authentic vendor follower count strictly resolved from database state
+  const [vendorFollowers, setVendorFollowers] = useState<number>(() => {
+    return getCachedVendorFollowersCount(user?.uid || '');
+  });
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsubscribe = subscribeVendorFollowersCount(user.uid, (count) => {
+      setVendorFollowers(count);
+    });
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   // Dynamic live stats loaded from RTDB, seeded from persistent context
   const [stats, setStats] = useState(() => dashboardStats || {
@@ -966,16 +980,11 @@ export default function VendorDashboard() {
               <span className="font-medium text-gray-700">{vendorInfo?.status === 'Active' || vendorInfo?.status === 'active' ? 'Online' : 'Offline'}</span>
             </div>
 
-            {/* Followers & Follow Button */}
-            <div className="flex items-center gap-2 sm:border-l sm:border-gray-200 sm:pl-3">
-              <div className="flex items-center gap-1 text-gray-700">
-                <Users className="w-4 h-4 text-gray-400" />
-                <span className="font-semibold">{vendorInfo?.followers || 0}</span>
-                <span className="text-gray-500 text-xs">Followers</span>
-              </div>
-              <button className="px-2.5 py-0.5 bg-primary-main/10 text-primary-main text-xs font-semibold rounded-full hover:bg-primary-main/20 transition-colors">
-                Follow
-              </button>
+            {/* Followers */}
+            <div className="flex items-center gap-1 text-gray-700 sm:border-l sm:border-gray-200 sm:pl-3">
+              <Users className="w-4 h-4 text-gray-400" />
+              <span className="font-semibold">{vendorFollowers}</span>
+              <span className="text-gray-500 text-xs">Followers</span>
             </div>
 
             {/* Social Media */}
