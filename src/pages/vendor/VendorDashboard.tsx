@@ -59,7 +59,7 @@ import PaymentSuccessModal from '../../components/payment/PaymentSuccessModal';
 import { verifyPaymentAutomatic, type VerificationResult } from '../../services/automaticPaymentVerificationService';
 import { isStorePlanVerified, saveStoreToCache } from '../../services/storeCache';
 import { clearVendorLocationCache } from '../../services/vendorLocationService';
-import { getCachedVendorFollowersCount, subscribeVendorFollowersCount } from '../../services/vendorFollowerService';
+import { getCachedVendorFollowersCount, subscribeVendorFollowersCount, formatFollowers } from '../../services/vendorFollowerService';
 import { 
   getVerifiedBadgeSettings, 
   calculateBadgeExpiry, 
@@ -983,7 +983,7 @@ export default function VendorDashboard() {
             {/* Followers */}
             <div className="flex items-center gap-1 text-gray-700 sm:border-l sm:border-gray-200 sm:pl-3">
               <Users className="w-4 h-4 text-gray-400" />
-              <span className="font-semibold">{vendorFollowers}</span>
+              <span className="font-semibold">{formatFollowers(vendorFollowers)}</span>
               <span className="text-gray-500 text-xs">Followers</span>
             </div>
 

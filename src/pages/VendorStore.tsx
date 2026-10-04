@@ -34,7 +34,9 @@ import {
   getVendorRealFollowersCount, 
   subscribeVendorFollowersCount,
   subscribeUserFollowStatus,
-  toggleFollowVendor
+  toggleFollowVendor,
+  formatFollowers,
+  formatCompactNumber
 } from '../services/vendorFollowerService';
 import { 
   Star, 
@@ -90,18 +92,6 @@ const CATEGORY_IMAGE_MAP: Record<string, string> = {
   'lifestyle': PLACEHOLDER_PRODUCT_IMAGE,
   'watches': PLACEHOLDER_PRODUCT_IMAGE,
   'shoes': 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=240&h=240&fit=crop&q=80'
-};
-
-// Helper: Format Follower Count (e.g. 1.2K Followers)
-const formatFollowers = (count: number): string => {
-  if (!count || count <= 0) return '0 Followers';
-  if (count >= 1000000) {
-    return `${(count / 1000000).toFixed(1).replace(/\.0$/, '')}M Followers`;
-  }
-  if (count >= 1000) {
-    return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}K Followers`;
-  }
-  return `${count} ${count === 1 ? 'Follower' : 'Followers'}`;
 };
 
 export default function VendorStore({ propVendorId }: { propVendorId?: string }) {
@@ -177,6 +167,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
   // Authentic follower count state initialized strictly from database cache
   const [isFollowing, setIsFollowing] = useState<boolean>(() => initialFollowing);
   const [isTogglingFollow, setIsTogglingFollow] = useState<boolean>(false);
+  const isTogglingFollowRef = useRef<boolean>(false);
   const [followersCount, setFollowersCount] = useState<number>(() => {
     return getCachedVendorFollowersCount(vendorId);
   });
@@ -687,7 +678,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
     return result;
   }, [products, selectedCategory, searchQuery, inStockOnly, sortBy]);
 
-  // Handle Follow / Unfollow Store
+  // Handle Follow / Unfollow Store with instant Facebook-style optimistic update
   const handleToggleFollow = async () => {
     const effectiveUser = user || auth.currentUser;
     if (!effectiveUser) {
@@ -696,19 +687,39 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
       return;
     }
 
-    if (isTogglingFollow) return;
+    if (isTogglingFollowRef.current) return;
+    isTogglingFollowRef.current = true;
     setIsTogglingFollow(true);
+
+    const previousIsFollowing = isFollowing;
+    const previousFollowersCount = followersCount;
+    const nextIsFollowing = !previousIsFollowing;
+    const nextFollowersCount = nextIsFollowing 
+      ? previousFollowersCount + 1 
+      : Math.max(0, previousFollowersCount - 1);
+
+    // 1. OPTIMISTIC UPDATE: Immediate 0ms UI update
+    setIsFollowing(nextIsFollowing);
+    setFollowersCount(nextFollowersCount);
+    saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, nextIsFollowing);
 
     try {
       const res = await toggleFollowVendor(vendorId, effectiveUser, {
         storeName: storeName || 'Store',
-        storeLogo: storeLogo || ''
+        storeLogo: storeLogo || '',
+        optimisticTarget: nextIsFollowing,
+        currentCount: nextFollowersCount
       });
-      setIsFollowing(res.isFollowing);
-      setFollowersCount(res.followersCount);
-      saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, res.isFollowing);
 
-      if (res.isFollowing) {
+      if (typeof res.isFollowing === 'boolean') {
+        setIsFollowing(res.isFollowing);
+        saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, res.isFollowing);
+      }
+      if (typeof res.followersCount === 'number') {
+        setFollowersCount(res.followersCount);
+      }
+
+      if (nextIsFollowing) {
         toast.success(`আপনি এখন "${storeName}" এর ফলোয়ার!`);
       } else {
         toast.success('স্টোর আনফলো করা হয়েছে');
@@ -718,8 +729,13 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
         return;
       }
       console.error('Error toggling follow status:', err);
+      // Safe rollback on database or network error
+      setIsFollowing(previousIsFollowing);
+      setFollowersCount(previousFollowersCount);
+      saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, previousIsFollowing);
       toast.error('ফলো স্টেট আপডেট করতে সমস্যা হয়েছে, পুনরায় চেষ্টা করুন');
     } finally {
+      isTogglingFollowRef.current = false;
       setIsTogglingFollow(false);
     }
   };
@@ -898,6 +914,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                     <div className="flex items-center gap-1 font-semibold text-slate-800 bg-slate-100/90 px-1.5 py-0.5 rounded text-[11px]">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                       <span>{formatFollowers(followersCount)}</span>
+                      <span className="font-normal text-slate-600">Followers</span>
                     </div>
 
                     {/* Store Rating & Review Count */}
