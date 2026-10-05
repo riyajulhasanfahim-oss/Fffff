@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import VerifiedBadge from '../components/ui/VerifiedBadge';
+import { slugifyVendorName } from '../utils/subdomain';
 import { 
   getOfficialStoresFromCache, 
   fetchOfficialStoresFromRTDB, 
@@ -99,7 +100,10 @@ export default function AllBrands() {
     const initialProds = getStoreProductsFromCache(brand.id);
     const initialTheme = getStoreThemeFromCache(brand.id) || brand.theme;
     const initialFollowing = getStoreFollowStatusFromCache(brand.id);
-    navigate(`/store/${brand.id}`, { 
+    const slug = brand.shopSlug || brand.storeSlug || slugifyVendorName(brand.shopName || brand.storeName || brand.name || '');
+    const targetPath = slug && slug !== 'store' ? `/store/${slug}` : `/store/${brand.id}`;
+
+    navigate(targetPath, { 
       state: { 
         initialStore: brand,
         initialProducts: initialProds,

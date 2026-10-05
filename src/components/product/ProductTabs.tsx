@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from "react-router-dom";
 import { FileText, List, Building2, Truck, RefreshCw, Star, MessageSquare } from 'lucide-react';
 import ProductReviews from './ProductReviews';
+import { slugifyVendorName } from '../../utils/subdomain';
 
 interface ProductTabsProps {
   vendorId?: string;
@@ -108,9 +109,14 @@ export default function ProductTabs({ productId, description, specifications, ve
                     <span className="flex items-center"><Star className="h-4 w-4 text-yellow-400 fill-yellow-400 mr-1" /> {vendor?.rating || '4.9'} Rating</span>
                     <span>Joined {vendor?.joined || '2023'}</span>
                   </div>
-                  <button onClick={() => navigate(`/store/${vendorId || "admin"}`)} className="px-4 py-2 border border-primary-main text-primary-main rounded-lg text-sm font-medium hover:bg-primary-main hover:text-white transition-colors">
-                    Visit Store
-                  </button>
+                  {(() => {
+                    const storeSlug = (vendor as any)?.shopSlug || (vendor as any)?.storeSlug || (vendor?.name && vendor.name !== 'RJ WORLD BD Official' ? slugifyVendorName(vendor.name) : '') || vendorId || 'admin';
+                    return (
+                      <button onClick={() => navigate(`/store/${storeSlug}`)} className="px-4 py-2 border border-primary-main text-primary-main rounded-lg text-sm font-medium hover:bg-primary-main hover:text-white transition-colors cursor-pointer">
+                        Visit Store
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             )}

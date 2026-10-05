@@ -165,79 +165,73 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
     return () => window.removeEventListener('rj_store_deleted', handleStoreDeleted);
   }, [vendorId]);
 
+  // Effective vendor ID resolution for database subscriptions and API queries
+  const effectiveVendorId = useMemo(() => {
+    return (
+      vendor?.id || 
+      vendor?.vendorId || 
+      vendor?.userId || 
+      profile?.id || 
+      profile?.vendorId || 
+      profile?.userId || 
+      initialCached?.id || 
+      initialCached?.vendorId || 
+      initialCached?.userId || 
+      vendorId
+    );
+  }, [vendor, profile, initialCached, vendorId]);
+
   // Authentic follower count state initialized strictly from database cache
   const [isFollowing, setIsFollowing] = useState<boolean>(() => initialFollowing);
   const [isTogglingFollow, setIsTogglingFollow] = useState<boolean>(false);
   const isTogglingFollowRef = useRef<boolean>(false);
   const [followersCount, setFollowersCount] = useState<number>(() => {
-    return getCachedVendorFollowersCount(vendorId);
+    return getCachedVendorFollowersCount(effectiveVendorId || vendorId);
   });
 
   // Keep user follow relationship synchronized in real time with actual database state
   useEffect(() => {
     const currentUid = user?.uid || auth.currentUser?.uid;
-    if (!vendorId || !currentUid) {
+    const targetVendorId = effectiveVendorId || vendorId;
+    if (!targetVendorId || !currentUid) {
       setIsFollowing(false);
       return;
     }
-    const unsubscribe = subscribeUserFollowStatus(vendorId, currentUid, (status) => {
+    const unsubscribe = subscribeUserFollowStatus(targetVendorId, currentUid, (status) => {
       setIsFollowing(status);
     });
     return () => unsubscribe();
-  }, [vendorId, user?.uid]);
+  }, [effectiveVendorId, vendorId, user?.uid]);
 
   // Keep follower count synchronized in real time with actual database state
   useEffect(() => {
-    if (!vendorId) return;
-    const unsubscribe = subscribeVendorFollowersCount(vendorId, (count) => {
+    const targetVendorId = effectiveVendorId || vendorId;
+    if (!targetVendorId) return;
+    const unsubscribe = subscribeVendorFollowersCount(targetVendorId, (count) => {
       setFollowersCount(count);
     });
     return () => unsubscribe();
-  }, [vendorId]);
+  }, [effectiveVendorId, vendorId]);
 
-  // Redirect legacy /store/:vendorId route to clean dynamic subdomain (Requirements 2, 7 & 12)
-  // Ensures random Firebase ID is never visible in URL and old /store/ links gracefully redirect
+  // Requirement 14, 15, 21, 23 & 24:
+  // If the user visited via legacy random Firebase ID (e.g. /store/GrZzsoVNnBV9EcCzAvzxbNhNXG53),
+  // automatically update/replace the browser URL to the clean slug URL: /store/{clean-slug}
+  // No subdomain redirects. URL format is always https://rjworldbd.com/store/{store-slug}.
   useEffect(() => {
-    if (params.vendorId && (vendor || profile)) {
+    if (params.vendorId && (vendor || profile || initialCached)) {
       const activeSlug = vendor?.shopSlug || vendor?.storeSlug || profile?.shopSlug || profile?.storeSlug || 
-                         (vendor?.shopName || vendor?.storeName ? slugifyVendorName(vendor.shopName || vendor.storeName) : '');
+                         initialCached?.shopSlug || initialCached?.storeSlug ||
+                         (vendor?.shopName || vendor?.storeName ? slugifyVendorName(vendor.shopName || vendor.storeName) : '') ||
+                         (profile?.shopName || profile?.storeName ? slugifyVendorName(profile.shopName || profile.storeName) : '') ||
+                         (initialCached?.shopName || initialCached?.storeName ? slugifyVendorName(initialCached.shopName || initialCached.storeName) : '');
       if (activeSlug) {
         const cleanSlug = slugifyVendorName(activeSlug);
-        const host = typeof window !== 'undefined' ? window.location.hostname.toLowerCase() : '';
-        const targetHost = `${cleanSlug}.${PRIMARY_DOMAIN}`;
-
-        // 1. If on production domain or any *.rjworldbd.com
-        if (host.includes(PRIMARY_DOMAIN) || host.includes('rjworld.com') || (!host.includes('localhost') && !host.includes('run.app') && !host.includes('127.0.0.1'))) {
-          if (host !== targetHost) {
-            window.location.replace(`https://${targetHost}/`);
-            return;
-          }
-        } else if (host.endsWith('.localhost') || host === 'localhost') {
-          // 2. If on localhost development
-          const targetLocalHost = `${cleanSlug}.localhost`;
-          if (host !== targetLocalHost) {
-            const port = window.location.port ? `:${window.location.port}` : ':3000';
-            window.location.replace(`http://${targetLocalHost}${port}/`);
-            return;
-          }
+        if (cleanSlug && cleanSlug !== 'store' && params.vendorId !== cleanSlug) {
+          navigate(`/store/${cleanSlug}`, { replace: true });
         }
       }
     }
-  }, [params.vendorId, vendor, profile]);
-
-  // If already on the vendor subdomain, normalize any subpath /store/... to root '/'
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname.toLowerCase();
-      const path = window.location.pathname;
-      if (host.endsWith(`.${PRIMARY_DOMAIN}`) || host.endsWith('.localhost')) {
-        const sub = host.endsWith(`.${PRIMARY_DOMAIN}`) ? host.replace(`.${PRIMARY_DOMAIN}`, '') : host.replace('.localhost', '');
-        if (sub && sub !== 'www' && path.startsWith('/store')) {
-          navigate('/', { replace: true });
-        }
-      }
-    }
-  }, [navigate]);
+  }, [params.vendorId, vendor, profile, initialCached, navigate]);
 
   // UI Modals
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -350,12 +344,14 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
           setFollowersCount(baseFollowers);
         }
 
+        const resolvedId = freshStore?.id || freshStore?.vendorId || vendorId;
+
         // Fetch theme from RTDB - never overwrite with null or default
         try {
           const [themeSnap, storeData, profileData] = await Promise.all([
-            rtdbGet<any>(`vendor_themes/${vendorId}`),
-            rtdbGet<any>(`stores/${vendorId}/theme`),
-            rtdbGet<any>(`vendor_profiles/${vendorId}/theme`)
+            rtdbGet<any>(`vendor_themes/${resolvedId}`),
+            rtdbGet<any>(`stores/${resolvedId}/theme`),
+            rtdbGet<any>(`vendor_profiles/${resolvedId}/theme`)
           ]);
           const validTheme = (themeSnap && (themeSnap.primaryColor || themeSnap.layout)) 
             ? themeSnap 
@@ -367,6 +363,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
           if (isMounted && validTheme) {
             setTheme((prev: any) => ({ ...(prev || {}), ...validTheme }));
+            saveStoreThemeToCache(resolvedId, validTheme);
             saveStoreThemeToCache(vendorId, validTheme);
           }
         } catch (themeErr) {
@@ -375,10 +372,11 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
         // 2. Determine Follower Count strictly from actual database state
         try {
-          const realFollowersCount = await getVendorRealFollowersCount(vendorId);
+          const realFollowersCount = await getVendorRealFollowersCount(resolvedId);
           if (isMounted) {
             setFollowersCount(realFollowersCount);
           }
+          saveStoreToCache(resolvedId, { followersCount: realFollowersCount, followers: realFollowersCount });
           saveStoreToCache(vendorId, { followersCount: realFollowersCount, followers: realFollowersCount });
         } catch (fErr) {
           console.warn('Error fetching authentic store followers from database:', fErr);
@@ -386,7 +384,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
         // 3. Fetch Products for this Vendor strictly from RTDB
         try {
-          const freshProducts = await fetchStoreProductsFromRTDB(vendorId);
+          const freshProducts = await fetchStoreProductsFromRTDB(resolvedId);
           if (isMounted && Array.isArray(freshProducts)) {
             setProducts(freshProducts);
           }
@@ -396,11 +394,11 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
         // 4. Fetch Store Reviews from RTDB & Firestore via fetchVendorReviews
         try {
-          const freshVendorReviews = await fetchVendorReviews(vendorId);
+          const freshVendorReviews = await fetchVendorReviews(resolvedId);
           if (isMounted && freshVendorReviews.length > 0) {
             setReviews(freshVendorReviews);
           } else {
-            const revItems = await rtdbList<any>('vendor_reviews', (r: any) => r.vendorId === vendorId);
+            const revItems = await rtdbList<any>('vendor_reviews', (r: any) => r.vendorId === resolvedId || r.vendorId === vendorId);
             const loadedReviews = revItems.map(d => ({ id: d.id, ...d.data }));
             if (isMounted && loadedReviews.length > 0) {
               setReviews(loadedReviews);
@@ -743,13 +741,16 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
       ? previousFollowersCount + 1 
       : Math.max(0, previousFollowersCount - 1);
 
+    const targetVendorId = effectiveVendorId || vendorId;
+
     // 1. OPTIMISTIC UPDATE: Immediate 0ms UI update
     setIsFollowing(nextIsFollowing);
     setFollowersCount(nextFollowersCount);
+    saveStoreFollowStatusToCache(targetVendorId, effectiveUser.uid, nextIsFollowing);
     saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, nextIsFollowing);
 
     try {
-      const res = await toggleFollowVendor(vendorId, effectiveUser, {
+      const res = await toggleFollowVendor(targetVendorId, effectiveUser, {
         storeName: storeName || 'Store',
         storeLogo: storeLogo || '',
         optimisticTarget: nextIsFollowing,
@@ -758,6 +759,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
       if (typeof res.isFollowing === 'boolean') {
         setIsFollowing(res.isFollowing);
+        saveStoreFollowStatusToCache(targetVendorId, effectiveUser.uid, res.isFollowing);
         saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, res.isFollowing);
       }
       if (typeof res.followersCount === 'number') {
@@ -777,6 +779,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
       // Safe rollback on database or network error
       setIsFollowing(previousIsFollowing);
       setFollowersCount(previousFollowersCount);
+      saveStoreFollowStatusToCache(targetVendorId, effectiveUser.uid, previousIsFollowing);
       saveStoreFollowStatusToCache(vendorId, effectiveUser.uid, previousIsFollowing);
       toast.error('ফলো স্টেট আপডেট করতে সমস্যা হয়েছে, পুনরায় চেষ্টা করুন');
     } finally {
@@ -835,9 +838,10 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
     categoryScrollRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
   };
 
-  const isStoreOwnerOrAdmin = user?.uid === vendorId || userData?.role === 'Admin';
+  const isStoreOwnerOrAdmin = user?.uid === vendorId || user?.uid === effectiveVendorId || userData?.role === 'Admin';
   const activeSlug = vendor?.shopSlug || vendor?.storeSlug || profile?.shopSlug || profile?.storeSlug || 
-                     (vendor?.shopName || vendor?.storeName ? slugifyVendorName(vendor.shopName || vendor.storeName) : '');
+                     (vendor?.shopName || vendor?.storeName ? slugifyVendorName(vendor.shopName || vendor.storeName) : '') ||
+                     (profile?.shopName || profile?.storeName ? slugifyVendorName(profile.shopName || profile.storeName) : '');
   const storeUrl = activeSlug 
     ? getVendorStoreUrl(activeSlug) 
     : (typeof window !== 'undefined' ? window.location.href : `https://${PRIMARY_DOMAIN}/`);

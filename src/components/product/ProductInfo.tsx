@@ -11,6 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { collection, query, where, getDocs, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { getStoreFromCache, fetchStoreDetailFromRTDB, isStorePlanVerified } from '../../services/storeCache';
+import { slugifyVendorName } from '../../utils/subdomain';
 import { fetchProductMetricsFromRTDB } from '../../services/productMetricsService';
 import { rtdbGet, rtdbList } from '../../lib/rtdb';
 import type { ProductVariant, ProductColor, ProductSize } from '../../types/variant';
@@ -419,6 +420,15 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
   const storeRating = Number(storeData?.rating ?? (product.vendor?.rating || 0));
   const displayStoreJoined = storeData?.joined || (storeData?.createdAt ? String(new Date(storeData.createdAt).getFullYear()) : (product.vendor?.joined || (product.vendor?.createdAt ? String(new Date(product.vendor.createdAt).getFullYear()) : '')));
   const isStoreVerified = isStorePlanVerified(storeData || product?.vendor);
+
+  const effectiveStoreSlug = useMemo(() => {
+    return (
+      storeData?.shopSlug || 
+      storeData?.storeSlug || 
+      (displayStoreName && displayStoreName !== 'Official Store' && displayStoreName !== 'RJ WORLD BD Official Store' ? slugifyVendorName(displayStoreName) : '') || 
+      effectiveStoreId
+    );
+  }, [storeData, displayStoreName, effectiveStoreId]);
 
   const handleShareToStore = async () => {
     if (!userData) {
@@ -1279,7 +1289,7 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
       <div className="flex items-center justify-between gap-3 p-2.5 sm:p-3 bg-slate-50/90 hover:bg-slate-50 rounded-xl border border-slate-200/80 mt-1 transition-all">
         {/* Store Logo + Store Name + Rating */}
         <div 
-          onClick={() => navigate(`/store/${effectiveStoreId}`)}
+          onClick={() => navigate(`/store/${effectiveStoreSlug}`)}
           className="flex items-center gap-2.5 min-w-0 cursor-pointer group flex-1"
         >
           {/* Store Logo with verified badge on bottom-right */}
@@ -1358,7 +1368,7 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
         <button 
           type="button"
           id="top-view-shop-btn"
-          onClick={() => navigate(`/store/${effectiveStoreId}`)} 
+          onClick={() => navigate(`/store/${effectiveStoreSlug}`)} 
           className="inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 sm:py-2 bg-white hover:bg-slate-100 active:scale-95 text-slate-800 rounded-lg sm:rounded-xl text-xs font-bold transition-all border border-slate-200 shadow-2xs whitespace-nowrap shrink-0 group"
         >
           <span>View Shop</span>
@@ -1421,7 +1431,7 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
           {/* Quick Action: Store */}
           <button
             type="button"
-            onClick={() => navigate(`/store/${effectiveStoreId}`)}
+            onClick={() => navigate(`/store/${effectiveStoreSlug}`)}
             className="flex flex-col items-center justify-center min-w-[48px] sm:min-w-[56px] py-1 px-1 text-slate-600 hover:text-primary-main active:scale-95 transition-all text-center group shrink-0"
           >
             <Store className="w-5 h-5 text-slate-500 group-hover:text-primary-main transition-colors" />

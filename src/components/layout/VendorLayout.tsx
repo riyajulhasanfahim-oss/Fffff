@@ -209,7 +209,7 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
           <div className="flex items-center gap-2 sm:gap-4">
              <VendorNotificationDropdown />
              <a 
-               href={vendorInfo?.freeShopDomain ? getVendorOpenUrl(vendorInfo.freeShopDomain, userData?.uid) : (userData?.uid ? `/store/${userData.uid}` : '/')}
+               href={getVendorOpenUrl(vendorInfo?.freeShopDomain, userData?.uid, vendorInfo?.shopSlug || vendorInfo?.storeSlug, vendorInfo?.shopName || vendorInfo?.storeName)}
                target="_blank"
                rel="noopener noreferrer"
                className="text-xs sm:text-sm font-medium text-primary-main hover:underline hidden sm:inline-block cursor-pointer"

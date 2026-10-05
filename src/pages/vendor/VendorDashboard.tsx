@@ -871,11 +871,14 @@ export default function VendorDashboard() {
 
               {/* Store Public URL / Clean Domain (Requirement 11, 12, 13, 23) */}
               {(() => {
-                const resolvedSlug = vendorInfo?.shopSlug || vendorInfo?.storeSlug || 
-                                     (vendorInfo?.shopName || vendorInfo?.storeName ? slugifyVendorName(vendorInfo.shopName || vendorInfo.storeName) : '');
-                const cleanPublicUrl = resolvedSlug 
-                  ? `https://${PRIMARY_DOMAIN}/store/${resolvedSlug}` 
-                  : (vendorInfo?.freeShopDomain?.startsWith('http') ? vendorInfo.freeShopDomain : (vendorInfo?.freeShopDomain ? `https://${vendorInfo.freeShopDomain}` : ''));
+                const rawSlug = vendorInfo?.shopSlug || 
+                                vendorInfo?.storeSlug || 
+                                (vendorInfo?.shopName || vendorInfo?.storeName ? slugifyVendorName(vendorInfo.shopName || vendorInfo.storeName) : '') ||
+                                (vendorInfo?.freeShopDomain ? vendorInfo.freeShopDomain.replace('https://', '').replace('http://', '').replace(`.${PRIMARY_DOMAIN}`, '').replace('.rjworld.com', '').split('/')[0] : '');
+                const resolvedSlug = slugifyVendorName(rawSlug || '');
+                const cleanPublicUrl = resolvedSlug && resolvedSlug !== 'store'
+                  ? `https://${PRIMARY_DOMAIN}/store/${resolvedSlug}`
+                  : `https://${PRIMARY_DOMAIN}/store/${slugifyVendorName(vendorInfo?.shopName || vendorInfo?.storeName || 'my-store')}`;
                 
                 return (
                   <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 text-xs mb-2">
@@ -1778,7 +1781,7 @@ export default function VendorDashboard() {
           isOpen={isStoreShareModalOpen}
           onClose={() => setIsStoreShareModalOpen(false)}
           storeName={vendorInfo?.shopName || vendorInfo?.storeName || 'My Store'}
-          storeUrl={getVendorOpenUrl(vendorInfo?.freeShopDomain, user.uid, vendorInfo?.shopSlug || vendorInfo?.storeSlug)}
+          storeUrl={getVendorOpenUrl(vendorInfo?.freeShopDomain, user.uid, vendorInfo?.shopSlug || vendorInfo?.storeSlug, vendorInfo?.shopName || vendorInfo?.storeName)}
           storeLogo={vendorInfo?.logo || vendorInfo?.profileImage}
         />
       )}

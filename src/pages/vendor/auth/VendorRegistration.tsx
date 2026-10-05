@@ -505,6 +505,13 @@ export default function VendorRegistration() {
           rtdbUpdate(`vendors/${currentUserId}`, activeVendorPayload),
           rtdbUpdate(`stores/${currentUserId}`, storePayload),
           rtdbUpdate(`vendor_profiles/${currentUserId}`, initialProfilePayload),
+          rtdbUpdate(`store_slugs/${storeSlug}`, {
+            vendorId: currentUserId,
+            storeId: currentUserId,
+            shopName: formData.storeName.trim(),
+            slug: storeSlug,
+            updatedAt: Date.now()
+          }),
           rtdbUpdate(`users/${currentUserId}`, {
             name: formData.ownerName.trim(),
             email: formData.email.trim() || user?.email || '',
@@ -513,6 +520,18 @@ export default function VendorRegistration() {
             updatedAt: Date.now()
           })
         ]);
+
+        if (storeSlug) {
+          try {
+            await setDoc(doc(db, 'store_slugs', storeSlug), {
+              vendorId: currentUserId,
+              storeId: currentUserId,
+              shopName: formData.storeName.trim(),
+              slug: storeSlug,
+              updatedAt: Date.now()
+            }, { merge: true });
+          } catch (_) {}
+        }
 
         // 4. Immediately cache registered store & broadcast to Home Page & Vendor List
         const fullRegisteredStore: CachedStore = {

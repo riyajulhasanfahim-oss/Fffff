@@ -163,7 +163,17 @@ export function getVendorSubdomain(slug: string): string {
  * Requirement 23: Final Store URL format অবশ্যই হবে: https://rjworldbd.com/store/{store-slug}
  * Requirement 24: Store slug কখনো Firebase-এর random ID হবে না।
  */
-export function getVendorStoreUrl(slug: string): string {
+export function getVendorStoreUrl(slugOrStore: any): string {
+  if (!slugOrStore) return `https://${PRIMARY_DOMAIN}`;
+  let slug = '';
+  if (typeof slugOrStore === 'string') {
+    slug = slugOrStore;
+  } else if (typeof slugOrStore === 'object') {
+    slug = slugOrStore.shopSlug || 
+           slugOrStore.storeSlug || 
+           (slugOrStore.shopName || slugOrStore.storeName ? slugifyVendorName(slugOrStore.shopName || slugOrStore.storeName) : '') ||
+           (slugOrStore.name ? slugifyVendorName(slugOrStore.name) : '');
+  }
   const cleanSlug = slugifyVendorName(slug);
   return `https://${PRIMARY_DOMAIN}/store/${cleanSlug}`;
 }

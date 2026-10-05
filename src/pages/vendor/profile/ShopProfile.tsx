@@ -469,8 +469,12 @@ export default function ShopProfile() {
         await Promise.all([
           rtdbUpdate(`vendor_profiles/${user.uid}`, { shopSlug: slug, storeSlug: slug, freeShopDomain: freeDomain, updatedAt: Date.now() }),
           rtdbUpdate(`vendors/${user.uid}`, { shopSlug: slug, storeSlug: slug, freeShopDomain: freeDomain, updatedAt: Date.now() }),
-          rtdbUpdate(`stores/${user.uid}`, { shopSlug: slug, storeSlug: slug, freeShopDomain: freeDomain, updatedAt: Date.now() })
+          rtdbUpdate(`stores/${user.uid}`, { shopSlug: slug, storeSlug: slug, freeShopDomain: freeDomain, updatedAt: Date.now() }),
+          rtdbUpdate(`store_slugs/${slug}`, { vendorId: user.uid, storeId: user.uid, shopName: rawName, slug: slug, updatedAt: Date.now() })
         ]);
+        try {
+          await setDoc(doc(db, 'store_slugs', slug), { vendorId: user.uid, storeId: user.uid, shopName: rawName, slug: slug, updatedAt: Date.now() }, { merge: true });
+        } catch (_) {}
         try {
           localStorage.setItem('rj_vendor_profile_' + user.uid, JSON.stringify(newProfile));
           window.dispatchEvent(new Event('vendor_profile_updated'));
@@ -683,6 +687,24 @@ export default function ShopProfile() {
         ]);
       } catch (fsErr) {
         console.warn('Firestore vendor profile sync warning:', fsErr);
+      }
+
+      // Synchronize slug mapping for direct O(1) clean URL lookup (Requirement 17)
+      if (finalSlug) {
+        rtdbUpdate(`store_slugs/${finalSlug}`, {
+          vendorId: user.uid,
+          storeId: user.uid,
+          shopName: shopTitle,
+          slug: finalSlug,
+          updatedAt: now
+        }).catch(() => {});
+        setDoc(doc(db, 'store_slugs', finalSlug), {
+          vendorId: user.uid,
+          storeId: user.uid,
+          shopName: shopTitle,
+          slug: finalSlug,
+          updatedAt: now
+        }, { merge: true }).catch(() => {});
       }
 
       // 2. Server-Side Realtime Database & Disk Sync with user ID token
@@ -1261,67 +1283,79 @@ export default function ShopProfile() {
             <div>
               <h3 className="text-xs sm:text-sm font-bold text-gray-900 mb-1 flex items-center gap-1.5">
                 <Globe className="w-4 h-4 text-primary-main" />
-                Free RJ WORLD BD Shop Domain
+                RJ WORLD BD Store URL
               </h3>
-              <p className="text-[11px] sm:text-xs text-gray-500 mb-2">Get a free unique storefront domain</p>
+              <p className="text-[11px] sm:text-xs text-gray-500 mb-2">Get a clean public store URL</p>
               
-              <div className="flex flex-col gap-2">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2">
-                  <div className="flex-grow">
-                    <label className="block text-[11px] sm:text-xs font-medium text-gray-700 mb-0.5">Your Free Domain</label>
-                    <div className="flex items-center bg-gray-50 border border-gray-300 rounded-xl px-2.5 py-1.5 text-xs sm:text-sm">
-                      <Link className="w-3.5 h-3.5 text-gray-400 mr-1.5 shrink-0" />
-                      <input
-                        type="text"
-                        readOnly
-                        value={profile.freeShopDomain ? `https://${profile.freeShopDomain}/` : (profile.shopSlug ? `https://${profile.shopSlug}.${PRIMARY_DOMAIN}/` : 'Not generated yet')}
-                        className="bg-transparent flex-grow outline-none text-gray-700 font-medium text-xs sm:text-sm truncate select-all"
-                      />
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleGenerateFreeDomain}
-                    disabled={verifyingDomain}
-                    className="px-3 py-1.5 bg-primary-main text-white text-xs sm:text-sm font-bold rounded-xl hover:bg-sky-600 transition-colors disabled:opacity-50 whitespace-nowrap shadow-sm"
-                  >
-                    {verifyingDomain ? 'Generating...' : (profile.freeShopDomain ? 'Regenerate' : 'Generate')}
-                  </button>
-                </div>
-                {profile.freeShopDomain && (
-                  <div className="flex flex-wrap items-center gap-2 mt-1">
-                    <p className="text-xs text-green-600 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Active: 
-                      <a 
-                        href={getVendorOpenUrl(profile.freeShopDomain, user?.uid)} 
-                        target="_blank" 
-                        rel="noreferrer" 
-                        className="underline truncate max-w-[200px]"
+              {(() => {
+                const rawSlug = profile.shopSlug || profile.storeSlug || 
+                                (profile.shopName || profile.storeName ? slugifyVendorName(profile.shopName || profile.storeName) : '') ||
+                                (profile.freeShopDomain ? profile.freeShopDomain.replace('https://', '').replace('http://', '').replace(`.${PRIMARY_DOMAIN}`, '').replace('.rjworld.com', '').split('/')[0] : '');
+                const cleanSlug = slugifyVendorName(rawSlug || '');
+                const cleanStoreUrl = cleanSlug && cleanSlug !== 'store'
+                  ? `https://${PRIMARY_DOMAIN}/store/${cleanSlug}`
+                  : `https://${PRIMARY_DOMAIN}/store/${slugifyVendorName(profile.shopName || profile.storeName || 'my-store')}`;
+
+                return (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2">
+                      <div className="flex-grow">
+                        <label className="block text-[11px] sm:text-xs font-medium text-gray-700 mb-0.5">Your Store URL</label>
+                        <div className="flex items-center bg-gray-50 border border-gray-300 rounded-xl px-2.5 py-1.5 text-xs sm:text-sm">
+                          <Link className="w-3.5 h-3.5 text-gray-400 mr-1.5 shrink-0" />
+                          <input
+                            type="text"
+                            readOnly
+                            value={cleanStoreUrl}
+                            className="bg-transparent flex-grow outline-none text-gray-700 font-medium text-xs sm:text-sm truncate select-all"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleGenerateFreeDomain}
+                        disabled={verifyingDomain}
+                        className="px-3 py-1.5 bg-primary-main text-white text-xs sm:text-sm font-bold rounded-xl hover:bg-sky-600 transition-colors disabled:opacity-50 whitespace-nowrap shadow-sm"
                       >
-                        https://{profile.freeShopDomain}/
-                      </a>
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(`https://${profile.freeShopDomain}/`);
-                        toast.success('Shop link copied!');
-                      }}
-                      className="text-[11px] font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 py-1 px-2.5 rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <Copy className="w-3 h-3" /> Copy
-                    </button>
-                    <a
-                      href={getVendorOpenUrl(profile.freeShopDomain, user?.uid)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[11px] font-semibold bg-primary-main hover:bg-sky-600 text-white py-1 px-2.5 rounded-lg flex items-center gap-1 transition-colors shadow-xs cursor-pointer"
-                    >
-                      Open
-                    </a>
+                        {verifyingDomain ? 'Generating...' : (profile.shopSlug || profile.storeSlug ? 'Regenerate' : 'Generate')}
+                      </button>
+                    </div>
+                    {cleanStoreUrl && (
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <p className="text-xs text-green-600 font-semibold flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Active: 
+                          <a 
+                            href={cleanStoreUrl} 
+                            target="_blank" 
+                            rel="noreferrer" 
+                            className="underline truncate max-w-[280px]"
+                          >
+                            {cleanStoreUrl}
+                          </a>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(cleanStoreUrl);
+                            toast.success('Shop link copied!');
+                          }}
+                          className="text-[11px] font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 py-1 px-2.5 rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3" /> Copy
+                        </button>
+                        <a
+                          href={cleanStoreUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] font-semibold bg-primary-main hover:bg-sky-600 text-white py-1 px-2.5 rounded-lg flex items-center gap-1 transition-colors shadow-xs cursor-pointer"
+                        >
+                          Open
+                        </a>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
 
             <div className="pt-3 border-t border-gray-100">

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Store, ChevronRight, ChevronLeft, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import VerifiedBadge from '../ui/VerifiedBadge';
+import { slugifyVendorName } from '../../utils/subdomain';
 import { 
   getOfficialStoresFromCache, 
   fetchOfficialStoresFromRTDB, 
@@ -101,7 +102,10 @@ export default function BrandList() {
     const initialProds = getStoreProductsFromCache(brand.id);
     const initialTheme = getStoreThemeFromCache(brand.id) || brand.theme;
     const initialFollowing = getStoreFollowStatusFromCache(brand.id);
-    navigate(`/store/${brand.id}`, { 
+    const slug = brand.shopSlug || brand.storeSlug || slugifyVendorName(brand.shopName || brand.storeName || brand.name || '');
+    const targetPath = slug && slug !== 'store' ? `/store/${slug}` : `/store/${brand.id}`;
+
+    navigate(targetPath, { 
       state: { 
         initialStore: brand,
         initialProducts: initialProds,

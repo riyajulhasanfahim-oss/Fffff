@@ -1,8 +1,8 @@
-import { rtdbGet, rtdbSet, rtdbList, rtdbSubscribe } from '../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbUpdate, rtdbList, rtdbSubscribe } from '../lib/rtdb';
 import { INITIAL_VENDORS, INITIAL_VENDOR_PROFILES, INITIAL_VENDOR_THEMES } from '../lib/firebaseSeed';
 import { enrichProductsWithRealMetrics } from './productMetricsService';
 import { db } from '../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { getVendorRealFollowersCount } from './vendorFollowerService';
 import { slugifyVendorName } from '../utils/subdomain';
 
@@ -477,7 +477,8 @@ export function getStoreFromCache(storeId: string): CachedStore | null {
       s.userId === cleanId ||
       String(s.storeSlug || '').toLowerCase() === lowerId ||
       String(s.shopSlug || '').toLowerCase() === lowerId ||
-      String(s.shopName || '').toLowerCase() === lowerId
+      String(s.shopName || '').toLowerCase() === lowerId ||
+      slugifyVendorName(s.shopName || s.storeName || s.name || '') === lowerId
     ) {
       return s;
     }
@@ -509,7 +510,8 @@ export function getStoreFromCache(storeId: string): CachedStore | null {
             s.userId === cleanId ||
             String(s.storeSlug || '').toLowerCase() === lowerId ||
             String(s.shopSlug || '').toLowerCase() === lowerId ||
-            String(s.shopName || '').toLowerCase() === lowerId
+            String(s.shopName || '').toLowerCase() === lowerId ||
+            slugifyVendorName(s.shopName || s.storeName || s.name || '') === lowerId
           );
           if (match) {
             inMemoryStoreCache.set(cleanId, match);
@@ -1250,29 +1252,57 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
   }
 
   try {
+    // 0. Direct O(1) slug mapping lookup from RTDB & Firestore store_slugs (Requirement 17)
+    let directTargetId: string | null = null;
+    try {
+      const slugMap = await rtdbGet<any>(`store_slugs/${cleanTarget}`).catch(() => null);
+      if (slugMap && (slugMap.vendorId || slugMap.storeId || slugMap.id)) {
+        directTargetId = String(slugMap.vendorId || slugMap.storeId || slugMap.id).trim();
+      }
+    } catch (_) {}
+
+    if (!directTargetId) {
+      try {
+        const fsSlugDoc = await getDoc(doc(db, 'store_slugs', cleanTarget)).catch(() => null);
+        if (fsSlugDoc && fsSlugDoc.exists()) {
+          const d = fsSlugDoc.data();
+          if (d?.vendorId || d?.storeId || d?.id) {
+            directTargetId = String(d.vendorId || d.storeId || d.id).trim();
+          }
+        }
+      } catch (_) {}
+    }
+
+    const effectiveLookupId = directTargetId || storeId;
+
     const [vendorSnap, profileSnap, storeSnap, themeSnap, deletedSnap] = await Promise.all([
-      rtdbGet<any>(`vendors/${storeId}`),
-      rtdbGet<any>(`vendor_profiles/${storeId}`),
-      rtdbGet<any>(`stores/${storeId}`),
-      rtdbGet<any>(`vendor_themes/${storeId}`),
-      rtdbGet<any>(`deleted_vendors/${storeId}`)
+      rtdbGet<any>(`vendors/${effectiveLookupId}`),
+      rtdbGet<any>(`vendor_profiles/${effectiveLookupId}`),
+      rtdbGet<any>(`stores/${effectiveLookupId}`),
+      rtdbGet<any>(`vendor_themes/${effectiveLookupId}`),
+      rtdbGet<any>(`deleted_vendors/${effectiveLookupId}`)
     ]);
 
     // An actively registered store with active status or verified flag must NEVER be treated as deleted
     const isActivelyRegistered = (storeSnap && (storeSnap.status === 'active' || storeSnap.status === 'approved' || storeSnap.verified || storeSnap.isVerified)) ||
                                  (vendorSnap && (vendorSnap.status === 'active' || vendorSnap.status === 'approved' || vendorSnap.verified || vendorSnap.isVerified)) ||
-                                 PROTECTED_ACTIVE_STORE_IDS.has(cleanTarget);
+                                 PROTECTED_ACTIVE_STORE_IDS.has(cleanTarget) ||
+                                 (directTargetId ? PROTECTED_ACTIVE_STORE_IDS.has(directTargetId.toLowerCase()) : false);
 
     if (isActivelyRegistered) {
       deletedStoreIdsSet.delete(storeId);
       deletedStoreIdsSet.delete(cleanTarget);
+      if (directTargetId) {
+        deletedStoreIdsSet.delete(directTargetId);
+        deletedStoreIdsSet.delete(directTargetId.toLowerCase());
+      }
       if (typeof window !== 'undefined') {
         try {
           const raw = localStorage.getItem('rj_deleted_vendors_cache');
           if (raw) {
             const arr = JSON.parse(raw);
-            if (Array.isArray(arr) && (arr.includes(storeId) || arr.includes(cleanTarget))) {
-              const cleaned = arr.filter((x: string) => x !== storeId && x !== cleanTarget);
+            if (Array.isArray(arr) && (arr.includes(storeId) || arr.includes(cleanTarget) || (directTargetId && arr.includes(directTargetId)))) {
+              const cleaned = arr.filter((x: string) => x !== storeId && x !== cleanTarget && (!directTargetId || x !== directTargetId));
               localStorage.setItem('rj_deleted_vendors_cache', JSON.stringify(cleaned));
             }
           }
@@ -1298,6 +1328,9 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
 
     if (resolvedTheme && (resolvedTheme.primaryColor || resolvedTheme.layout)) {
       saveStoreThemeToCache(storeId, resolvedTheme);
+      if (directTargetId) {
+        saveStoreThemeToCache(directTargetId, resolvedTheme);
+      }
     }
 
     // If direct lookup by ID didn't find anything, search stores & vendors lists by slug, id, or storeId
@@ -1318,7 +1351,8 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
                 String(vVal.storeId || '').toLowerCase() === cleanTarget ||
                 String(vVal.id || '').toLowerCase() === cleanTarget ||
                 String(vVal.shopName || '').toLowerCase() === cleanTarget ||
-                String(vVal.storeName || '').toLowerCase() === cleanTarget
+                String(vVal.storeName || '').toLowerCase() === cleanTarget ||
+                slugifyVendorName(vVal.shopName || vVal.storeName || vVal.name || '') === cleanTarget
               ) {
                 resolvedVendor = vVal;
                 try {
@@ -1338,7 +1372,10 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
                 String(sVal.storeSlug || '').toLowerCase() === cleanTarget ||
                 String(sVal.shopSlug || '').toLowerCase() === cleanTarget ||
                 String(sVal.storeId || '').toLowerCase() === cleanTarget ||
-                String(sVal.id || '').toLowerCase() === cleanTarget
+                String(sVal.id || '').toLowerCase() === cleanTarget ||
+                String(sVal.shopName || '').toLowerCase() === cleanTarget ||
+                String(sVal.storeName || '').toLowerCase() === cleanTarget ||
+                slugifyVendorName(sVal.shopName || sVal.storeName || sVal.name || '') === cleanTarget
               ) {
                 resolvedStore = sVal;
                 break;
@@ -1361,7 +1398,8 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
                     String(pVal.id || '').toLowerCase() === cleanTarget ||
                     String(pVal.vendorId || '').toLowerCase() === cleanTarget ||
                     String(pVal.shopName || '').toLowerCase() === cleanTarget ||
-                    String(pVal.storeName || '').toLowerCase() === cleanTarget
+                    String(pVal.storeName || '').toLowerCase() === cleanTarget ||
+                    slugifyVendorName(pVal.shopName || pVal.storeName || pVal.name || '') === cleanTarget
                   ) {
                     resolvedProfile = pVal;
                     break;
@@ -1383,7 +1421,8 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
                 String(data.shopSlug || '').toLowerCase() === cleanTarget ||
                 String(data.storeSlug || '').toLowerCase() === cleanTarget ||
                 String(data.shopName || '').toLowerCase() === cleanTarget ||
-                String(data.storeName || '').toLowerCase() === cleanTarget
+                String(data.storeName || '').toLowerCase() === cleanTarget ||
+                slugifyVendorName(data.shopName || data.storeName || data.name || '') === cleanTarget
               ) {
                 resolvedVendor = { id: docSnap.id, vendorId: docSnap.id, ...data };
               }
@@ -1398,17 +1437,59 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
     const hasAnyRealData = !!resolvedVendor || !!resolvedProfile || !!resolvedStore;
 
     if (hasAnyRealData) {
-      const cached = getStoreFromCache(storeId);
+      const actualVendorId = directTargetId || 
+                             resolvedVendor?.id || 
+                             resolvedVendor?.vendorId || 
+                             resolvedVendor?.userId || 
+                             resolvedStore?.id || 
+                             resolvedStore?.storeId || 
+                             resolvedStore?.vendorId || 
+                             resolvedProfile?.vendorId || 
+                             resolvedProfile?.userId || 
+                             resolvedProfile?.id || 
+                             storeId;
+
+      const cached = getStoreFromCache(storeId) || getStoreFromCache(actualVendorId);
       const merged = mergeStoreObjects(cached, {
-        id: storeId,
+        id: actualVendorId,
+        vendorId: actualVendorId,
+        storeId: actualVendorId,
+        userId: actualVendorId,
         ...(resolvedStore || {}),
         ...(resolvedVendor || {}),
         ...(resolvedProfile || {})
       });
+      merged.id = actualVendorId;
+      merged.vendorId = actualVendorId;
+
+      const determinedSlug = merged.shopSlug || 
+                             merged.storeSlug || 
+                             slugifyVendorName(merged.shopName || merged.storeName || merged.name || '');
+
+      if (determinedSlug && determinedSlug !== 'store') {
+        merged.shopSlug = determinedSlug;
+        merged.storeSlug = determinedSlug;
+
+        // Persist mapping to RTDB and Firestore in the background for future O(1) resolution (Requirement 17)
+        rtdbUpdate(`store_slugs/${determinedSlug}`, {
+          vendorId: actualVendorId,
+          storeId: actualVendorId,
+          shopName: merged.shopName || merged.storeName || '',
+          slug: determinedSlug,
+          updatedAt: Date.now()
+        }).catch(() => {});
+        setDoc(doc(db, 'store_slugs', determinedSlug), {
+          vendorId: actualVendorId,
+          storeId: actualVendorId,
+          shopName: merged.shopName || merged.storeName || '',
+          slug: determinedSlug,
+          updatedAt: Date.now()
+        }, { merge: true }).catch(() => {});
+      }
 
       // Synchronize exact real followers count from actual database state
       try {
-        const realCount = await getVendorRealFollowersCount(storeId);
+        const realCount = await getVendorRealFollowersCount(actualVendorId);
         merged.followersCount = realCount;
         merged.followers = realCount;
       } catch (_) {}
@@ -1416,7 +1497,8 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
       // Synchronize authentic store rating & reviews count from RTDB vendor_reviews
       try {
         const revList = await rtdbList<any>('vendor_reviews', (r: any) =>
-          r?.vendorId === storeId || r?.storeId === storeId || r?.data?.vendorId === storeId
+          r?.vendorId === actualVendorId || r?.storeId === actualVendorId || 
+          r?.data?.vendorId === actualVendorId || r?.vendorId === storeId || r?.storeId === storeId
         );
         if (revList && revList.length > 0) {
           const total = revList.reduce((acc, curr: any) => acc + (Number(curr?.data?.rating || curr?.rating) || 5), 0);
@@ -1445,7 +1527,15 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
           merged.primaryColor = resolvedTheme.primaryColor;
         }
       }
+
       saveStoreToCache(storeId, merged);
+      saveStoreToCache(cleanTarget, merged);
+      if (actualVendorId && actualVendorId !== cleanTarget) {
+        saveStoreToCache(actualVendorId, merged);
+      }
+      if (determinedSlug) {
+        saveStoreToCache(determinedSlug, merged);
+      }
       return merged;
     }
 

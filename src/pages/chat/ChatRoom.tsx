@@ -3,6 +3,7 @@ import Header from '../../components/layout/Header';
 import { useAuth } from '../../context/AuthContext';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbSubscribe, rtdbRemove } from '../../lib/rtdb';
 import { getStoreFromCache, isStorePlanVerified } from '../../services/storeCache';
+import { slugifyVendorName } from '../../utils/subdomain';
 import { fetchProductById } from '../../services/productService';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Send, Image as ImageIcon, ArrowLeft, Loader2, Check, CheckCheck, Store, X, ExternalLink, Trash2, Camera, ZoomIn } from 'lucide-react';
@@ -289,6 +290,7 @@ export default function ChatRoom() {
 
   const shopName = vendorInfo?.shopName || vendorInfo?.name || 'Vendor';
   const shopLogo = vendorInfo?.shopLogo || vendorInfo?.logo || null;
+  const storeSlug = vendorInfo?.shopSlug || vendorInfo?.storeSlug || (shopName && shopName !== 'Vendor' ? slugifyVendorName(shopName) : '') || vendorId;
 
   return (
     <div className="h-[100dvh] max-h-[100dvh] bg-slate-100 flex flex-col font-sans overflow-hidden">
@@ -310,7 +312,7 @@ export default function ChatRoom() {
               <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
             <div 
-              onClick={() => navigate(`/store/${vendorId}`)}
+              onClick={() => navigate(`/store/${storeSlug}`)}
               className="flex items-center gap-2 cursor-pointer group min-w-0"
             >
               <div className="w-8 h-8 sm:w-9 sm:h-9 bg-sky-100 rounded-full flex items-center justify-center text-primary-main font-bold shrink-0 overflow-hidden border border-slate-200">
@@ -338,7 +340,7 @@ export default function ChatRoom() {
           </div>
 
           <button 
-            onClick={() => navigate(`/store/${vendorId}`)} 
+            onClick={() => navigate(`/store/${storeSlug}`)} 
             className="flex items-center gap-1 px-2.5 py-1 text-[10px] sm:text-xs font-semibold text-primary-main bg-primary-main/10 hover:bg-primary-main hover:text-white rounded-lg transition-colors shrink-0"
           >
             <Store className="w-3.5 h-3.5" />
