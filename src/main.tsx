@@ -7,6 +7,10 @@ import { theme } from './lib/theme';
 import './lib/i18n';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import config from '../firebase-applet-config.json';
+import { fetchAllMarketplaceProducts } from './services/productService';
+
+// Kick off background product data loading simultaneously with the initial opening animation
+fetchAllMarketplaceProducts().catch(() => {});
 
 const oAuthClientId = (config as any).oAuthClientId || '';
 

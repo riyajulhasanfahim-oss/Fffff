@@ -321,39 +321,12 @@ export default function ProductDetails() {
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       <Header />
       
-      <main className="flex-grow pt-0 sm:pt-1.5 pb-6 sm:pb-10">
+      <main className="flex-grow pt-0 sm:pt-3 pb-6 sm:pb-10">
         <div className="max-w-7xl mx-auto px-0 sm:px-4 lg:px-8">
           {loading ? (
             <ProductSkeleton />
           ) : (
             <div className="flex flex-col gap-2 sm:gap-4">
-              {/* SEO & Internal Linking Breadcrumb Trail */}
-              {productData && (
-                <nav aria-label="Breadcrumb" className="px-3 sm:px-0 py-1.5 sm:py-2 text-xs text-slate-500 flex items-center flex-wrap gap-1.5 font-medium">
-                  <Link to="/" className="hover:text-sky-600 transition-colors">
-                    হোম
-                  </Link>
-                  <ChevronRight className="w-3 h-3 text-slate-400 shrink-0" />
-                  {productData.category && (
-                    <>
-                      <Link to={`/category/${encodeURIComponent(productData.category)}`} className="hover:text-sky-600 transition-colors">
-                        {productData.category}
-                      </Link>
-                      <ChevronRight className="w-3 h-3 text-slate-400 shrink-0" />
-                    </>
-                  )}
-                  {productData.brand && (
-                    <>
-                      <span className="text-slate-600">{productData.brand}</span>
-                      <ChevronRight className="w-3 h-3 text-slate-400 shrink-0" />
-                    </>
-                  )}
-                  <span className="text-slate-900 font-semibold truncate max-w-[200px] sm:max-w-md">
-                    {productData.name}
-                  </span>
-                </nav>
-              )}
-
               {/* Top Main Section: Modern Desktop & Mobile E-Commerce Layout */}
               <div className="bg-white p-0 sm:p-5 lg:p-6 rounded-none sm:rounded-2xl border-b sm:border border-slate-100 shadow-none sm:shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-0 sm:gap-6 lg:gap-8 xl:gap-10 items-start">
                 {/* Left: Image Gallery (Desktop Sticky Sticky-Top so it stays visible while scrolling details) */}
@@ -472,6 +445,48 @@ export default function ProductDetails() {
                   <ProductReviews productId={productData?.originalProductId || productData?.id || productId || ''} />
                 </div>
 
+                {/* Description Section - Compact 1-line preview with See more right below Reviews */}
+                {productData?.description && String(productData.description).trim() !== '' && (
+                  <div className="bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 border border-slate-100 shadow-2xs">
+                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider mb-1.5 sm:mb-2">Product Description</h2>
+                    <div className="relative">
+                      {!isDescriptionExpanded ? (
+                        <div className="text-xs sm:text-sm text-slate-700">
+                          <p className="line-clamp-1 leading-relaxed">
+                            {String(productData.description).replace(/\r?\n+/g, ' ')}
+                          </p>
+                          <button
+                            type="button"
+                            id="product-desc-see-more-btn"
+                            onClick={() => setIsDescriptionExpanded(true)}
+                            className="mt-1 text-xs font-bold text-primary-main hover:text-sky-700 transition-colors inline-flex items-center gap-0.5 cursor-pointer"
+                          >
+                            <span>See more……</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="text-xs sm:text-sm text-slate-700 leading-relaxed space-y-2">
+                            {String(productData.description).split('\n').filter(Boolean).map((paragraph: string, idx: number) => (
+                              <p key={idx}>{paragraph}</p>
+                            ))}
+                          </div>
+                          <div className="mt-2 pt-0.5">
+                            <button
+                              type="button"
+                              id="product-desc-see-less-btn"
+                              onClick={() => setIsDescriptionExpanded(false)}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-primary-main hover:text-sky-700 transition-colors cursor-pointer"
+                            >
+                              <span>See less</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Product Video Section - ONLY if videoUrl is provided */}
                 {productData?.videoUrl && String(productData.videoUrl).trim() !== '' && (
                   <div className="bg-white rounded-xl sm:rounded-2xl p-3.5 sm:p-4 border border-slate-100 shadow-2xs">
@@ -490,36 +505,6 @@ export default function ProductDetails() {
                            Your browser does not support the video tag.
                          </video>
                       )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Description Section - Compact: 2 lines with See More toggle */}
-                {productData?.description && String(productData.description).trim() !== '' && (
-                  <div className="bg-white rounded-xl sm:rounded-2xl p-3.5 sm:p-4 border border-slate-100 shadow-2xs">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider mb-2">Product Description</h2>
-                    <div className="relative">
-                      <div
-                        className={`text-xs sm:text-sm text-slate-700 leading-relaxed transition-all ${
-                          isDescriptionExpanded ? 'space-y-2' : 'line-clamp-2 max-h-[3.6rem] overflow-hidden'
-                        }`}
-                      >
-                        {String(productData.description).split('\n').filter(Boolean).map((paragraph: string, idx: number) => (
-                          <p key={idx}>{paragraph}</p>
-                        ))}
-                      </div>
-
-                      <div className="mt-2 pt-0.5">
-                        <button
-                          type="button"
-                          id="product-desc-toggle-btn"
-                          onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
-                          className="inline-flex items-center gap-1 text-xs font-bold text-primary-main hover:text-sky-700 transition-colors"
-                        >
-                          <span>{isDescriptionExpanded ? 'See Less' : 'See More'}</span>
-                          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isDescriptionExpanded ? '-rotate-90' : 'rotate-90'}`} />
-                        </button>
-                      </div>
                     </div>
                   </div>
                 )}

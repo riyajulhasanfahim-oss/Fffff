@@ -180,15 +180,15 @@ export default function RelatedProductsSection({
   // Skeleton during loading
   if (isLoading && relatedProducts.length === 0) {
     return (
-      <section id="related-products-section" className="bg-white rounded-xl p-4 sm:p-5 border border-slate-200 mt-4 sm:mt-6">
-        <h2 className="text-lg sm:text-xl font-bold text-slate-900 mb-4">Related Products</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+      <section id="related-products-section" className="bg-white rounded-xl p-3 sm:p-5 border border-slate-200 mt-3 sm:mt-6">
+        <h2 className="text-base sm:text-xl font-bold text-slate-900 mb-2.5 sm:mb-4">Related Products</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 sm:gap-4">
           {[1, 2, 3, 4, 5, 6].map(i => (
-            <div key={i} className="bg-slate-50 rounded-xl border border-slate-100 overflow-hidden animate-pulse">
+            <div key={i} className="bg-slate-50 rounded-lg sm:rounded-xl border border-slate-100 overflow-hidden animate-pulse">
               <div className="aspect-square bg-slate-200" />
-              <div className="p-2.5 space-y-2">
-                <div className="h-3.5 bg-slate-200 rounded w-4/5" />
-                <div className="h-4 bg-slate-200 rounded w-1/2 mt-2" />
+              <div className="p-2 sm:p-2.5 space-y-1.5 sm:space-y-2">
+                <div className="h-3 sm:h-3.5 bg-slate-200 rounded w-4/5" />
+                <div className="h-3.5 sm:h-4 bg-slate-200 rounded w-1/2 mt-1 sm:mt-2" />
               </div>
             </div>
           ))}
@@ -205,15 +205,15 @@ export default function RelatedProductsSection({
   return (
     <section 
       id="related-products-section"
-      className="bg-white rounded-xl p-4 sm:p-5 border border-slate-200 shadow-2xs mt-4 sm:mt-6"
+      className="bg-white rounded-xl p-3 sm:p-5 border border-slate-200 shadow-2xs mt-3 sm:mt-6"
     >
       {/* Clean, Simple Heading */}
-      <h2 className="text-lg sm:text-xl font-bold text-slate-900 mb-4">
+      <h2 className="text-base sm:text-xl font-bold text-slate-900 mb-2.5 sm:mb-4">
         Related Products
       </h2>
 
       {/* Related Products Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 sm:gap-4">
         {relatedProducts.map((product) => {
           const currentPrice = Number(product.price) || 0;
           const originalPrice = product.originalPrice ? Number(product.originalPrice) : undefined;
@@ -227,7 +227,7 @@ export default function RelatedProductsSection({
             <div
               key={product.id}
               onClick={() => handleCardClick(product)}
-              className="group bg-white rounded-xl border border-slate-200 hover:border-slate-400/80 shadow-2xs hover:shadow-md transition-all duration-200 flex flex-col justify-between overflow-hidden cursor-pointer h-full"
+              className="group bg-white rounded-lg sm:rounded-xl border border-slate-200 hover:border-slate-400/80 shadow-2xs hover:shadow-md transition-all duration-200 flex flex-col justify-between overflow-hidden cursor-pointer h-full"
             >
               {/* Product Image */}
               <div className="relative aspect-square w-full overflow-hidden bg-slate-50 shrink-0">
@@ -243,26 +243,20 @@ export default function RelatedProductsSection({
 
                 {/* Discount Badge */}
                 {discountPercent ? (
-                  <span className="absolute top-2 left-2 px-1.5 py-0.5 text-[10px] font-bold bg-rose-500 text-white rounded shadow-2xs pointer-events-none">
+                  <span className="absolute top-1.5 left-1.5 sm:top-2 sm:left-2 px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-[10px] font-bold bg-rose-500 text-white rounded shadow-2xs pointer-events-none">
                     -{discountPercent}%
                   </span>
                 ) : null}
               </div>
 
               {/* Product Details */}
-              <div className="p-2.5 flex flex-col flex-1 justify-between gap-1.5">
+              <div className="p-2 sm:p-2.5 flex flex-col flex-1 justify-between gap-1 sm:gap-1.5">
                 <div>
-                  {/* Stock Indicator & Vendor Store Badge */}
-                  <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                    <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 inline-flex items-center gap-1">
-                      <CheckCircle2 className="w-2.5 h-2.5" /> স্টক আছে
+                  {/* Stock Indicator (RJ WORLD BD vendor name badge removed as requested) */}
+                  <div className="flex items-center gap-1 mb-0.5 sm:mb-1">
+                    <span className="text-[9px] sm:text-[10px] font-medium text-emerald-600 bg-emerald-50 px-1 sm:px-1.5 py-0.5 rounded border border-emerald-100 inline-flex items-center gap-0.5 sm:gap-1">
+                      <CheckCircle2 className="w-2 h-2 sm:w-2.5 sm:h-2.5" /> স্টক আছে
                     </span>
-                    {(product.vendor?.storeName || product.vendor?.name) && (
-                      <span className="text-[10px] font-medium text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-100 inline-flex items-center gap-1 max-w-[130px] truncate">
-                        <Store className="w-2.5 h-2.5 text-sky-600 shrink-0" />
-                        <span className="truncate">{product.vendor?.storeName || product.vendor?.name}</span>
-                      </span>
-                    )}
                   </div>
 
                   {/* Product Name */}
@@ -270,7 +264,7 @@ export default function RelatedProductsSection({
                     to={getProductPath(product)}
                     state={{ product }}
                     onClick={(e) => e.stopPropagation()}
-                    className="block text-xs sm:text-[13px] font-semibold text-slate-800 line-clamp-2 leading-snug group-hover:text-primary-main transition-colors"
+                    className="block text-[11px] sm:text-[13px] font-semibold text-slate-800 line-clamp-2 leading-tight sm:leading-snug group-hover:text-primary-main transition-colors"
                     title={product.name}
                   >
                     <h3>{product.name}</h3>
@@ -278,35 +272,35 @@ export default function RelatedProductsSection({
                 </div>
 
                 {/* Price & Order Action */}
-                <div className="mt-auto pt-1">
-                  <div className="flex items-baseline gap-1.5 flex-wrap mb-2">
-                    <span className="text-sm sm:text-base font-bold text-slate-900">
+                <div className="mt-auto pt-0.5 sm:pt-1">
+                  <div className="flex items-baseline gap-1 sm:gap-1.5 flex-wrap mb-1.5 sm:mb-2">
+                    <span className="text-xs sm:text-base font-bold text-slate-900">
                       ৳{currentPrice.toFixed(0)}
                     </span>
                     {originalPrice && originalPrice > currentPrice && (
-                      <span className="text-[11px] text-slate-400 line-through">
+                      <span className="text-[10px] sm:text-[11px] text-slate-400 line-through">
                         ৳{originalPrice.toFixed(0)}
                       </span>
                     )}
                   </div>
 
                   {/* Order & Cart Buttons */}
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-2 gap-1 sm:gap-1.5">
                     <button
                       onClick={(e) => handleAddToCart(e, product)}
-                      className="w-full py-1.5 px-1 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-800 rounded-lg text-[10px] sm:text-[11px] font-medium flex items-center justify-center gap-1 transition-all cursor-pointer border border-slate-200"
+                      className="w-full py-1 sm:py-1.5 px-0.5 sm:px-1 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-800 rounded-md sm:rounded-lg text-[9px] sm:text-[11px] font-medium flex items-center justify-center gap-0.5 sm:gap-1 transition-all cursor-pointer border border-slate-200"
                       title="কার্টে যোগ করুন"
                     >
-                      <ShoppingCart className="w-3 h-3" />
+                      <ShoppingCart className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                       <span className="truncate">কার্ট</span>
                     </button>
 
                     <button
                       onClick={() => handleCardClick(product)}
-                      className="w-full py-1.5 px-1 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white rounded-lg text-[10px] sm:text-[11px] font-bold flex items-center justify-center gap-1 transition-all shadow-2xs cursor-pointer"
+                      className="w-full py-1 sm:py-1.5 px-0.5 sm:px-1 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white rounded-md sm:rounded-lg text-[9px] sm:text-[11px] font-bold flex items-center justify-center gap-0.5 sm:gap-1 transition-all shadow-2xs cursor-pointer"
                       title="অর্ডার করুন"
                     >
-                      <Eye className="w-3 h-3" />
+                      <Eye className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                       <span className="truncate">অর্ডার</span>
                     </button>
                   </div>

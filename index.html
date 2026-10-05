@@ -482,6 +482,17 @@
         }
       })();
     </script>
+
+    <!-- Background product preloader: starts fetching simultaneously with opening animation -->
+    <script data-cfasync="false">
+      (function() {
+        try {
+          window.__RJ_PREFETCHED_PRODUCTS_PROMISE__ = fetch('/api/products').then(function(r) {
+            return r.ok ? r.json() : null;
+          }).catch(function() { return null; });
+        } catch(e) {}
+      })();
+    </script>
     <script type="module" data-cfasync="false" src="/src/main.tsx"></script>
   </body>
 </html>

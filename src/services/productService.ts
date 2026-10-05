@@ -94,18 +94,65 @@ export function normalizeProduct(raw: any, id?: string): Product {
 // Centralized In-Memory Product State & Multiplexed RTDB Subscription
 // Ensures zero-blank, zero-flicker, and zero product vanishing across navigation
 // ============================================================================
-let globalMarketplaceProducts: Product[] | null = null;
-let globalVendorsMap: Record<string, any> = {};
+const CACHED_PRODUCTS_KEY = 'rj_cached_marketplace_products_v2';
+const CACHED_VENDORS_KEY = 'rj_cached_vendors_map_v2';
+
+let globalMarketplaceProducts: Product[] | null = (() => {
+  try {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(CACHED_PRODUCTS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
+})();
+
+let globalVendorsMap: Record<string, any> = (() => {
+  try {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(CACHED_VENDORS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    }
+  } catch (_) {}
+  return {};
+})();
+
 const subscribers = new Set<(products: Product[]) => void>();
 let globalRTDBUnsubscribe: (() => void) | null = null;
 let lastFetchTime = 0;
+let inflightMarketplaceFetch: Promise<Product[]> | null = null;
 
 /**
  * Returns products currently cached in memory.
  * Can be called synchronously by any component to guarantee instant rendering on mount.
  */
 export function getCachedMarketplaceProducts(): Product[] {
-  return globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
+  if (globalMarketplaceProducts && globalMarketplaceProducts.length > 0) {
+    return [...globalMarketplaceProducts];
+  }
+  try {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(CACHED_PRODUCTS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          globalMarketplaceProducts = parsed;
+          return [...parsed];
+        }
+      }
+    }
+  } catch (_) {}
+  return [];
 }
 
 /**
@@ -243,6 +290,21 @@ function ensureGlobalRTDBListener(): void {
     globalMarketplaceProducts = parsed;
     lastFetchTime = Date.now();
 
+    // Persist to localStorage for 0ms next load
+    try {
+      if (typeof window !== 'undefined' && parsed.length > 0) {
+        localStorage.setItem(CACHED_PRODUCTS_KEY, JSON.stringify(parsed));
+        if (Object.keys(globalVendorsMap).length > 0) {
+          localStorage.setItem(CACHED_VENDORS_KEY, JSON.stringify(globalVendorsMap));
+        }
+      }
+    } catch (_) {}
+
+    // Signal app readiness once live products are updated
+    if (typeof window !== 'undefined' && typeof (window as any).markAppReady === 'function') {
+      (window as any).markAppReady();
+    }
+
     // Broadcast to all active page/component subscribers
     subscribers.forEach(cb => {
       try {
@@ -314,59 +376,95 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
   // If in-memory products exist and forceRefresh is false, return instantly (0ms latency)
   // The real-time WebSocket listener (ensureGlobalRTDBListener) will automatically keep this up to date
   if (!forceRefresh && globalMarketplaceProducts !== null && globalMarketplaceProducts.length > 0) {
+    if (typeof window !== 'undefined' && typeof (window as any).markAppReady === 'function') {
+      (window as any).markAppReady();
+    }
     return [...globalMarketplaceProducts];
   }
 
-  try {
-    const [rawProducts, rawStores, rawVendors, serverProds] = await Promise.all([
-      rtdbGet<Record<string, any>>('products', 4000),
-      rtdbGet<Record<string, any>>('stores', 4000),
-      rtdbGet<Record<string, any>>('vendors', 2500).catch(() => null),
-      (async () => {
-        try {
-          const c = new AbortController();
-          const t = setTimeout(() => c.abort(), 2000);
-          const r = await fetch('/api/products', { signal: c.signal });
-          clearTimeout(t);
-          return r.ok ? await r.json() : null;
-        } catch { return null; }
-      })()
-    ]);
-
-    const safeStores = rawStores && typeof rawStores === 'object' && !('error' in rawStores) ? rawStores : {};
-    const safeVendors = rawVendors && typeof rawVendors === 'object' && !('error' in rawVendors) ? rawVendors : {};
-    globalVendorsMap = { ...safeStores, ...safeVendors, ...globalVendorsMap };
-
-    const mergedProducts: Record<string, any> = {
-      ...(rawProducts && typeof rawProducts === 'object' ? rawProducts : {}),
-      ...(serverProds && typeof serverProds === 'object' ? serverProds : {})
-    };
-
-    // Also include any browser local products backup
-    try {
-      if (typeof window !== 'undefined') {
-        const local = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
-        Object.assign(mergedProducts, local);
-      }
-    } catch (_) {}
-
-    const parsed = parseRTDBProducts(mergedProducts, globalVendorsMap);
-
-    // If fetch returned data, update in-memory cache
-    if (parsed.length > 0 || !globalMarketplaceProducts) {
-      globalMarketplaceProducts = parsed;
-      lastFetchTime = Date.now();
-    }
-
-    // Background metric enrichment
-    enrichProductsWithRealMetrics(globalMarketplaceProducts || []).catch(() => {});
-
-    return globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
-  } catch (err) {
-    console.warn('[fetchAllMarketplaceProducts RTDB fetch notice]:', err);
-    // Fallback to in-memory cached products if network fails
-    return globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
+  // Deduplicate in-flight fetch so all concurrent requests share the exact same background promise
+  if (!forceRefresh && inflightMarketplaceFetch) {
+    return inflightMarketplaceFetch;
   }
+
+  const fetchPromise = (async () => {
+    try {
+      const [rawProducts, rawStores, rawVendors, serverProds] = await Promise.all([
+        rtdbGet<Record<string, any>>('products', 4000),
+        rtdbGet<Record<string, any>>('stores', 4000),
+        rtdbGet<Record<string, any>>('vendors', 2500).catch(() => null),
+        (async () => {
+          try {
+            // First check if early background preloader from index.html resolved
+            if (typeof window !== 'undefined' && (window as any).__RJ_PREFETCHED_PRODUCTS_PROMISE__) {
+              const pre = await (window as any).__RJ_PREFETCHED_PRODUCTS_PROMISE__;
+              if (pre && typeof pre === 'object') return pre;
+            }
+            const c = new AbortController();
+            const t = setTimeout(() => c.abort(), 2000);
+            const r = await fetch('/api/products', { signal: c.signal });
+            clearTimeout(t);
+            return r.ok ? await r.json() : null;
+          } catch { return null; }
+        })()
+      ]);
+
+      const safeStores = rawStores && typeof rawStores === 'object' && !('error' in rawStores) ? rawStores : {};
+      const safeVendors = rawVendors && typeof rawVendors === 'object' && !('error' in rawVendors) ? rawVendors : {};
+      globalVendorsMap = { ...safeStores, ...safeVendors, ...globalVendorsMap };
+
+      const mergedProducts: Record<string, any> = {
+        ...(rawProducts && typeof rawProducts === 'object' ? rawProducts : {}),
+        ...(serverProds && typeof serverProds === 'object' ? serverProds : {})
+      };
+
+      // Also include any browser local products backup
+      try {
+        if (typeof window !== 'undefined') {
+          const local = JSON.parse(localStorage.getItem('rj_local_products') || '{}');
+          Object.assign(mergedProducts, local);
+        }
+      } catch (_) {}
+
+      const parsed = parseRTDBProducts(mergedProducts, globalVendorsMap);
+
+      // If fetch returned data, update in-memory cache and localStorage
+      if (parsed.length > 0 || !globalMarketplaceProducts) {
+        globalMarketplaceProducts = parsed;
+        lastFetchTime = Date.now();
+        try {
+          if (typeof window !== 'undefined' && parsed.length > 0) {
+            localStorage.setItem(CACHED_PRODUCTS_KEY, JSON.stringify(parsed));
+            if (Object.keys(globalVendorsMap).length > 0) {
+              localStorage.setItem(CACHED_VENDORS_KEY, JSON.stringify(globalVendorsMap));
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Signal hardware-accelerated opening animation that product data is ready
+      if (typeof window !== 'undefined' && typeof (window as any).markAppReady === 'function') {
+        (window as any).markAppReady();
+      }
+
+      // Background metric enrichment
+      enrichProductsWithRealMetrics(globalMarketplaceProducts || []).catch(() => {});
+
+      return globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
+    } catch (err) {
+      console.warn('[fetchAllMarketplaceProducts RTDB fetch notice]:', err);
+      // Fallback to in-memory cached products if network fails
+      if (typeof window !== 'undefined' && typeof (window as any).markAppReady === 'function') {
+        (window as any).markAppReady();
+      }
+      return globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
+    } finally {
+      inflightMarketplaceFetch = null;
+    }
+  })();
+
+  inflightMarketplaceFetch = fetchPromise;
+  return fetchPromise;
 }
 
 /**
