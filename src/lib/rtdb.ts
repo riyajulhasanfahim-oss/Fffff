@@ -1318,6 +1318,7 @@ interface SubscriptionChannel {
   sdkUnsubscribe: (() => void) | null;
   lastData: any;
   lastJson: string;
+  hasLoaded: boolean;
   lastRefreshTime: number;
 }
 
@@ -1333,7 +1334,8 @@ function dispatchToSubscribers(path: string, data: any, isPartial = false) {
   }
 
   const json = JSON.stringify(merged ?? null);
-  if (json !== channel.lastJson) {
+  if (!channel.hasLoaded || json !== channel.lastJson) {
+    channel.hasLoaded = true;
     channel.lastData = merged;
     channel.lastJson = json;
     memoryCache.set(path, { data: merged, timestamp: Date.now() });
@@ -1385,16 +1387,21 @@ export function rtdbSubscribe<T = any>(
       sdkUnsubscribe: null,
       lastData: null,
       lastJson: '',
+      hasLoaded: false,
       lastRefreshTime: Date.now()
     };
     subscriptionChannels.set(cleanPath, channel);
 
     // Initial instant fetch via high-speed rtdbGet
     rtdbGet<T>(cleanPath, 3000).then(initial => {
-      if (initial !== null && channel) {
+      if (channel) {
         dispatchToSubscribers(cleanPath, initial);
       }
-    }).catch(() => {});
+    }).catch(() => {
+      if (channel && !channel.hasLoaded) {
+        dispatchToSubscribers(cleanPath, null as unknown as T);
+      }
+    });
 
     // Establish Firestore + RTDB real-time listener
     try {
@@ -1547,9 +1554,18 @@ export function rtdbSubscribe<T = any>(
         (snap) => {
           if (snap.exists()) {
             dispatchToSubscribers(cleanPath, snap.val() as T);
+          } else {
+            // When the node does not exist in RTDB (e.g. empty messages or new chat),
+            // dispatch null so listeners stop waiting on loading spinners!
+            dispatchToSubscribers(cleanPath, null as unknown as T);
           }
         },
-        () => {}
+        (err) => {
+          console.warn(`[RTDB Subscribe onValue error for ${cleanPath}]:`, err);
+          if (channel && !channel.hasLoaded) {
+            dispatchToSubscribers(cleanPath, null as unknown as T);
+          }
+        }
       );
       channel.sdkUnsubscribe = () => {
         fsUnsubs.forEach((u) => {
@@ -1559,14 +1575,21 @@ export function rtdbSubscribe<T = any>(
       };
     } catch (e) {
       console.warn(`[RTDB Subscribe init warning for ${cleanPath}]:`, e);
+      if (channel && !channel.hasLoaded) {
+        dispatchToSubscribers(cleanPath, null as unknown as T);
+      }
     }
   }
 
   // Register callback
   channel.callbacks.add(callback);
 
-  // If we already have loaded data, immediately give it to the new subscriber (0ms!)
-  if (channel.lastData !== null && channel.lastData !== undefined) {
+  // If we already have loaded data or channel has resolved, immediately give it to the new subscriber (0ms!)
+  if (channel.hasLoaded) {
+    try {
+      callback(channel.lastData);
+    } catch (_) {}
+  } else if (channel.lastData !== null && channel.lastData !== undefined) {
     try {
       callback(channel.lastData);
     } catch (_) {}

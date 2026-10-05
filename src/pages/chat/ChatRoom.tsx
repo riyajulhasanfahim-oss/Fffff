@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Header from '../../components/layout/Header';
 import { useAuth } from '../../context/AuthContext';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbSubscribe, rtdbRemove } from '../../lib/rtdb';
-import { getStoreFromCache, isStorePlanVerified } from '../../services/storeCache';
+import { getStoreFromCache, isStorePlanVerified, fetchStoreDetailFromRTDB } from '../../services/storeCache';
 import { slugifyVendorName } from '../../utils/subdomain';
 import { fetchProductById } from '../../services/productService';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -21,10 +21,23 @@ export default function ChatRoom() {
   const navigate = useNavigate();
   
   const [messages, setMessages] = useState<any[]>([]);
-  const [vendorInfo, setVendorInfo] = useState<any>(() => vendorId ? getStoreFromCache(vendorId) : null);
+  const [vendorInfo, setVendorInfo] = useState<any>(() => {
+    if (!vendorId) return null;
+    if (vendorId === 'admin') {
+      return {
+        id: 'admin',
+        vendorId: 'admin',
+        shopName: 'RJ WORLD BD',
+        storeName: 'RJ WORLD BD',
+        logo: 'https://i.postimg.cc/02BC9ZMs/file-00000000c36881fa822edc96c75d817a.png',
+        verified: true
+      };
+    }
+    return getStoreFromCache(vendorId);
+  });
   const [productInfo, setProductInfo] = useState<any>(null);
   const [newMessage, setNewMessage] = useState('');
-  const [chatId, setChatId] = useState<string | null>(null);
+  const [chatId, setChatId] = useState<string>(() => (user?.uid && vendorId ? `${user.uid}_${vendorId}` : ''));
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   
@@ -138,55 +151,109 @@ export default function ChatRoom() {
   }, [productId]);
 
   useEffect(() => {
-    if (!user || !vendorId) return;
+    if (!user || !vendorId) {
+      setLoading(false);
+      return;
+    }
 
-    // Fetch vendor info from RTDB
-    const fetchVendor = async () => {
+    let isMounted = true;
+    const safetyTimer = setTimeout(() => {
+      if (isMounted) setLoading(false);
+    }, 1200);
+
+    const directChatId = `${user.uid}_${vendorId}`;
+    setChatId(directChatId);
+
+    // Fetch full vendor info from RTDB / cache asynchronously
+    const resolveVendor = async () => {
       try {
-        const [vProfile, vShop, sDoc] = await Promise.all([
-          rtdbGet<any>(`vendor_profiles/${vendorId}`),
-          rtdbGet<any>(`vendors/${vendorId}`),
-          rtdbGet<any>(`stores/${vendorId}`)
-        ]);
-        const resolved = vProfile || vShop || sDoc;
-        if (resolved) {
-          setVendorInfo((prev: any) => ({ ...(prev || {}), ...resolved }));
+        if (vendorId === 'admin') {
+          const adminStore = await rtdbGet<any>('stores/admin').catch(() => null);
+          if (isMounted) {
+            setVendorInfo((prev: any) => ({
+              ...(prev || {}),
+              ...(adminStore || {}),
+              id: 'admin',
+              vendorId: 'admin',
+              shopName: adminStore?.shopName || adminStore?.storeName || 'RJ WORLD BD',
+              logo: adminStore?.logo || adminStore?.shopLogo || 'https://i.postimg.cc/02BC9ZMs/file-00000000c36881fa822edc96c75d817a.png',
+              verified: true
+            }));
+          }
+          return;
         }
-      } catch (e) {
-        console.warn("Error fetching vendor profile", e);
+
+        const freshStore = await fetchStoreDetailFromRTDB(vendorId);
+        if (isMounted && freshStore && !freshStore.isDeleted) {
+          setVendorInfo((prev: any) => ({ ...(prev || {}), ...freshStore }));
+        }
+      } catch (err) {
+        console.warn('Error resolving vendor in ChatRoom:', err);
       }
     };
-    fetchVendor();
+    resolveVendor();
 
-    // Check if chat exists
-    const chatDocId = `${user.uid}_${vendorId}`;
-    setChatId(chatDocId);
-    rtdbUpdate(`chats/${chatDocId}`, { unreadCountCustomer: 0 }).catch(() => {});
-    
-    const unsubscribe = rtdbSubscribe<any>(`chats/${chatDocId}/messages`, (snap) => {
+    // Ensure chat metadata exists in RTDB without blocking UI
+    rtdbGet<any>(`chats/${directChatId}`).then(existing => {
+      if (!isMounted) return;
+      if (!existing) {
+        rtdbSet(`chats/${directChatId}`, {
+          id: directChatId,
+          customerId: user.uid,
+          customerName: userData?.name || user.displayName || 'Customer',
+          customerEmail: user.email || '',
+          vendorId: vendorId,
+          storeId: vendorId,
+          vendorName: vendorInfo?.shopName || vendorInfo?.name || 'Vendor',
+          vendorLogo: vendorInfo?.shopLogo || vendorInfo?.logo || '',
+          lastMessage: '',
+          lastMessageTime: Date.now(),
+          unreadCountCustomer: 0,
+          unreadCountVendor: 0,
+          createdAt: Date.now()
+        }).catch(() => {});
+      } else {
+        rtdbUpdate(`chats/${directChatId}`, { unreadCountCustomer: 0 }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    // Subscribe to messages in real time
+    const unsubscribe = rtdbSubscribe<any>(`chats/${directChatId}/messages`, (snap) => {
+      if (!isMounted) return;
+      clearTimeout(safetyTimer);
       if (snap) {
-        const data: any[] = Object.keys(snap).map(key => ({ id: key, ...snap[key] }));
-        data.sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
-        setMessages(data);
+        const rawList: any[] = Object.keys(snap).map(key => ({ id: key, ...snap[key] }));
+        rawList.sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
         
-        // Mark as read
-        const unread = data.filter(d => !d.read && d.senderId === vendorId);
+        setMessages(prev => {
+          // Keep optimistic messages not yet confirmed in the database snapshot
+          const pendingOptimistic = prev.filter(m => 
+            String(m.id).startsWith('temp_') && 
+            !rawList.some(r => r.senderId === m.senderId && r.text === m.text && Math.abs((Number(r.createdAt) || 0) - (Number(m.createdAt) || 0)) < 6000)
+          );
+          return [...rawList, ...pendingOptimistic].sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+        });
+
+        // Mark unread messages from vendor as read
+        const unread = rawList.filter(d => !d.read && d.senderId === vendorId);
         if (unread.length > 0) {
           unread.forEach(d => {
-            rtdbUpdate(`chats/${chatDocId}/messages/${d.id}`, { read: true }).catch(() => {});
+            rtdbUpdate(`chats/${directChatId}/messages/${d.id}`, { read: true }).catch(() => {});
           });
         }
-        rtdbUpdate(`chats/${chatDocId}`, { unreadCountCustomer: 0 }).catch(() => {});
+        rtdbUpdate(`chats/${directChatId}`, { unreadCountCustomer: 0 }).catch(() => {});
       } else {
-        setMessages([]);
+        setMessages(prev => prev.filter(m => String(m.id).startsWith('temp_')));
       }
       setLoading(false);
     });
-    
+
     return () => {
+      isMounted = false;
+      clearTimeout(safetyTimer);
       if (unsubscribe) unsubscribe();
     };
-  }, [user, vendorId]);
+  }, [user?.uid, vendorId]);
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -237,40 +304,58 @@ export default function ChatRoom() {
     const text = overrideText !== undefined ? overrideText.trim() : newMessage.trim();
     const finalImageUrl = customImageUrl || pendingImage?.uploadedUrl || undefined;
 
-    if ((!text && !finalImageUrl) || !user || !vendorId || !chatId) return;
+    const targetChatId = chatId || (user?.uid && vendorId ? `${user.uid}_${vendorId}` : null);
+    if ((!text && !finalImageUrl) || !user || !vendorId || !targetChatId) return;
+
+    // 1. Optimistic message: immediately display in UI (0ms!)
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const optimisticMsg = {
+      id: tempId,
+      senderId: user.uid,
+      text: text,
+      imageUrl: finalImageUrl || null,
+      createdAt: Date.now(),
+      read: false,
+      productId: productId || null
+    };
+
+    setMessages(prev => [...prev, optimisticMsg]);
+    setSending(true);
+    if (overrideText === undefined) {
+      setNewMessage('');
+    }
+    setPendingImage(null);
     
     try {
-      setSending(true);
-      if (overrideText === undefined) {
-        setNewMessage('');
-      }
-      setPendingImage(null);
-      
-      const chatData = await rtdbGet<any>(`chats/${chatId}`);
-      
       const payload = {
         customerId: user.uid,
         customerName: userData?.name || user.displayName || 'Customer',
         customerEmail: user.email || '',
-        vendorId: vendorId,
-        vendorName: vendorInfo?.shopName || vendorInfo?.name || 'Vendor',
+        vendorId: vendorInfo?.userId || vendorInfo?.vendorId || vendorInfo?.id || vendorId,
+        storeId: vendorId,
+        vendorName: vendorInfo?.shopName || vendorInfo?.storeName || vendorInfo?.name || 'Vendor',
         vendorLogo: vendorInfo?.shopLogo || vendorInfo?.logo || '',
         lastMessage: finalImageUrl ? 'Sent an image' : text,
         lastMessageTime: Date.now(),
-        unreadCountVendor: chatData ? (Number(chatData.unreadCountVendor) || 0) + 1 : 1
+        unreadCountVendor: 1
       };
       
-      await rtdbUpdate(`chats/${chatId}`, payload);
-      
-      // Add message
-      await rtdbPush(`chats/${chatId}/messages`, {
-        senderId: user.uid,
-        text: text,
-        imageUrl: finalImageUrl || null,
-        createdAt: Date.now(),
-        read: false,
-        productId: productId || null
-      });
+      // Concurrently persist to RTDB
+      const [pushKey] = await Promise.all([
+        rtdbPush(`chats/${targetChatId}/messages`, {
+          senderId: user.uid,
+          text: text,
+          imageUrl: finalImageUrl || null,
+          createdAt: Date.now(),
+          read: false,
+          productId: productId || null
+        }),
+        rtdbUpdate(`chats/${targetChatId}`, payload)
+      ]);
+
+      if (pushKey) {
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: pushKey } : m));
+      }
 
       // Send real-time notification to the vendor
       notifyVendorNewMessage(
@@ -278,11 +363,11 @@ export default function ChatRoom() {
         userData?.name || user.displayName || 'সম্মানিত কাস্টমার',
         finalImageUrl ? 'ছবি পাঠিয়েছেন' : text,
         user.uid
-      ).catch(e => console.warn('Vendor chat notif failed:', e));
+      ).catch(err => console.warn('Vendor chat notif failed:', err));
       
     } catch (err) {
-      console.error(err);
-      toast.error('Failed to send message');
+      console.error('Failed to send message:', err);
+      toast.error('মেসেজ পাঠানো যায়নি');
     } finally {
       setSending(false);
     }

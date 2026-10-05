@@ -16,8 +16,26 @@ import { rtdbGet, rtdbSet, rtdbRemove, rtdbUpdate } from '../lib/rtdb';
 // In-memory follower count cache keyed by vendorId
 const followersCountCache = new Map<string, number>();
 
-// In-memory mutex locks to prevent race conditions on rapid double-taps
+// In-memory follow status cache keyed by `${vendorId}_${userId}`
+const userFollowStatusCache = new Map<string, boolean>();
+
+// In-flight promise maps to prevent multiple simultaneous duplicate queries
+const inFlightCountPromises = new Map<string, Promise<number>>();
+const inFlightStatusPromises = new Map<string, Promise<boolean>>();
+
+// Mutex locks to prevent duplicate simultaneous writes
 const inFlightFollowLocks = new Set<string>();
+
+// Track timestamps of local mutations to prevent stale Firebase snapshots from overwriting fresh counts
+const lastFollowMutationTime = new Map<string, number>();
+
+// Multiplexed Firestore listener subscriptions
+interface MultiplexedSubscription<T> {
+  subscribers: Set<(data: T) => void>;
+  unsubscribeFs: (() => void) | null;
+}
+const countSubscriptions = new Map<string, MultiplexedSubscription<number>>();
+const userFollowSubscriptions = new Map<string, MultiplexedSubscription<boolean>>();
 
 /**
  * Normalizes vendor ID string
@@ -46,7 +64,6 @@ export function formatCompactNumber(count: number): string {
   if (num < 1000) return String(num);
 
   const formatVal = (val: number): string => {
-    // Truncate to 1 decimal place without rounding up to next magnitude (e.g. 999.9K)
     const truncated = Math.floor(val * 10) / 10;
     return truncated % 1 === 0 ? String(truncated) : truncated.toFixed(1);
   };
@@ -68,84 +85,64 @@ export function formatFollowers(count: number): string {
 }
 
 /**
- * Fetches the authentic follower count for a vendor directly from
- * Cloud Firestore Vendor document (vendors/{vendorId}).
- * Falls back to vendor_profiles or store_followers deduplicated count.
+ * Fetches the authentic follower count for a vendor efficiently:
+ * - Returns synchronous cache or recent optimistic mutation count immediately
+ * - Deduplicates concurrent in-flight requests
+ * - Reads single vendor document directly from Firestore or RTDB (O(1)) instead of downloading all follower documents
  */
 export async function getVendorRealFollowersCount(vendorIdInput: string): Promise<number> {
   const vendorId = cleanVendorId(vendorIdInput);
   if (!vendorId) return 0;
 
-  // 1. Read directly from the existing Cloud Firestore 'vendors' collection
-  try {
-    const vendorSnap = await getDoc(doc(db, 'vendors', vendorId));
-    if (vendorSnap.exists()) {
-      const data = vendorSnap.data();
-      const count = typeof data?.followersCount === 'number' 
-        ? data.followersCount 
-        : (typeof data?.followers === 'number' ? data.followers : null);
-      if (count !== null && count >= 0) {
-        followersCountCache.set(vendorId, count);
-        return count;
-      }
-    }
-  } catch (err) {
-    console.warn('[vendorFollowerService] Firestore vendor doc count read error:', err);
+  // 1. If recently mutated locally, return optimistic cached count to prevent stale overwrite
+  const lastMutation = lastFollowMutationTime.get(vendorId) || 0;
+  if (Date.now() - lastMutation < 4000 && followersCountCache.has(vendorId)) {
+    return followersCountCache.get(vendorId)!;
   }
 
-  // 2. Fallback check 'vendor_profiles' in Cloud Firestore
-  try {
-    const profileSnap = await getDoc(doc(db, 'vendor_profiles', vendorId));
-    if (profileSnap.exists()) {
-      const data = profileSnap.data();
-      const count = typeof data?.followersCount === 'number' 
-        ? data.followersCount 
-        : (typeof data?.followers === 'number' ? data.followers : null);
-      if (count !== null && count >= 0) {
-        followersCountCache.set(vendorId, count);
-        return count;
+  // 2. Deduplicate simultaneous requests for the same vendor
+  if (inFlightCountPromises.has(vendorId)) {
+    return inFlightCountPromises.get(vendorId)!;
+  }
+
+  const promise = (async () => {
+    try {
+      // 3. Read directly from the existing Cloud Firestore 'vendors' collection
+      const vendorSnap = await getDoc(doc(db, 'vendors', vendorId)).catch(() => null);
+      if (vendorSnap && vendorSnap.exists()) {
+        const data = vendorSnap.data();
+        const count = typeof data?.followersCount === 'number' 
+          ? data.followersCount 
+          : (typeof data?.followers === 'number' ? data.followers : null);
+        if (count !== null && count >= 0) {
+          if (Date.now() - (lastFollowMutationTime.get(vendorId) || 0) >= 4000) {
+            followersCountCache.set(vendorId, count);
+          }
+          return followersCountCache.get(vendorId) ?? count;
+        }
       }
+
+      // 4. Fallback check RTDB stores/${vendorId}/followersCount (fast shallow read)
+      const rtdbCount = await rtdbGet<number>(`stores/${vendorId}/followersCount`).catch(() => null);
+      if (typeof rtdbCount === 'number' && rtdbCount >= 0) {
+        if (Date.now() - (lastFollowMutationTime.get(vendorId) || 0) >= 4000) {
+          followersCountCache.set(vendorId, rtdbCount);
+        }
+        return followersCountCache.get(vendorId) ?? rtdbCount;
+      }
+
+      // 5. Fallback to existing memory cache
+      return followersCountCache.get(vendorId) ?? 0;
+    } catch (err) {
+      console.warn('[vendorFollowerService] count fetch error:', err);
+      return followersCountCache.get(vendorId) ?? 0;
+    } finally {
+      inFlightCountPromises.delete(vendorId);
     }
-  } catch (_) {}
+  })();
 
-  // 3. Fallback check 'store_followers' collection
-  const uniqueUserIds = new Set<string>();
-  try {
-    const q = fsQuery(
-      collection(db, 'store_followers'),
-      fsWhere('vendorId', '==', vendorId)
-    );
-    const snap = await getDocs(q);
-    snap.forEach((docSnap) => {
-      const data = docSnap.data();
-      const docId = docSnap.id;
-      let uid = data?.userId;
-      if (!uid && docId.startsWith(`${vendorId}_`)) {
-        uid = docId.substring(`${vendorId}_`.length);
-      }
-      if (uid && typeof uid === 'string' && uid.trim().length > 0) {
-        uniqueUserIds.add(uid.trim());
-      }
-    });
-  } catch (_) {}
-
-  const finalRealCount = uniqueUserIds.size;
-  followersCountCache.set(vendorId, finalRealCount);
-
-  // Synchronize to vendor doc in background so shallow reads stay accurate
-  try {
-    const syncPayload = {
-      followersCount: finalRealCount,
-      followers: finalRealCount,
-      updatedAt: Date.now()
-    };
-    Promise.allSettled([
-      setDoc(doc(db, 'vendors', vendorId), syncPayload, { merge: true }),
-      rtdbUpdate(`vendors/${vendorId}`, syncPayload)
-    ]).catch(() => {});
-  } catch (_) {}
-
-  return finalRealCount;
+  inFlightCountPromises.set(vendorId, promise);
+  return promise;
 }
 
 /**
@@ -159,6 +156,9 @@ export function getCachedVendorFollowersCount(vendorIdInput: string): number {
 
 /**
  * Checks whether a specific user is currently following a vendor strictly from database state.
+ * - Deduplicates concurrent requests
+ * - Checks in-memory cache and localStorage first for instant 0ms response
+ * - Reads direct single document in Firestore store_followers/${vendorId}_${userId}
  */
 export async function isUserFollowingVendor(vendorIdInput: string, userIdInput: string): Promise<boolean> {
   const vendorId = cleanVendorId(vendorIdInput);
@@ -167,29 +167,58 @@ export async function isUserFollowingVendor(vendorIdInput: string, userIdInput: 
 
   const docId = `${vendorId}_${userId}`;
 
-  // 1. Check Cloud Firestore store_followers
+  // 1. Check in-memory cache
+  if (userFollowStatusCache.has(docId)) {
+    return userFollowStatusCache.get(docId)!;
+  }
+
+  // 2. Check localStorage cache
   try {
-    const snap = await getDoc(doc(db, 'store_followers', docId));
-    if (snap.exists()) {
+    const local = localStorage.getItem(`rj_follow_${docId}`);
+    if (local === 'true') {
+      userFollowStatusCache.set(docId, true);
       return true;
+    } else if (local === 'false') {
+      userFollowStatusCache.set(docId, false);
+      return false;
     }
   } catch (_) {}
 
-  // 2. Fallback check RTDB
-  try {
-    const rtdbFollow = await rtdbGet<any>(`store_followers/${docId}`).catch(() => null);
-    if (rtdbFollow) return true;
-    const userFollow = await rtdbGet<any>(`users/${userId}/followed_stores/${vendorId}`).catch(() => null);
-    if (userFollow) return true;
-  } catch (_) {}
+  // 3. Deduplicate in-flight requests
+  if (inFlightStatusPromises.has(docId)) {
+    return inFlightStatusPromises.get(docId)!;
+  }
 
-  return false;
+  const promise = (async () => {
+    try {
+      const snap = await getDoc(doc(db, 'store_followers', docId)).catch(() => null);
+      if (snap && snap.exists()) {
+        userFollowStatusCache.set(docId, true);
+        try { localStorage.setItem(`rj_follow_${docId}`, 'true'); } catch (_) {}
+        return true;
+      }
+
+      // Fallback check RTDB
+      const rtdbFollow = await rtdbGet<any>(`store_followers/${docId}`).catch(() => null);
+      const isFollowing = Boolean(rtdbFollow);
+      userFollowStatusCache.set(docId, isFollowing);
+      try { localStorage.setItem(`rj_follow_${docId}`, String(isFollowing)); } catch (_) {}
+      return isFollowing;
+    } catch (_) {
+      return userFollowStatusCache.get(docId) ?? false;
+    } finally {
+      inFlightStatusPromises.delete(docId);
+    }
+  })();
+
+  inFlightStatusPromises.set(docId, promise);
+  return promise;
 }
 
 /**
  * Subscribes to real-time follower count updates for a specific vendor.
- * Subscribes directly to the Cloud Firestore Vendor document (vendors/{vendorId})
- * so manual edits in Firestore or background updates immediately reflect in the UI!
+ * Multiplexes a SINGLE Firestore onSnapshot listener per vendorId to eliminate duplicate listeners.
+ * Prevents stale snapshot data from overwriting newer local mutations.
  */
 export function subscribeVendorFollowersCount(
   vendorIdInput: string,
@@ -207,37 +236,57 @@ export function subscribeVendorFollowersCount(
     onCountChange(cached);
   }
 
-  // 2. Fetch fresh initial count from Firestore
-  getVendorRealFollowersCount(vendorId)
-    .then((count) => onCountChange(count))
-    .catch(() => {});
+  // 2. Set up or reuse multiplexed Firestore listener
+  let sub = countSubscriptions.get(vendorId);
+  if (!sub) {
+    sub = {
+      subscribers: new Set(),
+      unsubscribeFs: null
+    };
+    countSubscriptions.set(vendorId, sub);
 
-  // 3. Real-time Firestore snapshot listener on the Vendor document
-  let unsubscribeFsVendor: (() => void) | null = null;
-  try {
-    unsubscribeFsVendor = onSnapshot(
-      doc(db, 'vendors', vendorId),
-      (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          const count = typeof data?.followersCount === 'number'
-            ? data.followersCount
-            : (typeof data?.followers === 'number' ? data.followers : null);
-          if (count !== null && count >= 0) {
-            followersCountCache.set(vendorId, count);
-            onCountChange(count);
+    try {
+      sub.unsubscribeFs = onSnapshot(
+        doc(db, 'vendors', vendorId),
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            const count = typeof data?.followersCount === 'number'
+              ? data.followersCount
+              : (typeof data?.followers === 'number' ? data.followers : null);
+            if (count !== null && count >= 0) {
+              const lastMutation = lastFollowMutationTime.get(vendorId) || 0;
+              // Guard against stale snapshot replication overwriting fresh optimistic local update
+              if (Date.now() - lastMutation < 4000) {
+                return;
+              }
+              followersCountCache.set(vendorId, count);
+              const currentSub = countSubscriptions.get(vendorId);
+              if (currentSub) {
+                currentSub.subscribers.forEach(cb => cb(count));
+              }
+            }
           }
+        },
+        (err) => {
+          console.warn('[vendorFollowerService] onSnapshot vendors error:', err);
         }
-      },
-      (err) => {
-        console.warn('[vendorFollowerService] onSnapshot vendors error:', err);
-      }
-    );
-  } catch (err) {
-    console.warn('[vendorFollowerService] setup onSnapshot vendors failed:', err);
+      );
+    } catch (err) {
+      console.warn('[vendorFollowerService] setup onSnapshot vendors failed:', err);
+    }
   }
 
-  // 4. Custom event for intra-window instant sync
+  sub.subscribers.add(onCountChange);
+
+  // If no cached count yet, trigger single background fetch
+  if (typeof cached !== 'number') {
+    getVendorRealFollowersCount(vendorId).then(count => {
+      onCountChange(count);
+    }).catch(() => {});
+  }
+
+  // Window event listener for instant intra-window sync
   const handleCustomEvent = (e: any) => {
     if (e.detail?.vendorId === vendorId && typeof e.detail?.count === 'number') {
       followersCountCache.set(vendorId, e.detail.count);
@@ -249,17 +298,25 @@ export function subscribeVendorFollowersCount(
   }
 
   return () => {
-    if (unsubscribeFsVendor) {
-      try { unsubscribeFsVendor(); } catch (_) {}
-    }
     if (typeof window !== 'undefined') {
       window.removeEventListener('vendor_followers_updated', handleCustomEvent);
+    }
+    const currentSub = countSubscriptions.get(vendorId);
+    if (currentSub) {
+      currentSub.subscribers.delete(onCountChange);
+      if (currentSub.subscribers.size === 0) {
+        if (currentSub.unsubscribeFs) {
+          try { currentSub.unsubscribeFs(); } catch (_) {}
+        }
+        countSubscriptions.delete(vendorId);
+      }
     }
   };
 }
 
 /**
  * Subscribes to real-time follow status for a specific user and vendor.
+ * Multiplexes a SINGLE onSnapshot listener per `${vendorId}_${userId}`.
  */
 export function subscribeUserFollowStatus(
   vendorIdInput: string,
@@ -273,28 +330,88 @@ export function subscribeUserFollowStatus(
     return () => {};
   }
 
-  // Initial check
-  isUserFollowingVendor(vendorId, userId)
-    .then(isFollowing => onStatusChange(isFollowing))
-    .catch(() => onStatusChange(false));
-
   const docId = `${vendorId}_${userId}`;
-  let unsubscribeFs: (() => void) | null = null;
-  try {
-    unsubscribeFs = onSnapshot(
-      doc(db, 'store_followers', docId),
-      (snap) => {
-        onStatusChange(snap.exists());
-      },
-      () => {
-        isUserFollowingVendor(vendorId, userId).then(onStatusChange).catch(() => {});
+
+  // 1. Initial cached value for instant render
+  if (userFollowStatusCache.has(docId)) {
+    onStatusChange(userFollowStatusCache.get(docId)!);
+  } else {
+    try {
+      const local = localStorage.getItem(`rj_follow_${docId}`);
+      if (local === 'true' || local === 'false') {
+        const val = local === 'true';
+        userFollowStatusCache.set(docId, val);
+        onStatusChange(val);
       }
-    );
-  } catch (_) {}
+    } catch (_) {}
+  }
+
+  // 2. Set up or reuse multiplexed listener
+  let sub = userFollowSubscriptions.get(docId);
+  if (!sub) {
+    sub = {
+      subscribers: new Set(),
+      unsubscribeFs: null
+    };
+    userFollowSubscriptions.set(docId, sub);
+
+    try {
+      sub.unsubscribeFs = onSnapshot(
+        doc(db, 'store_followers', docId),
+        (snap) => {
+          const lastMutation = lastFollowMutationTime.get(docId) || 0;
+          if (Date.now() - lastMutation < 4000) {
+            return;
+          }
+          const isFollowing = snap.exists();
+          userFollowStatusCache.set(docId, isFollowing);
+          try { localStorage.setItem(`rj_follow_${docId}`, String(isFollowing)); } catch (_) {}
+          const currentSub = userFollowSubscriptions.get(docId);
+          if (currentSub) {
+            currentSub.subscribers.forEach(cb => cb(isFollowing));
+          }
+        },
+        () => {
+          isUserFollowingVendor(vendorId, userId).then(val => {
+            const currentSub = userFollowSubscriptions.get(docId);
+            if (currentSub) currentSub.subscribers.forEach(cb => cb(val));
+          }).catch(() => {});
+        }
+      );
+    } catch (_) {}
+  }
+
+  sub.subscribers.add(onStatusChange);
+
+  // If not yet in cache, run single check
+  if (!userFollowStatusCache.has(docId)) {
+    isUserFollowingVendor(vendorId, userId).then(val => {
+      onStatusChange(val);
+    }).catch(() => {});
+  }
+
+  const handleCustomFollowEvent = (e: any) => {
+    if (e.detail?.docId === docId && typeof e.detail?.isFollowing === 'boolean') {
+      onStatusChange(e.detail.isFollowing);
+    }
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('user_follow_updated', handleCustomFollowEvent);
+  }
 
   return () => {
-    if (unsubscribeFs) {
-      try { unsubscribeFs(); } catch (_) {}
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('user_follow_updated', handleCustomFollowEvent);
+    }
+    const currentSub = userFollowSubscriptions.get(docId);
+    if (currentSub) {
+      currentSub.subscribers.delete(onStatusChange);
+      if (currentSub.subscribers.size === 0) {
+        if (currentSub.unsubscribeFs) {
+          try { currentSub.unsubscribeFs(); } catch (_) {}
+        }
+        userFollowSubscriptions.delete(docId);
+      }
     }
   };
 }
@@ -303,10 +420,10 @@ export function subscribeUserFollowStatus(
  * Toggles Follow/Unfollow status for a user on a vendor.
  *
  * Backend persistence with Firestore and RTDB:
+ * - Responds immediately with zero lag.
  * - Thread-safe mutex prevents rapid double-taps from creating duplicate records or race conditions.
- * - Follow: creates store_followers/${vendorId}_${userId} and increments/updates followersCount on vendors/${vendorId}.
- * - Unfollow: deletes store_followers/${vendorId}_${userId} and decrements/updates followersCount on vendors/${vendorId}.
- * - Stores follower count in Cloud Firestore Vendor document (vendors/{vendorId}) as a real numeric value.
+ * - Updates both Firestore and RTDB in a single parallel batch.
+ * - Protects against stale Firebase replication overwriting fresh state.
  */
 export async function toggleFollowVendor(
   vendorIdInput: string,
@@ -328,143 +445,89 @@ export async function toggleFollowVendor(
     throw new Error('অনুগ্রহ করে লগইন করুন');
   }
 
-  const lockKey = `${vendorId}_${userId}`;
-  if (inFlightFollowLocks.has(lockKey)) {
-    throw new Error('REQUEST_IN_PROGRESS');
+  const docId = `${vendorId}_${userId}`;
+  const now = Date.now();
+
+  // Mark local mutation time for both vendorId and docId
+  lastFollowMutationTime.set(vendorId, now);
+  lastFollowMutationTime.set(docId, now);
+
+  const currentlyFollowing = userFollowStatusCache.get(docId) ?? 
+    (typeof storeMetadata?.optimisticTarget === 'boolean' ? !storeMetadata.optimisticTarget : false);
+
+  const willFollow = typeof storeMetadata?.optimisticTarget === 'boolean' 
+    ? storeMetadata.optimisticTarget 
+    : !currentlyFollowing;
+
+  // Immediate synchronous cache update
+  userFollowStatusCache.set(docId, willFollow);
+  try { localStorage.setItem(`rj_follow_${docId}`, String(willFollow)); } catch (_) {}
+
+  // Calculate new count
+  let newCount: number;
+  if (typeof storeMetadata?.currentCount === 'number') {
+    newCount = storeMetadata.currentCount;
+  } else {
+    const current = followersCountCache.get(vendorId) ?? 0;
+    newCount = willFollow ? current + 1 : Math.max(0, current - 1);
   }
 
-  inFlightFollowLocks.add(lockKey);
+  followersCountCache.set(vendorId, newCount);
 
+  // Dispatch intra-window events for 0ms instantaneous UI synchronization
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('vendor_followers_updated', {
+      detail: { vendorId, count: newCount }
+    }));
+    window.dispatchEvent(new CustomEvent('user_follow_updated', {
+      detail: { docId, isFollowing: willFollow }
+    }));
+  }
+
+  // Mutex lock to prevent duplicate concurrent writes
+  if (inFlightFollowLocks.has(docId)) {
+    return { isFollowing: willFollow, followersCount: newCount };
+  }
+  inFlightFollowLocks.add(docId);
+
+  // High-performance parallel Firebase persistence
   try {
-    const docId = `${vendorId}_${userId}`;
-
-    // Determine target follow status
-    let willFollow: boolean;
-    if (typeof storeMetadata?.optimisticTarget === 'boolean') {
-      willFollow = storeMetadata.optimisticTarget;
-    } else {
-      const currentlyFollowing = await isUserFollowingVendor(vendorId, userId);
-      willFollow = !currentlyFollowing;
-    }
+    const syncPayload = {
+      followersCount: newCount,
+      followers: newCount,
+      updatedAt: now
+    };
 
     if (willFollow) {
-      // 1. Create follower record in store_followers
       const followerPayload = {
         id: docId,
         vendorId,
         userId,
         customerName: user.displayName || 'সম্মানিত ক্রেতা',
         customerEmail: user.email || '',
-        followedAt: Date.now()
+        followedAt: now
       };
 
-      await Promise.all([
+      await Promise.allSettled([
         setDoc(doc(db, 'store_followers', docId), followerPayload, { merge: true }),
-        rtdbSet(`store_followers/${docId}`, followerPayload).catch(() => {}),
-        rtdbSet(`users/${userId}/followed_stores/${vendorId}`, {
-          storeId: vendorId,
-          storeName: storeMetadata?.storeName || 'Store',
-          storeLogo: storeMetadata?.storeLogo || '',
-          followedAt: Date.now()
-        }).catch(() => {})
-      ]);
-
-      // 2. Calculate new follower count
-      let newCount: number;
-      if (typeof storeMetadata?.currentCount === 'number') {
-        newCount = storeMetadata.currentCount;
-      } else {
-        const cached = followersCountCache.get(vendorId) ?? 0;
-        newCount = cached + 1;
-      }
-
-      // 3. Persist new follower count to Firestore Vendor document (vendors/{vendorId})
-      const syncPayload = {
-        followersCount: newCount,
-        followers: newCount,
-        updatedAt: Date.now()
-      };
-
-      await Promise.allSettled([
-        updateDoc(doc(db, 'vendors', vendorId), syncPayload).catch(() => {
-          return setDoc(doc(db, 'vendors', vendorId), syncPayload, { merge: true });
-        }),
-        updateDoc(doc(db, 'vendor_profiles', vendorId), syncPayload).catch(() => {
-          return setDoc(doc(db, 'vendor_profiles', vendorId), syncPayload, { merge: true });
-        }),
-        updateDoc(doc(db, 'stores', vendorId), syncPayload).catch(() => {
-          return setDoc(doc(db, 'stores', vendorId), syncPayload, { merge: true });
-        }),
+        setDoc(doc(db, 'vendors', vendorId), syncPayload, { merge: true }),
+        rtdbSet(`store_followers/${docId}`, followerPayload),
         rtdbUpdate(`vendors/${vendorId}`, syncPayload),
-        rtdbUpdate(`stores/${vendorId}`, syncPayload),
-        rtdbUpdate(`vendor_profiles/${vendorId}`, syncPayload)
+        rtdbUpdate(`stores/${vendorId}`, syncPayload)
       ]);
-
-      followersCountCache.set(vendorId, newCount);
-
-      // Notify intra-window listeners
-      try {
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('vendor_followers_updated', {
-            detail: { vendorId, count: newCount }
-          }));
-        }
-      } catch (_) {}
-
-      return { isFollowing: true, followersCount: newCount };
     } else {
-      // PERFORM UNFOLLOW
-      // 1. Delete follower record
-      await Promise.all([
-        deleteDoc(doc(db, 'store_followers', docId)),
-        rtdbRemove(`store_followers/${docId}`).catch(() => {}),
-        rtdbRemove(`users/${userId}/followed_stores/${vendorId}`).catch(() => {})
-      ]);
-
-      // 2. Calculate new follower count
-      let newCount: number;
-      if (typeof storeMetadata?.currentCount === 'number') {
-        newCount = storeMetadata.currentCount;
-      } else {
-        const cached = followersCountCache.get(vendorId) ?? 1;
-        newCount = Math.max(0, cached - 1);
-      }
-
-      // 3. Persist updated follower count to Firestore Vendor document (vendors/{vendorId})
-      const syncPayload = {
-        followersCount: newCount,
-        followers: newCount,
-        updatedAt: Date.now()
-      };
-
       await Promise.allSettled([
-        updateDoc(doc(db, 'vendors', vendorId), syncPayload).catch(() => {
-          return setDoc(doc(db, 'vendors', vendorId), syncPayload, { merge: true });
-        }),
-        updateDoc(doc(db, 'vendor_profiles', vendorId), syncPayload).catch(() => {
-          return setDoc(doc(db, 'vendor_profiles', vendorId), syncPayload, { merge: true });
-        }),
-        updateDoc(doc(db, 'stores', vendorId), syncPayload).catch(() => {
-          return setDoc(doc(db, 'stores', vendorId), syncPayload, { merge: true });
-        }),
+        deleteDoc(doc(db, 'store_followers', docId)),
+        setDoc(doc(db, 'vendors', vendorId), syncPayload, { merge: true }),
+        rtdbRemove(`store_followers/${docId}`),
         rtdbUpdate(`vendors/${vendorId}`, syncPayload),
-        rtdbUpdate(`stores/${vendorId}`, syncPayload),
-        rtdbUpdate(`vendor_profiles/${vendorId}`, syncPayload)
+        rtdbUpdate(`stores/${vendorId}`, syncPayload)
       ]);
-
-      followersCountCache.set(vendorId, newCount);
-
-      try {
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('vendor_followers_updated', {
-            detail: { vendorId, count: newCount }
-          }));
-        }
-      } catch (_) {}
-
-      return { isFollowing: false, followersCount: newCount };
     }
+
+    return { isFollowing: willFollow, followersCount: newCount };
   } finally {
-    inFlightFollowLocks.delete(lockKey);
+    inFlightFollowLocks.delete(docId);
   }
 }
+

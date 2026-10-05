@@ -112,7 +112,15 @@ export default function VendorChatRoom() {
   }, [messages]);
 
   useEffect(() => {
-    if (!user || !customerId) return;
+    if (!user || !customerId) {
+      setLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    const safetyTimer = setTimeout(() => {
+      if (isMounted) setLoading(false);
+    }, 1200);
 
     const chatDocId = `${customerId}_${user.uid}`;
     setChatId(chatDocId);
@@ -120,7 +128,7 @@ export default function VendorChatRoom() {
     // Fetch chat doc to get customer name from RTDB
     const fetchChatDoc = async () => {
        const chatData = await rtdbGet<any>(`chats/${chatDocId}`);
-       if (chatData) {
+       if (isMounted && chatData) {
          setCustomerName(chatData.customerName || 'Customer');
        }
     };
@@ -128,26 +136,37 @@ export default function VendorChatRoom() {
     rtdbUpdate(`chats/${chatDocId}`, { unreadCountVendor: 0 }).catch(() => {});
 
     const unsubscribe = rtdbSubscribe<any>(`chats/${chatDocId}/messages`, (snap) => {
+      if (!isMounted) return;
+      clearTimeout(safetyTimer);
       if (snap) {
-        const data = Object.keys(snap).map(key => ({ id: key, ...snap[key] }));
-        data.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-        setMessages(data);
+        const rawList = Object.keys(snap).map(key => ({ id: key, ...snap[key] }));
+        rawList.sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+
+        setMessages(prev => {
+          const pendingOptimistic = prev.filter(m => 
+            String(m.id).startsWith('temp_') && 
+            !rawList.some(r => r.senderId === m.senderId && r.text === m.text && Math.abs((Number(r.createdAt) || 0) - (Number(m.createdAt) || 0)) < 6000)
+          );
+          return [...rawList, ...pendingOptimistic].sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+        });
         
         // Mark unread messages from customer as read
-        const unread = data.filter(d => !d.read && d.senderId === customerId);
+        const unread = rawList.filter(d => !d.read && d.senderId === customerId);
         if (unread.length > 0) {
           unread.forEach(d => {
-            rtdbUpdate(`chats/${chatDocId}/messages/${d.id}`, { read: true });
+            rtdbUpdate(`chats/${chatDocId}/messages/${d.id}`, { read: true }).catch(() => {});
           });
         }
         rtdbUpdate(`chats/${chatDocId}`, { unreadCountVendor: 0 }).catch(() => {});
       } else {
-        setMessages([]);
+        setMessages(prev => prev.filter(m => String(m.id).startsWith('temp_')));
       }
       setLoading(false);
     });
     
     return () => {
+      isMounted = false;
+      clearTimeout(safetyTimer);
       if (unsubscribe) unsubscribe();
     };
   }, [user, customerId]);
@@ -203,28 +222,43 @@ export default function VendorChatRoom() {
 
     if ((!text && !finalImageUrl) || !user || !customerId || !chatId) return;
     
+    // Optimistic message immediate display
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const optimisticMsg = {
+      id: tempId,
+      senderId: user.uid,
+      text: text,
+      imageUrl: finalImageUrl || null,
+      createdAt: Date.now(),
+      read: false
+    };
+
+    setMessages(prev => [...prev, optimisticMsg]);
+    setSending(true);
+    setNewMessage('');
+    setPendingImage(null);
+    
     try {
-      setSending(true);
-      setNewMessage('');
-      setPendingImage(null);
-      
-      const chatData = await rtdbGet<any>(`chats/${chatId}`);
-      
       const payload = {
         lastMessage: finalImageUrl ? 'Sent an image' : text,
         lastMessageTime: Date.now(),
-        unreadCountCustomer: chatData ? (chatData.unreadCountCustomer || 0) + 1 : 1
+        unreadCountCustomer: 1
       };
       
-      await rtdbUpdate(`chats/${chatId}`, payload);
-      
-      await rtdbPush(`chats/${chatId}/messages`, {
-        senderId: user.uid,
-        text: text,
-        imageUrl: finalImageUrl || null,
-        createdAt: Date.now(),
-        read: false
-      });
+      const [pushKey] = await Promise.all([
+        rtdbPush(`chats/${chatId}/messages`, {
+          senderId: user.uid,
+          text: text,
+          imageUrl: finalImageUrl || null,
+          createdAt: Date.now(),
+          read: false
+        }),
+        rtdbUpdate(`chats/${chatId}`, payload)
+      ]);
+
+      if (pushKey) {
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: pushKey } : m));
+      }
       
     } catch (err) {
       console.error(err);
