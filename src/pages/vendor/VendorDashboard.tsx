@@ -869,22 +869,24 @@ export default function VendorDashboard() {
                 </div>
               </div>
 
-              {/* Free Shop Domain & Custom Domain */}
+              {/* Store Public URL / Clean Domain (Requirement 11, 12, 13, 23) */}
               {(() => {
-                const activeShopDomain = vendorInfo?.freeShopDomain && vendorInfo.freeShopDomain.endsWith(`.${PRIMARY_DOMAIN}`)
-                  ? vendorInfo.freeShopDomain
-                  : (vendorInfo?.shopSlug ? `${vendorInfo.shopSlug}.${PRIMARY_DOMAIN}` : (vendorInfo?.shopName || vendorInfo?.storeName ? `${slugifyVendorName(vendorInfo.shopName || vendorInfo.storeName)}.${PRIMARY_DOMAIN}` : ''));
+                const resolvedSlug = vendorInfo?.shopSlug || vendorInfo?.storeSlug || 
+                                     (vendorInfo?.shopName || vendorInfo?.storeName ? slugifyVendorName(vendorInfo.shopName || vendorInfo.storeName) : '');
+                const cleanPublicUrl = resolvedSlug 
+                  ? `https://${PRIMARY_DOMAIN}/store/${resolvedSlug}` 
+                  : (vendorInfo?.freeShopDomain?.startsWith('http') ? vendorInfo.freeShopDomain : (vendorInfo?.freeShopDomain ? `https://${vendorInfo.freeShopDomain}` : ''));
                 
                 return (
                   <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 text-xs mb-2">
-                    {activeShopDomain && (
+                    {cleanPublicUrl && (
                       <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 px-2.5 py-1 rounded-lg">
                         <span className="text-gray-500 font-normal">Domain:</span>
-                        <span className="font-semibold text-primary-main">https://{activeShopDomain}/</span>
+                        <span className="font-semibold text-primary-main">{cleanPublicUrl}</span>
                         <button
                           onClick={(e) => {
                             e.preventDefault();
-                            navigator.clipboard.writeText(`https://${activeShopDomain}/`);
+                            navigator.clipboard.writeText(cleanPublicUrl);
                             toast.success('Shop link copied!');
                           }}
                           className="text-gray-500 hover:text-gray-800 ml-1 p-0.5 cursor-pointer"
@@ -893,7 +895,7 @@ export default function VendorDashboard() {
                           <Copy className="w-3 h-3" />
                         </button>
                         <a 
-                          href={getVendorOpenUrl(activeShopDomain, user?.uid)} 
+                          href={cleanPublicUrl} 
                           target="_blank" 
                           rel="noreferrer" 
                           className="text-primary-main hover:underline font-semibold text-[11px] cursor-pointer"

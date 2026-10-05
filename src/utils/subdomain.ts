@@ -157,18 +157,15 @@ export function getVendorSubdomain(slug: string): string {
 }
 
 /**
- * Returns the clean vendor subdomain URL, e.g. "https://fahim-electronics.rjworldbd.com/"
+ * Returns the production-ready clean Store URL:
+ * e.g. "https://rjworldbd.com/store/cloudflare"
+ * e.g. "https://rjworldbd.com/store/fahim-electronics"
+ * Requirement 23: Final Store URL format অবশ্যই হবে: https://rjworldbd.com/store/{store-slug}
+ * Requirement 24: Store slug কখনো Firebase-এর random ID হবে না।
  */
 export function getVendorStoreUrl(slug: string): string {
   const cleanSlug = slugifyVendorName(slug);
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname.toLowerCase();
-    if (host.endsWith('.localhost') || host === 'localhost') {
-      const port = window.location.port ? `:${window.location.port}` : '';
-      return `http://${cleanSlug}.localhost${port}/`;
-    }
-  }
-  return `https://${cleanSlug}.${PRIMARY_DOMAIN}/`;
+  return `https://${PRIMARY_DOMAIN}/store/${cleanSlug}`;
 }
 
 export interface DomainExtractionResult {
@@ -445,15 +442,17 @@ export async function generateUniqueVendorSlug(
 }
 
 /**
- * Returns the production-ready clean subdomain URL for opening a vendor's store.
- * e.g. "https://fahim-electronics.rjworldbd.com/"
- * Never displays random Firebase IDs in the URL.
+ * Returns the production-ready clean Store URL:
+ * e.g. "https://rjworldbd.com/store/cloudflare"
+ * Never displays random Firebase IDs in the URL (Requirement 2, 23, 24).
  */
-export function getVendorOpenUrl(freeShopDomain?: string, vendorId?: string, slug?: string): string {
+export function getVendorOpenUrl(freeShopDomain?: string, vendorId?: string, slug?: string, shopName?: string): string {
   let targetSlug = slug;
   if (!targetSlug && freeShopDomain) {
     const clean = freeShopDomain.replace('https://', '').replace('http://', '').replace(/\/$/, '').trim();
-    if (clean.endsWith(`.${PRIMARY_DOMAIN}`)) {
+    if (clean.includes('/store/')) {
+      targetSlug = clean.split('/store/')[1];
+    } else if (clean.endsWith(`.${PRIMARY_DOMAIN}`)) {
       targetSlug = clean.replace(`.${PRIMARY_DOMAIN}`, '');
     } else if (clean.endsWith('.rjworld.com')) {
       targetSlug = clean.replace('.rjworld.com', '');
@@ -461,55 +460,39 @@ export function getVendorOpenUrl(freeShopDomain?: string, vendorId?: string, slu
       targetSlug = clean;
     }
   }
-  targetSlug = slugifyVendorName(targetSlug || '') || (vendorId && !vendorId.includes(' ') ? slugifyVendorName(vendorId) : '');
 
-  if (targetSlug && targetSlug !== 'store') {
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname.toLowerCase();
-      if (host.endsWith('.localhost') || host === 'localhost') {
-        const port = window.location.port ? `:${window.location.port}` : '';
-        return `http://${targetSlug}.localhost${port}/`;
-      }
-    }
-    return `https://${targetSlug}.${PRIMARY_DOMAIN}/`;
+  if (!targetSlug && shopName) {
+    targetSlug = slugifyVendorName(shopName);
   }
-  return `https://${PRIMARY_DOMAIN}/`;
+
+  const cleanSlug = slugifyVendorName(targetSlug || '');
+  if (cleanSlug && cleanSlug !== 'store') {
+    return `https://${PRIMARY_DOMAIN}/store/${cleanSlug}`;
+  }
+
+  // Fallback to shopName or store slug
+  if (shopName) {
+    return `https://${PRIMARY_DOMAIN}/store/${slugifyVendorName(shopName)}`;
+  }
+
+  return `https://${PRIMARY_DOMAIN}`;
 }
 
 /**
- * Returns an in-app navigation link or external subdomain URL for a vendor store.
- * Prevents showing random Firebase IDs anywhere in the UI.
+ * Returns an in-app navigation link for a vendor store.
+ * e.g. "/store/cloudflare"
+ * Prevents showing random Firebase IDs anywhere in the UI (Requirement 2, 24).
  */
-export function getVendorStoreLink(vendorOrStore: any, currentHostname?: string): string {
+export function getVendorStoreLink(vendorOrStore: any): string {
   if (!vendorOrStore) return '/';
 
   const slug = vendorOrStore.shopSlug || 
                vendorOrStore.storeSlug || 
                (vendorOrStore.shopName || vendorOrStore.storeName ? slugifyVendorName(vendorOrStore.shopName || vendorOrStore.storeName) : '') ||
-               vendorOrStore.id || 
-               vendorOrStore.vendorId;
+               (vendorOrStore.name ? slugifyVendorName(vendorOrStore.name) : '');
   
   if (!slug) return '/';
 
   const cleanSlug = slugifyVendorName(slug);
-  const host = (currentHostname || (typeof window !== 'undefined' ? window.location.hostname : '')).toLowerCase();
-
-  // If already browsing on this vendor's subdomain, return clean root '/'
-  if (host === `${cleanSlug}.${PRIMARY_DOMAIN}` || host === `${cleanSlug}.localhost`) {
-    return '/';
-  }
-
-  // If on localhost
-  if (host.endsWith('.localhost') || host === 'localhost') {
-    const port = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : ':3000';
-    return `http://${cleanSlug}.localhost${port}/`;
-  }
-
-  // If on main domain or production
-  if (host.includes(PRIMARY_DOMAIN) || host.includes('rjworld.com') || (!host.includes('localhost') && !host.includes('run.app') && !host.includes('127.0.0.1'))) {
-    return `https://${cleanSlug}.${PRIMARY_DOMAIN}/`;
-  }
-
-  // In cloud preview (e.g. ais-dev-...run.app)
-  return `/?subdomain=${cleanSlug}`;
+  return `/store/${cleanSlug}`;
 }

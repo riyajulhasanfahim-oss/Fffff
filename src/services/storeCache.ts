@@ -1,9 +1,10 @@
-import { rtdbGet, rtdbList, rtdbSubscribe } from '../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbList, rtdbSubscribe } from '../lib/rtdb';
 import { INITIAL_VENDORS, INITIAL_VENDOR_PROFILES, INITIAL_VENDOR_THEMES } from '../lib/firebaseSeed';
 import { enrichProductsWithRealMetrics } from './productMetricsService';
 import { db } from '../lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 import { getVendorRealFollowersCount } from './vendorFollowerService';
+import { slugifyVendorName } from '../utils/subdomain';
 
 export interface CachedStore {
   id: string;
