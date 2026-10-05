@@ -20,7 +20,8 @@ import {
   deleteDoc,
   onSnapshot,
   query as fsQuery,
-  where as fsWhere
+  where as fsWhere,
+  Timestamp
 } from 'firebase/firestore';
 import { rtdb, RTDB_BASE_URL, auth, db } from './firebase';
 
@@ -351,6 +352,22 @@ async function writeFirestoreNode(
       }
 
       const targetRef = doc(db, colName, docId);
+
+      // Handle Firestore 'payments' collection with automatic 10-day TTL expiresAt Timestamp
+      if (colName === 'payments') {
+        const createTime = cleanData?.createdAt || cleanData?.receivedAt || cleanData?.syncedAt || Date.now();
+        const baseMs = typeof createTime === 'number' ? createTime : (Number(createTime) || Date.now());
+        const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+        const expiresAt = cleanData?.expiresAt instanceof Timestamp 
+          ? cleanData.expiresAt 
+          : Timestamp.fromMillis(baseMs + tenDaysMs);
+        const paymentPayload = {
+          ...cleanData,
+          expiresAt
+        };
+        await setDoc(targetRef, { id: docId, ...paymentPayload }, { merge });
+        return true;
+      }
       if (isPartialUpdate && GHOST_GUARDED_COLLECTIONS.has(colName)) {
         const existingSnap = await getDoc(targetRef).catch(() => null);
         if (!existingSnap || !existingSnap.exists()) {

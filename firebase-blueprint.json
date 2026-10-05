@@ -72,6 +72,7 @@
         "receivedAmount": { "type": "number" },
         "verifiedAt": { "type": "number" },
         "createdAt": { "type": "number" },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Firestore Timestamp when this payment document expires (10 days after creation) for automatic deletion via Firestore TTL" },
         "rejectionReason": { "type": "string" }
       },
       "required": [
@@ -295,7 +296,7 @@
     "disputes/{disputeId}": { "description": "Customer order dispute tickets" },
     "payments/{paymentId}": {
       "schema": { "$ref": "#/entities/PaymentVerification" },
-      "description": "Secure payment verification records for manual and SMS-assisted payment processing"
+      "description": "Secure payment verification records for manual and SMS-assisted payment processing with automatic 10-day TTL deletion via expiresAt timestamp"
     }
   }
 }

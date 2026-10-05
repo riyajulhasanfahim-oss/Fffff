@@ -17,6 +17,7 @@ export interface PaymentVerificationRecord {
   receivedAmount?: number | null;
   verifiedAt?: number | null;
   createdAt: number;
+  expiresAt?: any; // Firestore Timestamp (10 days after creation) for automatic deletion via Firestore TTL
   rejectionReason?: string | null;
   metadata?: Record<string, any>;
 }

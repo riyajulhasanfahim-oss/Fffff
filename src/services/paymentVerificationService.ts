@@ -15,8 +15,18 @@ import {
   where,
   getDocs,
   updateDoc,
-  limit
+  limit,
+  Timestamp
 } from 'firebase/firestore';
+
+/**
+ * Calculates a Firestore Timestamp exactly 10 days in the future for Firestore TTL automatic deletion.
+ */
+export function calculatePaymentExpiresAt(createdAtMs?: number): Timestamp {
+  const baseMs = Number(createdAtMs) || Date.now();
+  const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+  return Timestamp.fromMillis(baseMs + tenDaysMs);
+}
 
 /**
  * Normalizes payment method string into standard lowercase enum
@@ -101,6 +111,7 @@ export async function createPaymentVerificationRecord(
     receivedAmount: null,
     verifiedAt: null,
     createdAt: now,
+    expiresAt: calculatePaymentExpiresAt(now),
     rejectionReason: null,
     ...(input.metadata ? { metadata: input.metadata } : {})
   };
@@ -158,9 +169,19 @@ export async function listPaymentVerifications(options?: { limitCount?: number }
     );
     const snap = await getDocs(q);
     const list: PaymentVerificationRecord[] = [];
+    const now = Date.now();
 
     snap.forEach((d) => {
       const item = d.data();
+      // Skip if past 10-day TTL expiration
+      if (item.expiresAt) {
+        const expMs = typeof item.expiresAt?.toMillis === 'function' 
+          ? item.expiresAt.toMillis() 
+          : (item.expiresAt instanceof Date ? item.expiresAt.getTime() : Number(item.expiresAt?.seconds ? item.expiresAt.seconds * 1000 : item.expiresAt));
+        if (expMs && expMs < now) {
+          return;
+        }
+      }
       const rawAmt = item.amount ?? item.receivedAmount ?? 0;
       const amt = typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0;
       const rawTrx = item.transactionId || d.id;

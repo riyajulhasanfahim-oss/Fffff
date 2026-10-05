@@ -2581,6 +2581,37 @@ app.use((req, res, next) => {
         console.warn('[SMS-SYNC] RTDB forward notice:', rtdbErr);
       }
 
+      // Forward/Mirror to Cloud Firestore 'payments' collection with expiresAt Timestamp (10 days TTL)
+      try {
+        const creationTime = Number(payload.timestamp) || now;
+        const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+        const expiresAtIso = new Date(creationTime + tenDaysMs).toISOString();
+        const apiKey = appletFirebaseConfig.apiKey || '';
+        const fsUrl = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents/payments/${encodeURIComponent(cleanTrx)}?key=${apiKey}`;
+
+        await fetch(fsUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              transactionId: { stringValue: cleanTrx },
+              paymentMethod: { stringValue: normMethod },
+              amount: { doubleValue: numAmount },
+              senderNumber: { stringValue: senderNum },
+              status: { stringValue: 'SYNCED' },
+              syncStatus: { stringValue: 'SYNCED' },
+              receivedAt: { integerValue: String(creationTime) },
+              syncedAt: { integerValue: String(now) },
+              createdAt: { integerValue: String(creationTime) },
+              expiresAt: { timestampValue: expiresAtIso }
+            }
+          })
+        });
+        console.log(`[SMS-SYNC] Synced to Firestore payments/${cleanTrx} with expiresAt=${expiresAtIso}`);
+      } catch (fsSyncErr) {
+        console.warn('[SMS-SYNC] Firestore sync notice:', fsSyncErr);
+      }
+
       logPaymentAudit({
         timestamp: new Date().toISOString(),
         endpoint: '/api/payment/sms-sync',

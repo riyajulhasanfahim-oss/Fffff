@@ -171,6 +171,8 @@ class PaymentSyncWorker(
             // 3. UPLOAD TO FIRESTORE (AS REDUNDANT FALLBACK)
             try {
                 val firestore = FirebaseFirestore.getInstance()
+                val createdAtVal = if (payment.createdAt > 0) payment.createdAt else now
+                val tenDaysMs = 10L * 24L * 60L * 60L * 1000L
                 val firestoreData = hashMapOf(
                     "paymentId" to payment.paymentId,
                     "invoiceId" to payment.invoiceId,
@@ -183,7 +185,8 @@ class PaymentSyncWorker(
                     "senderNumber" to (payment.senderNumber ?: ""),
                     "receivedAmount" to pAmount,
                     "verifiedAt" to payment.verifiedAt,
-                    "createdAt" to payment.createdAt,
+                    "createdAt" to createdAtVal,
+                    "expiresAt" to com.google.firebase.Timestamp(java.util.Date(createdAtVal + tenDaysMs)),
                     "rejectionReason" to payment.rejectionReason,
                     "metadata" to hashMapOf(
                         "syncedFrom" to "RJ World BD Android App",
