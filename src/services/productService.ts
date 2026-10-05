@@ -81,6 +81,7 @@ export function normalizeProduct(raw: any, id?: string): Product {
       joined: rawVendor.joined || '2026'
     },
     specifications: raw.specifications || undefined,
+    description: (raw.description || raw.desc || raw.productDescription || raw.details || '').trim(),
     resellerPrice: raw.resellerPrice ? Number(raw.resellerPrice) : undefined,
     resellerProfit: raw.resellerProfit ? Number(raw.resellerProfit) : undefined,
     status: raw.status || 'Published',

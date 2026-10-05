@@ -102,6 +102,7 @@ export default function ProductDetails() {
 
   useEffect(() => {
     window.scrollTo(0, 0);
+    setIsDescriptionExpanded(false);
     let isMounted = true;
 
     const fetchProductData = async () => {
@@ -120,7 +121,11 @@ export default function ProductDetails() {
         if (productId) {
           const rtdbProd = await fetchProductById(productId);
           if (rtdbProd) {
-            rawProd = rtdbProd;
+            rawProd = {
+              ...(rawProd || {}),
+              ...rtdbProd,
+              description: rtdbProd.description || rawProd?.description || (rtdbProd as any).desc || (rawProd as any)?.desc || ''
+            };
           }
         }
 
@@ -189,11 +194,20 @@ export default function ProductDetails() {
             ? rawBrand.name.trim() 
             : undefined);
 
+        const rawDesc = String(
+          rawProd.description || 
+          rawProd.desc || 
+          rawProd.productDescription || 
+          rawProd.details || 
+          (stateProduct && (stateProduct.description || stateProduct.desc)) || 
+          ''
+        ).trim();
+
         const normalized: any = {
           id: rawProd.id || productId,
           name: rawProd.name || rawProd.productName || rawProd.title || '',
-          description: rawProd.description ? String(rawProd.description).trim() : '',
-          shortDescription: rawProd.shortDescription ? String(rawProd.shortDescription).trim() : (rawProd.description ? String(rawProd.description).slice(0, 160).trim() : ''),
+          description: rawDesc,
+          shortDescription: rawProd.shortDescription ? String(rawProd.shortDescription).trim() : (rawDesc ? rawDesc.slice(0, 160).trim() : ''),
           image: featImg || finalImages[0] || '',
           images: finalImages,
           videoUrl: rawProd.videoUrl && String(rawProd.videoUrl).trim() !== '' ? String(rawProd.videoUrl).trim() : undefined,
@@ -445,45 +459,50 @@ export default function ProductDetails() {
                   <ProductReviews productId={productData?.originalProductId || productData?.id || productId || ''} />
                 </div>
 
-                {/* Description Section - Compact 1-line preview with See more right below Reviews */}
+                {/* Description Section - Immediately below Reviews */}
                 {productData?.description && String(productData.description).trim() !== '' && (
                   <div className="bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 border border-slate-100 shadow-2xs">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider mb-1.5 sm:mb-2">Product Description</h2>
-                    <div className="relative">
-                      {!isDescriptionExpanded ? (
-                        <div className="text-xs sm:text-sm text-slate-700">
-                          <p className="line-clamp-1 leading-relaxed">
-                            {String(productData.description).replace(/\r?\n+/g, ' ')}
-                          </p>
+                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider mb-1.5 sm:mb-2">
+                      Product Description
+                    </h2>
+                    {!isDescriptionExpanded ? (
+                      <div>
+                        {/* 1-Line Preview */}
+                        <p 
+                          onClick={() => setIsDescriptionExpanded(true)}
+                          className="text-xs sm:text-sm text-slate-700 truncate leading-relaxed cursor-pointer"
+                        >
+                          {String(productData.description).replace(/\r?\n+/g, ' ').trim()}
+                        </p>
+                        {/* Clickable "See more……" text */}
+                        <button
+                          type="button"
+                          id="product-desc-see-more-btn"
+                          onClick={() => setIsDescriptionExpanded(true)}
+                          className="mt-1 text-xs font-semibold text-primary-main hover:text-sky-700 transition-colors inline-flex items-center cursor-pointer"
+                        >
+                          See more……
+                        </button>
+                      </div>
+                    ) : (
+                      <div>
+                        {/* Complete existing product description */}
+                        <div className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-line space-y-2">
+                          {String(productData.description).trim()}
+                        </div>
+                        {/* Clickable "See less" text */}
+                        <div className="mt-2 pt-0.5">
                           <button
                             type="button"
-                            id="product-desc-see-more-btn"
-                            onClick={() => setIsDescriptionExpanded(true)}
-                            className="mt-1 text-xs font-bold text-primary-main hover:text-sky-700 transition-colors inline-flex items-center gap-0.5 cursor-pointer"
+                            id="product-desc-see-less-btn"
+                            onClick={() => setIsDescriptionExpanded(false)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-primary-main hover:text-sky-700 transition-colors cursor-pointer"
                           >
-                            <span>See more……</span>
+                            See less
                           </button>
                         </div>
-                      ) : (
-                        <div>
-                          <div className="text-xs sm:text-sm text-slate-700 leading-relaxed space-y-2">
-                            {String(productData.description).split('\n').filter(Boolean).map((paragraph: string, idx: number) => (
-                              <p key={idx}>{paragraph}</p>
-                            ))}
-                          </div>
-                          <div className="mt-2 pt-0.5">
-                            <button
-                              type="button"
-                              id="product-desc-see-less-btn"
-                              onClick={() => setIsDescriptionExpanded(false)}
-                              className="inline-flex items-center gap-1 text-xs font-bold text-primary-main hover:text-sky-700 transition-colors cursor-pointer"
-                            >
-                              <span>See less</span>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
