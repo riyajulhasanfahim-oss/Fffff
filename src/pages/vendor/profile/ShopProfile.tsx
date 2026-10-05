@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import imageCompression from 'browser-image-compression';
 import { useAuth } from '../../../context/AuthContext';
 import { useVendorStore } from '../../../context/VendorStoreContext';
-import { RTDB_BASE_URL } from '../../../lib/firebase';
+import { RTDB_BASE_URL, db } from '../../../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbSubscribe, invalidateRtdbCache } from '../../../lib/rtdb';
 import { saveStoreThemeToCache, saveStoreToCache, getStoreFromCache } from '../../../services/storeCache';
 import VendorLayout from '../../../components/layout/VendorLayout';
@@ -43,6 +44,7 @@ function cleanObject(obj: any): any {
 export default function ShopProfile() {
   const { user } = useAuth();
   const { vendorInfo, updateVendorInfo } = useVendorStore();
+  const originalShopNameRef = React.useRef<string>('');
   const [activeTab, setActiveTab] = useState('profile');
   const [loading, setLoading] = useState(() => !vendorInfo);
   const [saving, setSaving] = useState(false);
@@ -316,6 +318,7 @@ export default function ShopProfile() {
       const resolvedShopName = loadedProfileData?.shopName || loadedProfileData?.storeName ||
                                loadedVendorData?.shopName || loadedVendorData?.storeName ||
                                loadedStoreData?.shopName || loadedStoreData?.storeName || '';
+      originalShopNameRef.current = resolvedShopName.trim();
 
       const resolvedOwnerName = loadedProfileData?.ownerName || loadedVendorData?.ownerName || loadedStoreData?.ownerName || '';
 
@@ -561,11 +564,14 @@ export default function ShopProfile() {
     try {
       const now = Date.now();
       const shopTitle = (profile.shopName || profile.storeName || '').trim();
+      const shopNameChanged = originalShopNameRef.current && shopTitle.toLowerCase() !== originalShopNameRef.current.toLowerCase();
 
-      // Ensure a valid unique subdomain is automatically generated if missing or outdated
+      // Ensure a valid unique subdomain is automatically generated if missing or outdated,
+      // and perform duplicate check before changing slug if Store Name changed (Requirement 8)
       let finalSlug = (profile.shopSlug || profile.storeSlug || '').trim();
       let finalFreeDomain = (profile.freeShopDomain || '').trim();
       if (
+        shopNameChanged ||
         !finalFreeDomain || 
         !finalSlug || 
         finalFreeDomain.endsWith('.rjworld.com') || 
@@ -574,6 +580,7 @@ export default function ShopProfile() {
         if (shopTitle) {
           finalSlug = await generateUniqueVendorSlug(shopTitle, user.uid);
           finalFreeDomain = `${finalSlug}.${PRIMARY_DOMAIN}`;
+          originalShopNameRef.current = shopTitle;
         }
       }
 
@@ -659,6 +666,24 @@ export default function ShopProfile() {
         rtdbUpdate(`vendors/${user.uid}`, editableProfilePayload),
         rtdbUpdate(`stores/${user.uid}`, { ...editableProfilePayload, id: user.uid, storeId: user.uid })
       ]);
+
+      // Synchronize to Cloud Firestore collections
+      try {
+        await Promise.allSettled([
+          setDoc(doc(db, 'vendors', user.uid), editableProfilePayload, { merge: true }),
+          setDoc(doc(db, 'stores', user.uid), editableProfilePayload, { merge: true }),
+          setDoc(doc(db, 'users', user.uid), {
+            storeName: shopTitle,
+            shopName: shopTitle,
+            shopSlug: finalSlug,
+            storeSlug: finalSlug,
+            freeShopDomain: finalFreeDomain,
+            updatedAt: now
+          }, { merge: true })
+        ]);
+      } catch (fsErr) {
+        console.warn('Firestore vendor profile sync warning:', fsErr);
+      }
 
       // 2. Server-Side Realtime Database & Disk Sync with user ID token
       try {
@@ -814,7 +839,7 @@ export default function ShopProfile() {
         <div className="flex items-center gap-1.5 shrink-0">
           {user && (
             <a 
-              href={`/store/${user.uid}`}
+              href={getVendorOpenUrl(profile.freeShopDomain, user.uid, profile.shopSlug)}
               target="_blank"
               rel="noopener noreferrer"
               className="px-2.5 py-1.5 bg-white border border-gray-200 text-gray-700 font-medium rounded-xl text-xs hover:bg-gray-50 transition-colors flex items-center gap-1 shadow-sm"

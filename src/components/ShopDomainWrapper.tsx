@@ -1,5 +1,7 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { rtdbGet } from '../lib/rtdb';
+import { db } from '../lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
 import ShopNotFound from './ShopNotFound';
 import { 
   extractVendorSubdomain, 
@@ -105,11 +107,11 @@ export default function ShopDomainWrapper({ children }: { children: React.ReactN
             }
           } catch (_) {}
 
-          // B. Query Firebase Realtime Database across stores, vendors, and vendor_profiles
+          // B. Query Firebase Realtime Database and Cloud Firestore across stores, vendors, and vendor_profiles
           const [storesSnap, vendorsSnap, profilesSnap] = await Promise.all([
-            rtdbGet<Record<string, any>>('stores', 6000).catch(() => null),
-            rtdbGet<Record<string, any>>('vendors', 6000).catch(() => null),
-            rtdbGet<Record<string, any>>('vendor_profiles', 6000).catch(() => null)
+            rtdbGet<Record<string, any>>('stores', 5000).catch(() => null),
+            rtdbGet<Record<string, any>>('vendors', 5000).catch(() => null),
+            rtdbGet<Record<string, any>>('vendor_profiles', 5000).catch(() => null)
           ]);
 
           const safeStores = storesSnap && typeof storesSnap === 'object' && !('error' in storesSnap) ? storesSnap : {};
@@ -121,6 +123,19 @@ export default function ShopDomainWrapper({ children }: { children: React.ReactN
             ...safeVendors,
             ...safeProfiles
           };
+
+          // Also check Firestore collections (vendors and stores)
+          try {
+            const fsSnap = await getDocs(collection(db, 'vendors'));
+            fsSnap.forEach(docSnap => {
+              allRecords[docSnap.id] = {
+                ...(allRecords[docSnap.id] || {}),
+                ...docSnap.data(),
+                id: docSnap.id,
+                vendorId: docSnap.id
+              };
+            });
+          } catch (_) {}
 
           let matchedVendorId: string | null = null;
           const expectedDomain = `${targetSlug}.${PRIMARY_DOMAIN}`;
@@ -138,7 +153,7 @@ export default function ShopDomainWrapper({ children }: { children: React.ReactN
               recSlug === targetSlug ||
               recDomain === expectedDomain ||
               recDomain === expectedLegacyDomain ||
-              recDomain.includes(targetSlug) ||
+              recDomain.startsWith(`${targetSlug}.`) ||
               recId.toLowerCase() === targetSlug ||
               key.toLowerCase() === targetSlug
             ) {
@@ -159,6 +174,9 @@ export default function ShopDomainWrapper({ children }: { children: React.ReactN
               setVendorId(matchedVendorId);
               setIsShopDomain(true);
               setIsNotFound(false);
+              try {
+                localStorage.setItem(`rj_subdomain_vendor_${targetSlug}`, matchedVendorId);
+              } catch (_) {}
             } else {
               setIsShopDomain(true);
               setIsNotFound(true);

@@ -4,6 +4,71 @@ import path from 'path';
 import fs from 'fs';
 import { app, setupMailer, getBaseUrl } from './server/createApp';
 import { findProductByIdOrSlug, injectProductSeo, inject404Seo } from './server/seoHandler';
+import { RESERVED_SUBDOMAINS, PRIMARY_DOMAIN, slugifyVendorName } from './src/utils/subdomain';
+
+function extractSubdomainFromRequest(req: express.Request): string | null {
+  const rawHost = (req.get('cf-connecting-host') || req.get('x-forwarded-host') || req.get('host') || '').toLowerCase().split(':')[0];
+
+  // 1. Query parameter override (preview environments)
+  const qSub = (req.query?.subdomain || req.query?.vendor_subdomain || req.query?.test_shop_domain) as string | undefined;
+  if (qSub) {
+    const cleanQ = slugifyVendorName(String(qSub).trim());
+    if (cleanQ && !RESERVED_SUBDOMAINS.has(cleanQ)) {
+      return cleanQ;
+    }
+  }
+
+  // 2. Custom header
+  const hSub = req.get('x-vendor-subdomain');
+  if (hSub) {
+    const cleanH = slugifyVendorName(hSub.trim());
+    if (cleanH && !RESERVED_SUBDOMAINS.has(cleanH)) {
+      return cleanH;
+    }
+  }
+
+  // 3. Main domain check
+  if (
+    rawHost === PRIMARY_DOMAIN ||
+    rawHost === `www.${PRIMARY_DOMAIN}` ||
+    rawHost === 'rjworld.com' ||
+    rawHost === 'www.rjworld.com'
+  ) {
+    return null;
+  }
+
+  // 4. Wildcard subdomains on rjworldbd.com (e.g. fahim-electronics.rjworldbd.com)
+  const bdSuffix = `.${PRIMARY_DOMAIN}`;
+  if (rawHost.endsWith(bdSuffix)) {
+    const sub = rawHost.substring(0, rawHost.length - bdSuffix.length).trim();
+    const firstLabel = sub.split('.')[0];
+    if (firstLabel && !RESERVED_SUBDOMAINS.has(firstLabel)) {
+      return slugifyVendorName(firstLabel);
+    }
+    return null;
+  }
+
+  // 5. Localhost subdomains (e.g. fahim-electronics.localhost)
+  if (rawHost.endsWith('.localhost')) {
+    const sub = rawHost.replace('.localhost', '').trim().split('.')[0];
+    if (sub && !RESERVED_SUBDOMAINS.has(sub)) {
+      return slugifyVendorName(sub);
+    }
+    return null;
+  }
+
+  // 6. Legacy rjworld.com subdomains
+  const legacySuffix = '.rjworld.com';
+  if (rawHost.endsWith(legacySuffix)) {
+    const sub = rawHost.substring(0, rawHost.length - legacySuffix.length).trim().split('.')[0];
+    if (sub && !RESERVED_SUBDOMAINS.has(sub)) {
+      return slugifyVendorName(sub);
+    }
+    return null;
+  }
+
+  return null;
+}
 
 async function startServer() {
   await setupMailer();
@@ -74,6 +139,25 @@ async function startServer() {
   });
 
   if (!isProduction && viteInstance) {
+    // Intercept HTML requests in dev mode to inject window.__RJ_VENDOR_SUBDOMAIN__ for wildcard subdomains
+    app.use(async (req, res, next) => {
+      if (req.method === 'GET' && !req.path.startsWith('/api') && (req.headers.accept || '').includes('text/html')) {
+        const sub = extractSubdomainFromRequest(req);
+        if (sub) {
+          try {
+            const raw = fs.readFileSync(path.join(process.cwd(), 'index.html'), 'utf-8');
+            let template = await viteInstance.transformIndexHtml(req.originalUrl, raw);
+            template = template.replace('<head>', `<head><script data-cfasync="false">window.__RJ_VENDOR_SUBDOMAIN__="${sub}";</script>`);
+            res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+            return res.send(template);
+          } catch (e) {
+            console.warn('Vite dev subdomain html injection warning:', e);
+          }
+        }
+      }
+      next();
+    });
+
     app.use(viteInstance.middlewares);
   } else {
     const distPath = fs.existsSync(path.join(process.cwd(), 'dist', 'index.html'))
@@ -97,13 +181,8 @@ async function startServer() {
         res.setHeader('CDN-Cache-Control', 'max-age=0, must-revalidate');
         res.setHeader('Cloudflare-CDN-Cache-Control', 'max-age=0, must-revalidate');
 
-        const rawHost = (req.get('cf-connecting-host') || req.get('x-forwarded-host') || req.get('host') || '').toLowerCase().split(':')[0];
-        let sub = '';
-        if (rawHost.endsWith('.rjworldbd.com') && rawHost !== 'rjworldbd.com' && rawHost !== 'www.rjworldbd.com') {
-          sub = rawHost.replace('.rjworldbd.com', '').trim();
-        }
-        const reserved = ['www', 'admin', 'api', 'mail', 'cpanel', 'webmail', 'ftp', 'app', 'auth', 'support'];
-        if (sub && !reserved.includes(sub)) {
+        const sub = extractSubdomainFromRequest(req);
+        if (sub) {
           let html = fs.readFileSync(indexPath, 'utf-8');
           html = html.replace('<head>', `<head><script data-cfasync="false">window.__RJ_VENDOR_SUBDOMAIN__="${sub}";</script>`);
           res.setHeader('Content-Type', 'text/html; charset=UTF-8');

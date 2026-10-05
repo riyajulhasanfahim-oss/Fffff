@@ -1776,7 +1776,7 @@ export default function VendorDashboard() {
           isOpen={isStoreShareModalOpen}
           onClose={() => setIsStoreShareModalOpen(false)}
           storeName={vendorInfo?.shopName || vendorInfo?.storeName || 'My Store'}
-          storeUrl={`${window.location.origin}/store/${user.uid}`}
+          storeUrl={getVendorOpenUrl(vendorInfo?.freeShopDomain, user.uid, vendorInfo?.shopSlug || vendorInfo?.storeSlug)}
           storeLogo={vendorInfo?.logo || vendorInfo?.profileImage}
         />
       )}

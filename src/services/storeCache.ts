@@ -1345,6 +1345,50 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
             }
           }
         }
+
+        if (!resolvedProfile) {
+          try {
+            const allProfiles = await rtdbGet<Record<string, any>>('vendor_profiles');
+            if (allProfiles && typeof allProfiles === 'object') {
+              for (const [pKey, pVal] of Object.entries(allProfiles)) {
+                if (pVal && typeof pVal === 'object') {
+                  if (
+                    pKey.toLowerCase() === cleanTarget ||
+                    String(pVal.storeSlug || '').toLowerCase() === cleanTarget ||
+                    String(pVal.shopSlug || '').toLowerCase() === cleanTarget ||
+                    String(pVal.storeId || '').toLowerCase() === cleanTarget ||
+                    String(pVal.id || '').toLowerCase() === cleanTarget ||
+                    String(pVal.vendorId || '').toLowerCase() === cleanTarget ||
+                    String(pVal.shopName || '').toLowerCase() === cleanTarget ||
+                    String(pVal.storeName || '').toLowerCase() === cleanTarget
+                  ) {
+                    resolvedProfile = pVal;
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        // Also fallback to Firestore vendors collection
+        if (!resolvedVendor && !resolvedProfile && !resolvedStore) {
+          try {
+            const fsSnap = await getDocs(collection(db, 'vendors'));
+            fsSnap.forEach(docSnap => {
+              const data = docSnap.data();
+              if (
+                docSnap.id.toLowerCase() === cleanTarget ||
+                String(data.shopSlug || '').toLowerCase() === cleanTarget ||
+                String(data.storeSlug || '').toLowerCase() === cleanTarget ||
+                String(data.shopName || '').toLowerCase() === cleanTarget ||
+                String(data.storeName || '').toLowerCase() === cleanTarget
+              ) {
+                resolvedVendor = { id: docSnap.id, vendorId: docSnap.id, ...data };
+              }
+            });
+          } catch (_) {}
+        }
       } catch (searchErr) {
         console.warn(`[RTDB search error for ${storeId}]:`, searchErr);
       }

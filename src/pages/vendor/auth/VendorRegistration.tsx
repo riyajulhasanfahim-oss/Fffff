@@ -352,6 +352,8 @@ export default function VendorRegistration() {
           storeName: formData.storeName.trim(),
           shopName: formData.storeName.trim(),
           storeSlug: storeSlug,
+          shopSlug: storeSlug,
+          freeShopDomain: `${storeSlug}.${PRIMARY_DOMAIN}`,
           ownerName: formData.ownerName.trim(),
           name: formData.ownerName.trim(),
           mobileNumber: formData.mobileNumber.trim(),

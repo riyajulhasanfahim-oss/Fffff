@@ -68,6 +68,7 @@ import {
 import toast from 'react-hot-toast';
 import { fetchVendorReviews, getVendorStoreReviewStatus, VendorStoreReviewStatus } from '../services/reviewService';
 import ImageLightboxModal from '../components/common/ImageLightboxModal';
+import { PRIMARY_DOMAIN, slugifyVendorName, getVendorStoreUrl } from '../utils/subdomain';
 
 // Standard high-quality category images map
 const CATEGORY_IMAGE_MAP: Record<string, string> = {
@@ -193,6 +194,50 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
     });
     return () => unsubscribe();
   }, [vendorId]);
+
+  // Redirect legacy /store/:vendorId route to clean dynamic subdomain (Requirements 2, 7 & 12)
+  // Ensures random Firebase ID is never visible in URL and old /store/ links gracefully redirect
+  useEffect(() => {
+    if (params.vendorId && (vendor || profile)) {
+      const activeSlug = vendor?.shopSlug || vendor?.storeSlug || profile?.shopSlug || profile?.storeSlug || 
+                         (vendor?.shopName || vendor?.storeName ? slugifyVendorName(vendor.shopName || vendor.storeName) : '');
+      if (activeSlug) {
+        const cleanSlug = slugifyVendorName(activeSlug);
+        const host = typeof window !== 'undefined' ? window.location.hostname.toLowerCase() : '';
+        const targetHost = `${cleanSlug}.${PRIMARY_DOMAIN}`;
+
+        // 1. If on production domain or any *.rjworldbd.com
+        if (host.includes(PRIMARY_DOMAIN) || host.includes('rjworld.com') || (!host.includes('localhost') && !host.includes('run.app') && !host.includes('127.0.0.1'))) {
+          if (host !== targetHost) {
+            window.location.replace(`https://${targetHost}/`);
+            return;
+          }
+        } else if (host.endsWith('.localhost') || host === 'localhost') {
+          // 2. If on localhost development
+          const targetLocalHost = `${cleanSlug}.localhost`;
+          if (host !== targetLocalHost) {
+            const port = window.location.port ? `:${window.location.port}` : ':3000';
+            window.location.replace(`http://${targetLocalHost}${port}/`);
+            return;
+          }
+        }
+      }
+    }
+  }, [params.vendorId, vendor, profile]);
+
+  // If already on the vendor subdomain, normalize any subpath /store/... to root '/'
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase();
+      const path = window.location.pathname;
+      if (host.endsWith(`.${PRIMARY_DOMAIN}`) || host.endsWith('.localhost')) {
+        const sub = host.endsWith(`.${PRIMARY_DOMAIN}`) ? host.replace(`.${PRIMARY_DOMAIN}`, '') : host.replace('.localhost', '');
+        if (sub && sub !== 'www' && path.startsWith('/store')) {
+          navigate('/', { replace: true });
+        }
+      }
+    }
+  }, [navigate]);
 
   // UI Modals
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -791,7 +836,11 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
   };
 
   const isStoreOwnerOrAdmin = user?.uid === vendorId || userData?.role === 'Admin';
-  const storeUrl = typeof window !== 'undefined' ? window.location.href : `https://rjworldbd.com/store/${vendorId}`;
+  const activeSlug = vendor?.shopSlug || vendor?.storeSlug || profile?.shopSlug || profile?.storeSlug || 
+                     (vendor?.shopName || vendor?.storeName ? slugifyVendorName(vendor.shopName || vendor.storeName) : '');
+  const storeUrl = activeSlug 
+    ? getVendorStoreUrl(activeSlug) 
+    : (typeof window !== 'undefined' ? window.location.href : `https://${PRIMARY_DOMAIN}/`);
 
   if (isDeletedStore) {
     return (

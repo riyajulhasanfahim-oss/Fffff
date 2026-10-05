@@ -1,4 +1,6 @@
 import { rtdbGet } from '../lib/rtdb';
+import { db } from '../lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
 
 export const PRIMARY_DOMAIN = 'rjworldbd.com';
 
@@ -69,6 +71,7 @@ export function banglaToSlug(text: string): string {
     [/টেলিকম/g, 'telecom'],
     [/অফিসিয়াল|অফিসিয়াল/g, 'official'],
     [/অনলাইন/g, 'online'],
+    [/হাউস/g, 'house'],
     [/মায়ের দোয়া|মায়ের দোয়া/g, 'mayer-doya']
   ];
 
@@ -154,12 +157,18 @@ export function getVendorSubdomain(slug: string): string {
 }
 
 /**
- * Returns the full store URL, e.g. "https://rjworldbd.com/store/fahim-store"
+ * Returns the clean vendor subdomain URL, e.g. "https://fahim-electronics.rjworldbd.com/"
  */
 export function getVendorStoreUrl(slug: string): string {
   const cleanSlug = slugifyVendorName(slug);
-  const origin = typeof window !== 'undefined' ? window.location.origin : `https://${PRIMARY_DOMAIN}`;
-  return `${origin}/store/${cleanSlug}`;
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname.toLowerCase();
+    if (host.endsWith('.localhost') || host === 'localhost') {
+      const port = window.location.port ? `:${window.location.port}` : '';
+      return `http://${cleanSlug}.localhost${port}/`;
+    }
+  }
+  return `https://${cleanSlug}.${PRIMARY_DOMAIN}/`;
 }
 
 export interface DomainExtractionResult {
@@ -300,7 +309,67 @@ export function extractVendorSubdomain(
 }
 
 /**
- * Generates an assured unique subdomain slug for a vendor by querying RTDB
+ * Checks if a candidate slug is available (not claimed by another vendor and not reserved)
+ */
+export async function isVendorSlugAvailable(
+  slug: string,
+  currentVendorId?: string,
+  existingProfiles?: Record<string, any>
+): Promise<boolean> {
+  const cleanSlug = slugifyVendorName(slug);
+  if (!cleanSlug || RESERVED_SUBDOMAINS.has(cleanSlug)) {
+    return false;
+  }
+
+  let allProfiles = existingProfiles;
+  if (!allProfiles) {
+    try {
+      const [profilesSnap, vendorsSnap, storesSnap] = await Promise.all([
+        rtdbGet<Record<string, any>>('vendor_profiles', 2500).catch(() => null),
+        rtdbGet<Record<string, any>>('vendors', 2500).catch(() => null),
+        rtdbGet<Record<string, any>>('stores', 2500).catch(() => null)
+      ]);
+      allProfiles = {
+        ...(storesSnap || {}),
+        ...(vendorsSnap || {}),
+        ...(profilesSnap || {})
+      };
+
+      try {
+        const fsSnap = await getDocs(collection(db, 'vendors'));
+        fsSnap.forEach(d => {
+          allProfiles[d.id] = { ...(allProfiles[d.id] || {}), ...d.data(), id: d.id, vendorId: d.id };
+        });
+      } catch (_) {}
+    } catch {
+      allProfiles = {};
+    }
+  }
+
+  const hasConflict = Object.entries(allProfiles || {}).some(([uid, p]: [string, any]) => {
+    if (currentVendorId && (uid === currentVendorId || p?.userId === currentVendorId || p?.vendorId === currentVendorId || p?.id === currentVendorId)) {
+      return false;
+    }
+    if (!p || typeof p !== 'object') return false;
+
+    const pSlug = (p.shopSlug || p.storeSlug || '').toLowerCase().trim();
+    const pDom = (p.freeShopDomain || '').toLowerCase().trim();
+    const targetDom = `${cleanSlug}.${PRIMARY_DOMAIN}`;
+    const legacyDom = `${cleanSlug}.rjworld.com`;
+
+    return (
+      pSlug === cleanSlug ||
+      pDom === targetDom ||
+      pDom === legacyDom ||
+      pDom.startsWith(`${cleanSlug}.`)
+    );
+  });
+
+  return !hasConflict;
+}
+
+/**
+ * Generates an assured unique subdomain slug for a vendor by querying both RTDB and Firestore
  */
 export async function generateUniqueVendorSlug(
   shopName: string,
@@ -316,23 +385,37 @@ export async function generateUniqueVendorSlug(
   if (!allProfiles) {
     try {
       const [profilesSnap, vendorsSnap, storesSnap] = await Promise.all([
-        rtdbGet<Record<string, any>>('vendor_profiles', 2000),
-        rtdbGet<Record<string, any>>('vendors', 2000),
-        rtdbGet<Record<string, any>>('stores', 2000)
+        rtdbGet<Record<string, any>>('vendor_profiles', 2500).catch(() => null),
+        rtdbGet<Record<string, any>>('vendors', 2500).catch(() => null),
+        rtdbGet<Record<string, any>>('stores', 2500).catch(() => null)
       ]);
       allProfiles = {
         ...(storesSnap || {}),
         ...(vendorsSnap || {}),
         ...(profilesSnap || {})
       };
+
+      // Also query Firestore vendors
+      try {
+        const fsSnap = await getDocs(collection(db, 'vendors'));
+        fsSnap.forEach(d => {
+          allProfiles[d.id] = { ...(allProfiles[d.id] || {}), ...d.data(), id: d.id, vendorId: d.id };
+        });
+      } catch (_) {}
     } catch {
       allProfiles = {};
     }
   }
 
   while (!isUnique) {
+    if (RESERVED_SUBDOMAINS.has(uniqueSlug)) {
+      uniqueSlug = `${baseSlug}-${counter}`;
+      counter++;
+      continue;
+    }
+
     const hasConflict = Object.entries(allProfiles || {}).some(([uid, p]: [string, any]) => {
-      if (currentVendorId && (uid === currentVendorId || p?.userId === currentVendorId || p?.vendorId === currentVendorId)) {
+      if (currentVendorId && (uid === currentVendorId || p?.userId === currentVendorId || p?.vendorId === currentVendorId || p?.id === currentVendorId)) {
         return false;
       }
       if (!p || typeof p !== 'object') return false;
@@ -345,7 +428,8 @@ export async function generateUniqueVendorSlug(
       return (
         pSlug === uniqueSlug ||
         pDom === targetDom ||
-        pDom === legacyDom
+        pDom === legacyDom ||
+        pDom.startsWith(`${uniqueSlug}.`)
       );
     });
 
@@ -361,12 +445,11 @@ export async function generateUniqueVendorSlug(
 }
 
 /**
- * Returns the proper URL to open a vendor's store reliably without subdomain DNS failures.
- * Opens `/store/${slug || vendorId}` on the active origin or primary domain.
+ * Returns the production-ready clean subdomain URL for opening a vendor's store.
+ * e.g. "https://fahim-electronics.rjworldbd.com/"
+ * Never displays random Firebase IDs in the URL.
  */
 export function getVendorOpenUrl(freeShopDomain?: string, vendorId?: string, slug?: string): string {
-  const origin = typeof window !== 'undefined' ? window.location.origin : `https://${PRIMARY_DOMAIN}`;
-  
   let targetSlug = slug;
   if (!targetSlug && freeShopDomain) {
     const clean = freeShopDomain.replace('https://', '').replace('http://', '').replace(/\/$/, '').trim();
@@ -378,10 +461,55 @@ export function getVendorOpenUrl(freeShopDomain?: string, vendorId?: string, slu
       targetSlug = clean;
     }
   }
-  targetSlug = slugifyVendorName(targetSlug || '') || vendorId || '';
+  targetSlug = slugifyVendorName(targetSlug || '') || (vendorId && !vendorId.includes(' ') ? slugifyVendorName(vendorId) : '');
 
-  if (targetSlug) {
-    return `${origin}/store/${targetSlug}`;
+  if (targetSlug && targetSlug !== 'store') {
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase();
+      if (host.endsWith('.localhost') || host === 'localhost') {
+        const port = window.location.port ? `:${window.location.port}` : '';
+        return `http://${targetSlug}.localhost${port}/`;
+      }
+    }
+    return `https://${targetSlug}.${PRIMARY_DOMAIN}/`;
   }
-  return `${origin}/store/${vendorId || ''}`;
+  return `https://${PRIMARY_DOMAIN}/`;
+}
+
+/**
+ * Returns an in-app navigation link or external subdomain URL for a vendor store.
+ * Prevents showing random Firebase IDs anywhere in the UI.
+ */
+export function getVendorStoreLink(vendorOrStore: any, currentHostname?: string): string {
+  if (!vendorOrStore) return '/';
+
+  const slug = vendorOrStore.shopSlug || 
+               vendorOrStore.storeSlug || 
+               (vendorOrStore.shopName || vendorOrStore.storeName ? slugifyVendorName(vendorOrStore.shopName || vendorOrStore.storeName) : '') ||
+               vendorOrStore.id || 
+               vendorOrStore.vendorId;
+  
+  if (!slug) return '/';
+
+  const cleanSlug = slugifyVendorName(slug);
+  const host = (currentHostname || (typeof window !== 'undefined' ? window.location.hostname : '')).toLowerCase();
+
+  // If already browsing on this vendor's subdomain, return clean root '/'
+  if (host === `${cleanSlug}.${PRIMARY_DOMAIN}` || host === `${cleanSlug}.localhost`) {
+    return '/';
+  }
+
+  // If on localhost
+  if (host.endsWith('.localhost') || host === 'localhost') {
+    const port = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : ':3000';
+    return `http://${cleanSlug}.localhost${port}/`;
+  }
+
+  // If on main domain or production
+  if (host.includes(PRIMARY_DOMAIN) || host.includes('rjworld.com') || (!host.includes('localhost') && !host.includes('run.app') && !host.includes('127.0.0.1'))) {
+    return `https://${cleanSlug}.${PRIMARY_DOMAIN}/`;
+  }
+
+  // In cloud preview (e.g. ais-dev-...run.app)
+  return `/?subdomain=${cleanSlug}`;
 }
