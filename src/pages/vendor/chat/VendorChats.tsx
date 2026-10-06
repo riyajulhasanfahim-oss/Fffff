@@ -101,7 +101,7 @@ export default function VendorChats() {
           ) : (
              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
                {filteredChats.map(chat => (
-                 <div key={chat.id} onClick={() => navigate(`/vendor/chat/${chat.customerId}`)} className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm cursor-pointer hover:border-sky-200 hover:shadow-md transition-all flex items-center gap-2.5">
+                 <div key={chat.id} onClick={() => navigate(`/vendor/chat/${chat.customerId}?chatId=${encodeURIComponent(chat.id)}`)} className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm cursor-pointer hover:border-sky-200 hover:shadow-md transition-all flex items-center gap-2.5">
                    <div className="w-10 h-10 bg-amber-50 rounded-full flex items-center justify-center text-amber-600 font-bold text-base shrink-0">
                      {chat.customerName?.[0] || 'C'}
                    </div>

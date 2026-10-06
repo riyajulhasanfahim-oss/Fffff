@@ -19,7 +19,7 @@ export default function MyChats() {
         const data: any[] = [];
         Object.keys(snap).forEach(id => {
           const item = snap[id];
-          if (item && item.customerId === user.uid) {
+          if (item && (item.customerId === user.uid || id.startsWith(`${user.uid}_`))) {
             data.push({ id, ...item });
           }
         });
@@ -58,7 +58,7 @@ export default function MyChats() {
         ) : (
            <div className="space-y-4">
              {chats.map(chat => (
-               <div key={chat.id} onClick={() => navigate(`/chat/${chat.vendorId}`)} className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm cursor-pointer hover:border-sky-200 transition-all flex items-center gap-4">
+               <div key={chat.id} onClick={() => navigate(`/chat/${chat.storeId || chat.vendorId || chat.id.split('_')[1]}?chatId=${encodeURIComponent(chat.id)}`)} className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm cursor-pointer hover:border-sky-200 transition-all flex items-center gap-4">
                  <div className="w-12 h-12 bg-sky-100 rounded-full flex items-center justify-center text-primary-main font-bold shrink-0">
                    {chat.vendorName?.[0] || 'V'}
                  </div>

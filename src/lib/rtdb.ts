@@ -282,15 +282,41 @@ async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000
         return { ok: true, data: null };
       } else if (parts.length === 3) {
         const [colName, subKey, docId] = parts;
+        if (colName === 'chats' && docId === 'messages') {
+          try {
+            const snap = await getDocs(collection(db, 'chats', subKey, 'messages'));
+            const mapObj: Record<string, any> = {};
+            snap.forEach((d) => {
+              mapObj[d.id] = { id: d.id, ...d.data() };
+            });
+            return { ok: true, data: (Object.keys(mapObj).length > 0 ? mapObj : null) as unknown as T };
+          } catch (err) {
+            console.warn(`[Firestore fetch messages error for ${cleanPath}]:`, err);
+            return { ok: false, data: null };
+          }
+        }
         const cSnap = await getDoc(doc(db, 'chats', `${colName}__${subKey}`, 'items', docId)).catch(() => null);
         if (cSnap && cSnap.exists()) {
           return { ok: true, data: ({ id: cSnap.id, ...cSnap.data() } as unknown) as T };
         }
         return { ok: true, data: null };
-      } else if (parts.length === 4 && parts[0] === 'vendors' && parts[2] === 'products') {
-        const snap = await getDoc(doc(db, 'products', parts[3]));
-        if (snap.exists()) {
-          return { ok: true, data: ({ id: snap.id, ...snap.data() } as unknown) as T };
+      } else if (parts.length === 4) {
+        if (parts[0] === 'chats' && parts[2] === 'messages') {
+          try {
+            const snap = await getDoc(doc(db, 'chats', parts[1], 'messages', parts[3]));
+            if (snap.exists()) {
+              return { ok: true, data: ({ id: snap.id, ...snap.data() } as unknown) as T };
+            }
+            return { ok: true, data: null };
+          } catch (_) {
+            return { ok: false, data: null };
+          }
+        }
+        if (parts[0] === 'vendors' && parts[2] === 'products') {
+          const snap = await getDoc(doc(db, 'products', parts[3]));
+          if (snap.exists()) {
+            return { ok: true, data: ({ id: snap.id, ...snap.data() } as unknown) as T };
+          }
         }
       }
       return { ok: false, data: null };
@@ -398,6 +424,14 @@ async function writeFirestoreNode(
       }
     } else if (parts.length === 3) {
       const [colName, subKey, docId] = parts;
+      if (colName === 'chats' && docId === 'messages' && cleanData && typeof cleanData === 'object' && !Array.isArray(cleanData)) {
+        for (const [msgId, val] of Object.entries(cleanData)) {
+          if (val && typeof val === 'object') {
+            await setDoc(doc(db, 'chats', subKey, 'messages', msgId), { id: msgId, ...(val as any) }, { merge: true });
+          }
+        }
+        return true;
+      }
       await setDoc(doc(db, 'chats', `${colName}__${subKey}`, 'items', docId), { id: docId, ...cleanData }, { merge });
       if (colName === 'notifications') {
         setDoc(doc(db, 'notifications', docId), { id: docId, userId: subKey, ...cleanData }, { merge }).catch(() => {});
@@ -412,10 +446,17 @@ async function writeFirestoreNode(
         }
       }
       return true;
-    } else if (parts.length === 4 && parts[0] === 'vendors' && parts[2] === 'products') {
-      const prodId = parts[3];
-      await setDoc(doc(db, 'products', prodId), { id: prodId, vendorId: parts[1], ...cleanData }, { merge });
-      return true;
+    } else if (parts.length === 4) {
+      if (parts[0] === 'chats' && parts[2] === 'messages') {
+        const msgId = parts[3];
+        await setDoc(doc(db, 'chats', parts[1], 'messages', msgId), { id: msgId, ...cleanData }, { merge });
+        return true;
+      }
+      if (parts[0] === 'vendors' && parts[2] === 'products') {
+        const prodId = parts[3];
+        await setDoc(doc(db, 'products', prodId), { id: prodId, vendorId: parts[1], ...cleanData }, { merge });
+        return true;
+      }
     }
   } catch (_) {}
   return false;
@@ -1034,7 +1075,7 @@ export async function rtdbPush(path: string, data: any, timeoutMs: number = 7000
       const payloadWithId = {
         ...cleanData,
         id: cleanData.id || pushKey,
-        productId: cleanData.productId || pushKey
+        ...(cleanData.productId ? { productId: cleanData.productId } : {})
       };
       // Write to Cloud Firestore
       const fsSaved = await writeFirestoreNode(`${cleanPath}/${pushKey}`, payloadWithId, true).catch(() => false);
@@ -1060,7 +1101,7 @@ export async function rtdbPush(path: string, data: any, timeoutMs: number = 7000
       const payloadWithId = {
         ...cleanData,
         id: cleanData.id || pushKey,
-        productId: cleanData.productId || pushKey
+        ...(cleanData.productId ? { productId: cleanData.productId } : {})
       };
       const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}/${pushKey}.json${authQuery}`, {
         method: 'PUT',
@@ -1184,7 +1225,7 @@ export async function rtdbRemove(path: string, timeoutMs: number = 5000): Promis
     }
   }
 
-  // Delete from Cloud Firestore if 2-segment path
+  // Delete from Cloud Firestore if 2-segment path or 4-segment chat message path
   try {
     const parts = cleanPath.split('/').filter(Boolean);
     if (parts.length === 2) {
@@ -1192,6 +1233,8 @@ export async function rtdbRemove(path: string, timeoutMs: number = 5000): Promis
         await deleteDoc(doc(db, 'chats', parts[0], 'items', parts[1])).catch(() => {});
       }
       await deleteDoc(doc(db, parts[0], parts[1])).catch(() => {});
+    } else if (parts.length === 4 && parts[0] === 'chats' && parts[2] === 'messages') {
+      await deleteDoc(doc(db, 'chats', parts[1], 'messages', parts[3])).catch(() => {});
     }
   } catch (_) {}
 
@@ -1327,6 +1370,11 @@ const subscriptionChannels = new Map<string, SubscriptionChannel>();
 function dispatchToSubscribers(path: string, data: any, isPartial = false) {
   const channel = subscriptionChannels.get(path);
   if (!channel) return;
+
+  // Protect loaded data from being wiped out by an empty snapshot
+  if (data === null && channel.lastData && typeof channel.lastData === 'object' && Object.keys(channel.lastData).length > 0) {
+    return;
+  }
 
   let merged = data;
   if (isPartial && typeof channel.lastData === 'object' && channel.lastData && typeof data === 'object' && data) {
@@ -1546,6 +1594,40 @@ export function rtdbSubscribe<T = any>(
             )
           );
         }
+      } else if (parts.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
+        const chatId = parts[1];
+        try {
+          // Immediately check Firestore for persistent messages
+          getDocs(collection(db, 'chats', chatId, 'messages')).then((snap) => {
+            if (!snap.empty) {
+              const mapObj: Record<string, any> = {};
+              snap.forEach((d) => {
+                mapObj[d.id] = { id: d.id, ...d.data() };
+              });
+              dispatchToSubscribers(cleanPath, mapObj as unknown as T);
+            }
+          }).catch(() => {});
+
+          fsUnsubs.push(
+            onSnapshot(
+              collection(db, 'chats', chatId, 'messages'),
+              (snap) => {
+                const mapObj: Record<string, any> = {};
+                snap.forEach((d) => {
+                  mapObj[d.id] = { id: d.id, ...d.data() };
+                });
+                if (Object.keys(mapObj).length > 0) {
+                  dispatchToSubscribers(cleanPath, mapObj as unknown as T);
+                }
+              },
+              (err) => {
+                console.warn(`[Firestore messages onSnapshot error for ${cleanPath}]:`, err);
+              }
+            )
+          );
+        } catch (err) {
+          console.warn(`[Firestore attach error for ${cleanPath}]:`, err);
+        }
       }
 
       const dbRef = ref(rtdb, cleanPath);
@@ -1556,8 +1638,11 @@ export function rtdbSubscribe<T = any>(
             dispatchToSubscribers(cleanPath, snap.val() as T);
           } else {
             // When the node does not exist in RTDB (e.g. empty messages or new chat),
-            // dispatch null so listeners stop waiting on loading spinners!
-            dispatchToSubscribers(cleanPath, null as unknown as T);
+            // do NOT overwrite if channel already has loaded messages from Firestore/cache!
+            const cur = subscriptionChannels.get(cleanPath);
+            if (!cur?.lastData || (typeof cur.lastData === 'object' && Object.keys(cur.lastData).length === 0)) {
+              dispatchToSubscribers(cleanPath, null as unknown as T);
+            }
           }
         },
         (err) => {

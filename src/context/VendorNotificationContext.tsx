@@ -215,12 +215,19 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
       return;
     }
 
+    const vendorKeys = new Set([
+      user.uid,
+      (userData as any)?.vendorId,
+      (userData as any)?.storeId,
+      (userData as any)?.id
+    ].filter(Boolean));
+
     const unsubscribe = rtdbSubscribe<any>('chats', (snap) => {
       let count = 0;
       if (snap) {
         Object.keys(snap).forEach((k) => {
           const c = snap[k];
-          if (c && c.vendorId === user.uid && (c.unreadCountVendor || 0) > 0) {
+          if (c && (vendorKeys.has(c.vendorId) || vendorKeys.has(c.storeId) || k.endsWith(`_${user.uid}`)) && (c.unreadCountVendor || 0) > 0) {
             count += Number(c.unreadCountVendor) || 0;
           }
         });
@@ -231,7 +238,7 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [user?.uid]);
+  }, [user?.uid, userData]);
 
   // Derived unread counts
   const unreadNotificationsList = notifications.filter(n => !n.read);

@@ -878,7 +878,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
       console.warn('Error setting up chat in RTDB:', e);
     }
 
-    navigate(`/chat/${targetVendorId}`);
+    navigate(`/chat/${targetVendorId}?chatId=${encodeURIComponent(chatId)}`);
   };
 
   // Scroll Category Container left/right on desktop

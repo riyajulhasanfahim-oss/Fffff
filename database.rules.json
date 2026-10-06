@@ -60,6 +60,11 @@
       ".read": true,
       ".write": "auth != null"
     },
+    "chats": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["customerId", "vendorId", "storeId", "lastMessageTime"]
+    },
     "settings": {
       ".read": true,
       ".write": "auth != null"

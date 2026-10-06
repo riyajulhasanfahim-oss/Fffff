@@ -17,6 +17,7 @@ export default function ChatRoom() {
   const { vendorId } = useParams<{ vendorId: string }>();
   const [searchParams] = useSearchParams();
   const productId = searchParams.get('product');
+  const queryChatId = searchParams.get('chatId');
   const { user, userData } = useAuth();
   const navigate = useNavigate();
   
@@ -37,7 +38,7 @@ export default function ChatRoom() {
   });
   const [productInfo, setProductInfo] = useState<any>(null);
   const [newMessage, setNewMessage] = useState('');
-  const [chatId, setChatId] = useState<string>(() => (user?.uid && vendorId ? `${user.uid}_${vendorId}` : ''));
+  const [chatId, setChatId] = useState<string>(() => queryChatId || (user?.uid && vendorId ? `${user.uid}_${vendorId}` : ''));
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   
@@ -161,7 +162,7 @@ export default function ChatRoom() {
       if (isMounted) setLoading(false);
     }, 1200);
 
-    const directChatId = `${user.uid}_${vendorId}`;
+    const directChatId = queryChatId || `${user.uid}_${vendorId}`;
     setChatId(directChatId);
 
     // Fetch full vendor info from RTDB / cache asynchronously
@@ -226,16 +227,16 @@ export default function ChatRoom() {
         rawList.sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
         
         setMessages(prev => {
-          // Keep optimistic messages not yet confirmed in the database snapshot
+          const rawIds = new Set(rawList.map(r => r.id));
           const pendingOptimistic = prev.filter(m => 
-            String(m.id).startsWith('temp_') && 
+            !rawIds.has(m.id) && 
             !rawList.some(r => r.senderId === m.senderId && r.text === m.text && Math.abs((Number(r.createdAt) || 0) - (Number(m.createdAt) || 0)) < 6000)
           );
           return [...rawList, ...pendingOptimistic].sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
         });
 
         // Mark unread messages from vendor as read
-        const unread = rawList.filter(d => !d.read && d.senderId === vendorId);
+        const unread = rawList.filter(d => !d.read && d.senderId !== user.uid);
         if (unread.length > 0) {
           unread.forEach(d => {
             rtdbUpdate(`chats/${directChatId}/messages/${d.id}`, { read: true }).catch(() => {});
@@ -243,7 +244,7 @@ export default function ChatRoom() {
         }
         rtdbUpdate(`chats/${directChatId}`, { unreadCountCustomer: 0 }).catch(() => {});
       } else {
-        setMessages(prev => prev.filter(m => String(m.id).startsWith('temp_')));
+        setMessages(prev => prev);
       }
       setLoading(false);
     });
@@ -328,6 +329,7 @@ export default function ChatRoom() {
     
     try {
       const payload = {
+        id: targetChatId,
         customerId: user.uid,
         customerName: userData?.name || user.displayName || 'Customer',
         customerEmail: user.email || '',
