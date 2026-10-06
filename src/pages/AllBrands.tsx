@@ -10,6 +10,7 @@ import {
   fetchOfficialStoresFromRTDB, 
   saveStoreToCache, 
   getStoreProductsFromCache,
+  saveStoreProductsToCache,
   getStoreThemeFromCache,
   getStoreFollowStatusFromCache,
   isStorePlanVerified,
@@ -101,6 +102,12 @@ export default function AllBrands() {
     const initialTheme = getStoreThemeFromCache(brand.id) || brand.theme;
     const initialFollowing = getStoreFollowStatusFromCache(brand.id);
     const slug = brand.shopSlug || brand.storeSlug || slugifyVendorName(brand.shopName || brand.storeName || brand.name || '');
+    if (slug && slug !== 'store') {
+      saveStoreToCache(slug, brand);
+      if (initialProds && initialProds.length > 0) {
+        saveStoreProductsToCache(slug, initialProds);
+      }
+    }
     const targetPath = slug && slug !== 'store' ? `/store/${slug}` : `/store/${brand.id}`;
 
     navigate(targetPath, { 

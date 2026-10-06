@@ -7,7 +7,7 @@ export default function RootRoute() {
   const { vendorId, isShopDomain } = useShopDomain();
   
   if (isShopDomain && vendorId) {
-    return <VendorStore propVendorId={vendorId} />;
+    return <VendorStore key={vendorId} propVendorId={vendorId} />;
   }
   
   return <Home />;

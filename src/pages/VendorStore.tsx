@@ -106,7 +106,14 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
   const initialCached = useMemo(() => {
     if (!vendorId) return null;
     const navState = (location.state as any)?.initialStore;
-    if (navState && (navState.id === vendorId || navState.vendorId === vendorId || navState.storeId === vendorId)) {
+    if (navState && (
+      navState.id === vendorId || 
+      navState.vendorId === vendorId || 
+      navState.storeId === vendorId ||
+      navState.shopSlug === vendorId ||
+      navState.storeSlug === vendorId ||
+      slugifyVendorName(navState.shopName || navState.storeName || navState.name || '') === vendorId
+    )) {
       return navState;
     }
     return getStoreFromCache(vendorId);
@@ -219,11 +226,21 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
   // No subdomain redirects. URL format is always https://rjworldbd.com/store/{store-slug}.
   useEffect(() => {
     if (params.vendorId && (vendor || profile || initialCached)) {
-      const activeSlug = vendor?.shopSlug || vendor?.storeSlug || profile?.shopSlug || profile?.storeSlug || 
-                         initialCached?.shopSlug || initialCached?.storeSlug ||
-                         (vendor?.shopName || vendor?.storeName ? slugifyVendorName(vendor.shopName || vendor.storeName) : '') ||
-                         (profile?.shopName || profile?.storeName ? slugifyVendorName(profile.shopName || profile.storeName) : '') ||
-                         (initialCached?.shopName || initialCached?.storeName ? slugifyVendorName(initialCached.shopName || initialCached.storeName) : '');
+      const targetStore = vendor || profile || initialCached;
+      // Only replace URL if the loaded store actually corresponds to this vendorId (prevents stale cross-store redirects)
+      const matchesCurrentVendor = 
+        targetStore?.id === params.vendorId ||
+        targetStore?.vendorId === params.vendorId ||
+        targetStore?.userId === params.vendorId ||
+        targetStore?.storeId === params.vendorId ||
+        targetStore?.shopSlug === params.vendorId ||
+        targetStore?.storeSlug === params.vendorId ||
+        slugifyVendorName(targetStore?.shopName || targetStore?.storeName || targetStore?.name || '') === params.vendorId;
+
+      if (!matchesCurrentVendor) return;
+
+      const activeSlug = targetStore?.shopSlug || targetStore?.storeSlug || 
+                         slugifyVendorName(targetStore?.shopName || targetStore?.storeName || targetStore?.name || '');
       if (activeSlug) {
         const cleanSlug = slugifyVendorName(activeSlug);
         if (cleanSlug && cleanSlug !== 'store' && params.vendorId !== cleanSlug) {
@@ -281,24 +298,57 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
   useEffect(() => {
     if (vendorId) {
       const currentUid = user?.uid || auth.currentUser?.uid || null;
-      const store = (location.state as any)?.initialStore || getStoreFromCache(vendorId);
+      let store = (location.state as any)?.initialStore;
       if (store) {
-        setVendor((prev: any) => mergeStoreObjects(prev, store));
-        setProfile((prev: any) => mergeStoreObjects(prev, store));
+        const matchesCurrent = 
+          store.id === vendorId || 
+          store.vendorId === vendorId || 
+          store.storeId === vendorId ||
+          store.shopSlug === vendorId ||
+          store.storeSlug === vendorId ||
+          slugifyVendorName(store.shopName || store.storeName || store.name || '') === vendorId;
+        if (!matchesCurrent) {
+          store = getStoreFromCache(vendorId);
+        }
+      } else {
+        store = getStoreFromCache(vendorId);
+      }
+
+      if (store) {
+        setVendor(store);
+        setProfile(store);
         setFollowersCount(Number(store.followersCount ?? store.followers ?? 0));
       }
-      const prods = (location.state as any)?.initialProducts || getStoreProductsFromCache(vendorId);
+      
+      let prods = (location.state as any)?.initialProducts;
+      if (!Array.isArray(prods) || prods.length === 0) {
+        prods = getStoreProductsFromCache(vendorId);
+      }
       if (prods && prods.length > 0) {
         setProducts(prods);
       }
-      const th = (location.state as any)?.initialTheme || getStoreThemeFromCache(vendorId);
+
+      let th = (location.state as any)?.initialTheme;
+      if (!th) {
+        th = getStoreThemeFromCache(vendorId) || store?.theme || null;
+      }
       if (th && (th.primaryColor || th.layout)) {
         setTheme(th);
       }
+
       const fol = (location.state as any)?.initialFollowing ?? getStoreFollowStatusFromCache(vendorId, currentUid);
       setIsFollowing(fol);
+
+      setLoading(!store && (!prods || prods.length === 0));
+      setIsDeletedStore(isStoreDeletedFromCache(vendorId));
+      setSelectedCategory('all');
+      setSearchQuery('');
+      setActiveTab('products');
+
+      // Scroll immediately to top when switching between stores
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     }
-  }, [vendorId, user?.uid]);
+  }, [vendorId, user?.uid, location.state]);
 
   // Fetch Vendor Profile, Subscription Status, Products & Reviews strictly from RTDB
   useEffect(() => {
