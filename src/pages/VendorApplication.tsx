@@ -5,7 +5,7 @@ export default function VendorApplication() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    navigate('/become-vendor', { replace: true });
+    navigate('/become-vendor' + window.location.search, { replace: true });
   }, [navigate]);
 
   return (

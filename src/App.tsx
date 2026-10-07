@@ -87,6 +87,7 @@ import PublicResellerShop from "./pages/reseller/shop/PublicResellerShop";
 
 import VendorDashboard from "./pages/vendor/VendorDashboard";
 import VendorRegistration from "./pages/vendor/auth/VendorRegistration";
+import VendorReferral from "./pages/vendor/referral/VendorReferral";
 import ProductsList from "./pages/vendor/products/ProductsList";
 import AddProduct from "./pages/vendor/products/AddProduct";
 import EditProduct from "./pages/vendor/products/EditProduct";
@@ -387,6 +388,7 @@ export default function App() {
             <Route path="/vendor/boost" element={<VendorRoute><VendorProductBoost /></VendorRoute>} />
             <Route path="/vendor/ads" element={<VendorRoute><VendorProductAds /></VendorRoute>} />
             <Route path="/vendor/platform-fee" element={<VendorRoute><VendorPlatformFee /></VendorRoute>} />
+            <Route path="/vendor/referrals" element={<VendorRoute><VendorReferral /></VendorRoute>} />
           
           <Route path="/admin" element={<AdminRoute><AdminLayout /></AdminRoute>}>
             <Route path="dashboard" element={<AdminDashboard />} />

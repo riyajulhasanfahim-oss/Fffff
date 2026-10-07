@@ -3,7 +3,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { rtdbGet, rtdbSet, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
-  Wallet, TrendingUp, TrendingDown, Clock, Activity, CreditCard, ArrowRight, FileText, ShieldCheck, RefreshCw
+  Wallet, TrendingUp, TrendingDown, Clock, Activity, CreditCard, ArrowRight, FileText, ShieldCheck, RefreshCw, Gift
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -212,6 +212,13 @@ export default function VendorWallet() {
             <FileText className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Export</span> Report
           </button>
+          <Link 
+            to="/vendor/referrals"
+            className="px-2.5 py-1.5 sm:px-3 sm:py-2 bg-amber-50 text-amber-700 border border-amber-200 text-xs sm:text-sm font-semibold rounded-xl hover:bg-amber-100 transition-colors shadow-xs flex items-center gap-1.5 shrink-0"
+          >
+            <Gift className="w-3.5 h-3.5 text-amber-600" />
+            <span>Refer & Earn</span>
+          </Link>
           <Link 
             to="/vendor/withdraw"
             className="px-3 py-1.5 sm:px-4 sm:py-2 bg-primary-main text-white text-xs sm:text-sm font-semibold rounded-xl hover:bg-sky-600 transition-colors shadow-sm shrink-0"

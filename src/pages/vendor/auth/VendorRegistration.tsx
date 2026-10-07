@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbUpdate } from '../../../lib/rtdb';
+import { 
+  lookupReferralCode, 
+  creditReferralBonus, 
+  getOrCreateVendorReferralCode 
+} from '../../../services/resellerReferralService';
 import { 
   Store, ChevronRight, CheckCircle, ArrowLeft, Eye, EyeOff, Copy, Check, 
   ShieldCheck, Phone 
@@ -58,6 +63,80 @@ export default function VendorRegistration() {
     }
     return inv;
   });
+
+  const [searchParams] = useSearchParams();
+  const [inviteCode, setInviteCode] = useState('');
+  const [referralSponsor, setReferralSponsor] = useState<{ userId: string; name: string; code: string } | null>(null);
+  const [referralFeedback, setReferralFeedback] = useState<string>('');
+  const [referralValid, setReferralValid] = useState<boolean | null>(null);
+
+  // Auto-populate referral code from URL query params (e.g. ?ref=CODE or ?code=CODE or ?invite=CODE)
+  useEffect(() => {
+    const refParam = searchParams.get('ref') || searchParams.get('code') || searchParams.get('invite');
+    if (refParam) {
+      setInviteCode(refParam.trim().toUpperCase());
+    }
+  }, [searchParams]);
+
+  // Debounced validation of referral invite code
+  useEffect(() => {
+    const checkCode = async () => {
+      const code = inviteCode.trim().toUpperCase();
+      if (!code) {
+        setReferralSponsor(null);
+        setReferralFeedback('');
+        setReferralValid(null);
+        return;
+      }
+
+      if (code.length < 3) {
+        setReferralSponsor(null);
+        setReferralFeedback('');
+        setReferralValid(null);
+        return;
+      }
+
+      // Prevent self-referral
+      if (user && (user.uid.toUpperCase().startsWith(code) || user.uid.toUpperCase() === code)) {
+        setReferralSponsor(null);
+        setReferralFeedback('নিজের রেফারেল কোড ব্যবহার করা যাবে না।');
+        setReferralValid(false);
+        return;
+      }
+
+      try {
+        const result = await lookupReferralCode(code);
+        if (result.valid && result.userId) {
+          if (user && result.userId === user.uid) {
+            setReferralSponsor(null);
+            setReferralFeedback('নিজের রেফারেল কোড ব্যবহার করা যাবে না।');
+            setReferralValid(false);
+            return;
+          }
+
+          setReferralSponsor({
+            userId: result.userId,
+            name: result.name || 'রেফারার পার্টনার',
+            code: result.code || code
+          });
+          setReferralValid(true);
+          setReferralFeedback(`সঠিক রেফারেল কোড (${result.name || 'রেফারার পার্টনার'})`);
+        } else {
+          setReferralSponsor(null);
+          setReferralValid(false);
+          setReferralFeedback('ভুল রেফারেল কোড। অনুগ্রহ করে সঠিক কোড দিন।');
+        }
+      } catch (err) {
+        console.warn('Error validating referral code:', err);
+        setReferralSponsor(null);
+        setReferralValid(false);
+        setReferralFeedback('রেফারেল কোড যাচাই করতে সমস্যা হয়েছে।');
+      }
+    };
+
+    const timer = setTimeout(checkCode, 400);
+    return () => clearTimeout(timer);
+  }, [inviteCode, user]);
 
   // Dynamic fee hook - check settings/vendor or settings/appConfig
   useEffect(() => {
@@ -376,6 +455,8 @@ export default function VendorRegistration() {
           banner: '',
           description: `Welcome to ${formData.storeName.trim()}`,
           status: 'active',
+          referredBy: referralSponsor?.userId || null,
+          referralCodeUsed: referralSponsor?.code || (inviteCode.trim() ? inviteCode.trim().toUpperCase() : null),
           registrationFee: registrationFeeAmount,
           registrationPayment: 'completed',
           paymentMethod: formattedMethod,
@@ -517,6 +598,8 @@ export default function VendorRegistration() {
             email: formData.email.trim() || user?.email || '',
             phone: formData.mobileNumber.trim(),
             role: 'Vendor',
+            referredBy: referralSponsor?.userId || null,
+            referralCodeUsed: referralSponsor?.code || (inviteCode.trim() ? inviteCode.trim().toUpperCase() : null),
             updatedAt: Date.now()
           })
         ]);
@@ -580,6 +663,24 @@ export default function VendorRegistration() {
             })
           }).catch(() => {});
         } catch (_) {}
+
+        // Credit referral bonus to the referrer's wallet
+        if (referralSponsor && referralSponsor.userId) {
+          try {
+            await creditReferralBonus(
+              referralSponsor.userId,
+              currentUserId,
+              formData.ownerName.trim(),
+              formData.email.trim() || user?.email || '',
+              'Vendor'
+            );
+          } catch (refErr) {
+            console.error('[VendorRegistration] Error crediting referral bonus:', refErr);
+          }
+        }
+
+        // Pre-create the newly registered vendor's own referral code
+        await getOrCreateVendorReferralCode(currentUserId, formData.ownerName.trim(), formData.storeName.trim()).catch(() => {});
 
         if (refreshUserData) {
           await refreshUserData().catch(() => {});
@@ -874,6 +975,43 @@ export default function VendorRegistration() {
                     💡 কাস্টমারের অর্ডার প্লেসের সময় এই লোকেশন এবং কাস্টমারের ঠিকানার মধ্যকার দূরত্ব অনুযায়ী নিখুঁত পাথাও ডেলিভারি চার্জ হিসাব করা হবে।
                   </p>
                 </div>
+              </div>
+
+              {/* Referral / Invite Code (Optional) */}
+              <div className="bg-slate-50/80 p-3 sm:p-4 rounded-xl border border-slate-200/80">
+                <div className="flex items-center justify-between mb-1 sm:mb-1.5">
+                  <label className="block text-xs sm:text-xs md:text-sm font-bold text-slate-700 uppercase tracking-wider">
+                    রেফারেল / ইনভাইট কোড (ঐচ্ছিক)
+                  </label>
+                  <span className="text-[10px] sm:text-xs text-slate-500 font-medium">
+                    বন্ধু বা পার্টনারের কোড
+                  </span>
+                </div>
+                <div className="relative">
+                  <input 
+                    type="text" 
+                    name="inviteCode" 
+                    value={inviteCode} 
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())} 
+                    className={`w-full px-3 sm:px-4 py-2 sm:py-2.5 md:py-3 text-xs sm:text-sm font-mono uppercase bg-white border rounded-lg sm:rounded-xl focus:ring-2 outline-none transition-all placeholder:text-slate-400 ${
+                      referralValid === true ? 'border-emerald-500 focus:ring-emerald-500/20' :
+                      referralValid === false ? 'border-rose-400 focus:ring-rose-400/20' :
+                      'border-slate-200 focus:border-primary-main focus:ring-primary-main/20'
+                    }`}
+                    placeholder="রেফারেল কোড দিন (যেমন: V8A9F1)" 
+                  />
+                  {referralValid === true && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-600 flex items-center gap-1 text-xs font-bold">
+                      <Check className="w-4 h-4" />
+                      <span>যাচাইকৃত</span>
+                    </div>
+                  )}
+                </div>
+                {referralFeedback && (
+                  <p className={`text-[11px] mt-1.5 font-medium ${referralValid === true ? 'text-emerald-700' : 'text-rose-600'}`}>
+                    {referralFeedback}
+                  </p>
+                )}
               </div>
 
               {/* Highly visible Proceed button */}

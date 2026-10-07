@@ -190,6 +190,23 @@
       ".read": "auth != null",
       ".write": "auth != null",
       ".indexOn": ["orderId", "vendorId", "status", "submittedAt"]
+    },
+    "referral_codes": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "referrals": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "referral_stats": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "wallet_transactions": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["vendorId", "createdAt", "type", "status"]
     }
   }
 }

@@ -44,7 +44,8 @@ import {
   Coins,
   Receipt,
   Lock,
-  Share2
+  Share2,
+  Gift
 } from 'lucide-react';
 import StoreShareModal from '../../components/vendor-store/StoreShareModal';
 import { Link, useNavigate } from 'react-router-dom';
@@ -1122,6 +1123,7 @@ export default function VendorDashboard() {
             { name: 'Messages', path: '/vendor/messages', icon: MessageSquare, color: 'text-rose-600', bg: 'bg-rose-50' },
             { name: 'Wallet', path: '/vendor/wallet', icon: Wallet, color: 'text-violet-600', bg: 'bg-violet-50' },
             { name: 'Withdraw', path: '/vendor/withdraw', icon: Banknote, color: 'text-teal-600', bg: 'bg-teal-50' },
+            { name: 'Refer & Earn', path: '/vendor/referrals', icon: Gift, color: 'text-amber-600', bg: 'bg-amber-50' },
             { name: 'Shop Profile', path: '/vendor/profile', icon: Store, color: 'text-orange-600', bg: 'bg-orange-50' },
             { name: 'Notifications', path: '/vendor/notifications', icon: Bell, color: 'text-cyan-600', bg: 'bg-cyan-50' },
             { name: 'Settings', path: '/vendor/settings', icon: Settings, color: 'text-slate-600', bg: 'bg-slate-50' },

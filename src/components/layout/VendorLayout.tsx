@@ -21,7 +21,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Star,
-  Receipt
+  Receipt,
+  Gift
 } from 'lucide-react';
 import { getVendorOpenUrl } from '../../utils/subdomain';
 
@@ -56,6 +57,7 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
     { name: 'Wallet', path: '/vendor/wallet', icon: Wallet },
     { name: 'Platform Fee', path: '/vendor/platform-fee', icon: Receipt },
     { name: 'Withdraw', path: '/vendor/withdraw', icon: Banknote },
+    { name: 'Refer & Earn', path: '/vendor/referrals', icon: Gift },
     { name: 'Shop Profile', path: '/vendor/profile', icon: Store },
     { name: 'Notifications', path: '/vendor/notifications', icon: Bell },
     { name: 'Settings', path: '/vendor/settings', icon: Settings },
