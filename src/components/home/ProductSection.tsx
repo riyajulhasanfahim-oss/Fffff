@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'motion/react';
-import { ArrowRight, Flame, Sparkles, TrendingUp, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowRight, Flame, Sparkles, TrendingUp, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import ProductCard, { Product } from '../ui/ProductCard';
 
@@ -27,15 +27,9 @@ export default function ProductSection({
   badge,
   initialLimit
 }: ProductSectionProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-
   if (!products || products.length === 0) return null;
 
-  const displayedProducts = initialLimit && !isExpanded 
-    ? products.slice(0, initialLimit) 
-    : products;
-
-  const canExpand = Boolean(initialLimit && products.length > initialLimit);
+  const displayedProducts = products;
 
   return (
     <section className={`py-1 sm:py-2.5 lg:py-3.5 ${bgWhite ? 'bg-white' : 'bg-slate-50'} transition-colors`}>
@@ -109,29 +103,6 @@ export default function ProductSection({
             </motion.div>
           ))}
         </div>
-
-        {/* Show More / Show Less Toggle Button */}
-        {canExpand && (
-          <div className="mt-3 sm:mt-4 text-center">
-            <button
-              type="button"
-              onClick={() => setIsExpanded(!isExpanded)}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 sm:px-5 sm:py-2 bg-slate-100 hover:bg-slate-200/80 text-slate-800 text-xs sm:text-sm font-bold rounded-full transition-all cursor-pointer shadow-2xs"
-            >
-              {isExpanded ? (
-                <>
-                  <span>কম দেখুন</span>
-                  <ChevronUp className="w-4 h-4" />
-                </>
-              ) : (
-                <>
-                  <span>আরও {products.length - initialLimit!}টি পণ্য দেখুন</span>
-                  <ChevronDown className="w-4 h-4" />
-                </>
-              )}
-            </button>
-          </div>
-        )}
 
       </div>
     </section>

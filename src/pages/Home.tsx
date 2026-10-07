@@ -139,7 +139,6 @@ export default function Home() {
           <ProductSection 
             title="টপ প্রোডাক্ট" 
             products={bestSelling}
-            initialLimit={8}
             bgWhite={true}
             icon="sparkles"
           />
@@ -240,7 +239,6 @@ export default function Home() {
           title="🆕 নতুন আগমন (New Arrivals)" 
           subtitle="নতুন কালেকশন ও লেটেস্ট মডেল সবার আগে আপনার জন্য"
           products={newArrivals}
-          initialLimit={8}
           viewAllLink="/new-arrivals"
           bgWhite={true}
           icon="clock"
