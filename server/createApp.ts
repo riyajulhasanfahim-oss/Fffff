@@ -66,6 +66,93 @@ try {
   console.warn('Firebase Admin SDK initialization deferred or running in client-mode:', adminErr);
 }
 
+// AUTHORITATIVE ADMIN ALLOWLIST: ONLY THESE TWO EMAILS ARE PERMITTED AS ADMINS
+export const ALLOWED_ADMIN_EMAILS = Object.freeze([
+  'riyajulhasanfahim@gmail.com',
+  'frofficialbd1@gmail.com'
+]);
+
+export function isAllowedAdminEmail(email?: string | null): boolean {
+  if (!email || typeof email !== 'string') return false;
+  return ALLOWED_ADMIN_EMAILS.includes(email.trim().toLowerCase());
+}
+
+/**
+ * Ensures custom claim { admin: true } is assigned strictly to approved accounts,
+ * and revoked from any unauthorized accounts.
+ */
+export async function syncAdminClaimsForUser(uid: string, email: string): Promise<boolean> {
+  const isApproved = isAllowedAdminEmail(email);
+  try {
+    const authAdmin = getAuth();
+    const userRecord = await authAdmin.getUser(uid);
+    const currentClaims = userRecord.customClaims || {};
+
+    if (isApproved) {
+      if (!currentClaims.admin) {
+        await authAdmin.setCustomUserClaims(uid, { ...currentClaims, admin: true });
+        console.log(`[Admin Security] Assigned { admin: true } claim to approved email: ${email} (${uid})`);
+      }
+      return true;
+    } else {
+      if (currentClaims.admin) {
+        const { admin: _, ...cleanedClaims } = currentClaims;
+        await authAdmin.setCustomUserClaims(uid, cleanedClaims);
+        console.warn(`[Admin Security Alert] REVOKED unauthorized admin claim from: ${email} (${uid})`);
+      }
+      return false;
+    }
+  } catch (err: any) {
+    console.warn(`[Admin Security] Could not sync claims for ${email}:`, err?.message || err);
+    return isApproved;
+  }
+}
+
+/**
+ * Express middleware to verify that incoming request has a valid Bearer token
+ * belonging strictly to one of the two allowed admin accounts.
+ */
+export async function requireAdminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: Admin authentication token required.' });
+    }
+    const token = authHeader.split('Bearer ')[1].trim();
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: Empty token.' });
+    }
+
+    try {
+      const decoded = await getAuth().verifyIdToken(token);
+      const email = (decoded.email || '').toLowerCase().trim();
+      const hasClaim = decoded.admin === true;
+
+      if (!isAllowedAdminEmail(email)) {
+        console.warn(`[Security Alert] Rejected unauthorized admin access attempt by ${email} (${decoded.uid})`);
+        return res.status(403).json({ success: false, error: 'Forbidden: You do not have administrator privileges.' });
+      }
+
+      // If approved email is missing claim, sync it in the background
+      if (!hasClaim && decoded.uid) {
+        syncAdminClaimsForUser(decoded.uid, email).catch(() => {});
+      }
+
+      (req as any).adminUser = {
+        uid: decoded.uid,
+        email,
+        admin: true
+      };
+      return next();
+    } catch (tokenErr: any) {
+      console.warn('[Admin Auth] Token verification failed:', tokenErr?.message || tokenErr);
+      return res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired admin token.' });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: 'Internal security error during admin verification.' });
+  }
+}
+
 // In-memory store for OTPs (In production, use Firestore or Redis)
 // Format: { [email]: { otp: string, expires: number } }
 const otpStore = new Map<string, { otp: string; expires: number }>();
@@ -251,6 +338,45 @@ app.use((req, res, next) => {
   // Health check endpoints
   app.get(['/health', '/api/health', '/healthz', '/_health'], (req, res) => {
     res.status(200).json({ status: 'ok', timestamp: Date.now() });
+  });
+
+  // Admin Security: Verify Token & Synchronize Custom Claims strictly for approved admin emails
+  app.post('/api/admin/verify-and-sync-claims', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ success: false, error: 'Authorization header required.' });
+      }
+      const token = authHeader.split('Bearer ')[1].trim();
+      const decoded = await getAuth().verifyIdToken(token);
+      const email = (decoded.email || '').toLowerCase().trim();
+      const isApproved = isAllowedAdminEmail(email);
+
+      if (!isApproved) {
+        // Explicitly revoke claim if an unauthorized user managed to obtain it
+        if (decoded.admin) {
+          await syncAdminClaimsForUser(decoded.uid, email);
+        }
+        return res.status(403).json({
+          success: false,
+          isAdmin: false,
+          error: 'Access denied: Only authorized administrators may receive admin privileges.'
+        });
+      }
+
+      // Approved administrator: ensure custom claim is set
+      await syncAdminClaimsForUser(decoded.uid, email);
+      return res.json({
+        success: true,
+        isAdmin: true,
+        uid: decoded.uid,
+        email: email,
+        message: 'Admin custom claim verified and active.'
+      });
+    } catch (err: any) {
+      console.warn('Error in /api/admin/verify-and-sync-claims:', err?.message || err);
+      return res.status(401).json({ success: false, error: 'Invalid authentication token.' });
+    }
   });
 
   // Helper to convert Firestore REST field values to plain JS values
@@ -820,7 +946,7 @@ app.use((req, res, next) => {
   });
 
   // 6. Admin Manual Review Action (Approve / Reject)
-  app.post('/api/courier/admin-review-action', async (req, res) => {
+  app.post('/api/courier/admin-review-action', requireAdminAuth, async (req, res) => {
     try {
       const { verificationId, orderId, action, notes, adminName } = req.body;
       if (!orderId || !action) {
@@ -1606,7 +1732,7 @@ app.use((req, res, next) => {
   });
 
   // Admin Payment Settings Management
-  app.post('/api/admin/payment-settings', async (req, res) => {
+  app.post('/api/admin/payment-settings', requireAdminAuth, async (req, res) => {
     try {
       const brandKey = req.body.sofolxBrandKey ?? req.body.brandKey ?? req.body.apiKey;
       const enabled = req.body.sofolxEnabled ?? req.body.enabled;
@@ -1706,7 +1832,7 @@ app.use((req, res, next) => {
   });
 
   // Save & Validate Domain Settings
-  app.post('/api/admin/domain-settings', async (req, res) => {
+  app.post('/api/admin/domain-settings', requireAdminAuth, async (req, res) => {
     try {
       let { primaryDomain, websiteUrl, authorizedDomain, clientSecret, clientId, updatedBy } = req.body;
 

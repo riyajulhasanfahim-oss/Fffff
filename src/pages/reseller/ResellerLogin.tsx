@@ -7,6 +7,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Users, Mail, Lock, Eye, EyeOff, ArrowRight, ArrowLeft, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { checkAccountStatus } from '../../services/accountStatusService';
+import { isAllowedAdminEmail } from '../../constants/adminAllowlist';
 
 export default function ResellerLogin() {
   const navigate = useNavigate();
@@ -65,10 +66,9 @@ export default function ResellerLogin() {
       }
 
       // Check if Admin
-      const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
       const uData = await rtdbGet<any>(`users/${user.uid}`).catch(() => null);
       const role = uData?.role;
-      const isAdmin = role === 'Admin' || adminEmails.includes(cleanEmail);
+      const isAdmin = isAllowedAdminEmail(cleanEmail) && (role === 'Admin' || isAllowedAdminEmail(user.email));
 
       // Handle redirect according to reseller status
       if (isReseller || isAdmin) {

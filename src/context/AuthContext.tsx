@@ -21,13 +21,7 @@ import { rtdbGet, rtdbUpdate, rtdbSubscribe } from '../lib/rtdb';
 import { requestAndSaveFCMToken, removeFCMToken, onMessageListener } from '../lib/fcm';
 import toast from 'react-hot-toast';
 import { checkAccountStatus } from '../services/accountStatusService';
-
-const ADMIN_EMAILS = [
-  'riyajulhasanfahim@gmail.com',
-  'frofficialbd1@gmail.com',
-  'mdfahim776154@gmail.com',
-  'limonshik07@gmail.com'
-];
+import { ALLOWED_ADMIN_EMAILS, isAllowedAdminEmail } from '../constants/adminAllowlist';
 
 export interface UserData {
   uid: string;
@@ -111,14 +105,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         : null;
 
       if (data) {
-        const userEmail = (data.email || auth.currentUser?.email || '').toLowerCase();
-        const isAdminUser = ADMIN_EMAILS.includes(userEmail) || data.role === 'Admin';
+        const userEmail = (data.email || auth.currentUser?.email || '').toLowerCase().trim();
+        const isApprovedAdmin = isAllowedAdminEmail(userEmail);
         
+        // REVOCATION SAFEGUARD: If account had an Admin role in DB but is NOT approved, revoke it immediately
+        if (data.role === 'Admin' && !isApprovedAdmin) {
+          console.warn(`[Security Alert] Revoking unauthorized database Admin role from user: ${userEmail} (${uid})`);
+          rtdbUpdate(`users/${uid}`, { role: 'Customer', updatedAt: Date.now() }).catch(() => {});
+          setDoc(doc(db, 'users', uid), { role: 'Customer', updatedAt: Date.now() }, { merge: true }).catch(() => {});
+          data.role = 'Customer';
+        }
+
         const statusResult = await checkAccountStatus(userEmail, uid);
         
-        // Strict role resolution: Authoritative database role with active status verification
+        // Strict role resolution: Only approved admin emails can be Admin
         let determinedRole = 'Customer';
-        if (isAdminUser) {
+        if (isApprovedAdmin) {
           determinedRole = 'Admin';
         } else if (data.role === 'Vendor' || data.role === 'vendor' || statusResult.hasActiveVendor) {
           determinedRole = 'Vendor';
@@ -223,14 +225,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         : null;
 
-      const userEmail = (authUser.email || '').toLowerCase();
-      const isAdminUser = ADMIN_EMAILS.includes(userEmail) || data?.role === 'Admin';
+      const userEmail = (authUser.email || '').toLowerCase().trim();
+      const isApprovedAdmin = isAllowedAdminEmail(userEmail);
+
+      // REVOCATION SAFEGUARD: If account had an Admin role in DB but is NOT approved, revoke it immediately
+      if (data?.role === 'Admin' && !isApprovedAdmin) {
+        console.warn(`[Security Alert] Revoking unauthorized database Admin role from user: ${userEmail} (${authUser.uid})`);
+        rtdbUpdate(`users/${authUser.uid}`, { role: 'Customer', updatedAt: Date.now() }).catch(() => {});
+        setDoc(doc(db, 'users', authUser.uid), { role: 'Customer', updatedAt: Date.now() }, { merge: true }).catch(() => {});
+        data.role = 'Customer';
+      }
+
       const statusResult = await checkAccountStatus(userEmail, authUser.uid);
 
       if (data) {
         // Strict role resolution: only grant Vendor or Reseller if already approved and active
         let determinedRole = 'Customer';
-        if (isAdminUser) {
+        if (isApprovedAdmin) {
           determinedRole = 'Admin';
         } else if (data.role === 'Vendor' || data.role === 'vendor' || statusResult.hasActiveVendor) {
           determinedRole = 'Vendor';
@@ -293,9 +304,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         setUserData(loaded);
       } else {
-        // Brand new user: MUST strictly be Customer (unless super admin)
+        // Brand new user: MUST strictly be Customer (unless super admin approved email)
         const fallbackName = authUser.displayName || authUser.email?.split('@')[0] || 'RJ WORLD BD User';
-        const determinedRole = isAdminUser ? 'Admin' : 'Customer';
+        const determinedRole = isApprovedAdmin ? 'Admin' : 'Customer';
         const userRefCode = authUser.uid.substring(0, 8).toUpperCase();
         const now = Date.now();
 
@@ -378,14 +389,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error: any) {
       console.warn("Auth initialization notice:", error?.message || error);
       if (authUser) {
-        const isAdm = ADMIN_EMAILS.includes(authUser.email?.toLowerCase() || '');
+        const isAdm = isAllowedAdminEmail(authUser.email);
         setUserData({
           uid: authUser.uid,
           name: authUser.displayName || authUser.email?.split('@')[0] || 'RJ WORLD BD User',
           email: authUser.email || '',
           phone: authUser.phoneNumber || null,
           photo: authUser.photoURL || null,
-          role: isAdm ? 'Admin' : 'user',
+          role: isAdm ? 'Admin' : 'Customer',
           status: "active",
           balance: 0,
           wallet: 0,
@@ -460,6 +471,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         if (authUser) {
           await handleUserAuth(authUser);
+
+          // Synchronize and verify Admin Custom Claims server-side
+          if (authUser.email && isAllowedAdminEmail(authUser.email)) {
+            authUser.getIdToken().then((token) => {
+              fetch('/api/admin/verify-and-sync-claims', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                }
+              }).then((res) => {
+                if (res.ok) {
+                  // Force refresh token to obtain custom claim immediately
+                  authUser.getIdToken(true).catch(() => {});
+                }
+              }).catch(() => {});
+            }).catch(() => {});
+          }
           
           // Set up FCM for the logged-in user
           setTimeout(() => {
@@ -482,7 +511,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                       phone: fsData.phone ?? fsData.mobileNumber ?? prev.phone,
                       photo: fsData.photo ?? fsData.photoURL ?? prev.photo,
                       status: (fsData.status || prev.status || 'active').toLowerCase(),
-                      role: prev.role === 'Admin' ? 'Admin' : (fsData.role || prev.role),
+                      role: isAllowedAdminEmail(authUser.email) ? 'Admin' : (fsData.role === 'Admin' ? 'Customer' : (fsData.role || prev.role)),
                       balance: typeof fsData.balance === 'number' ? fsData.balance : prev.balance,
                       wallet: typeof fsData.wallet === 'number' ? fsData.wallet : prev.wallet,
                     };
@@ -703,7 +732,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const isAdmin = userData?.role === 'Admin' || ADMIN_EMAILS.includes(user?.email?.toLowerCase() || '') || false;
+  // STRICT ADMIN AUTHORIZATION:
+  // Must match the approved allowlist AND have verified credentials/claims.
+  // NEVER trust raw role alone without approved email check!
+  const isAdmin = Boolean(
+    isAllowedAdminEmail(user?.email) && (userData?.role === 'Admin' || isAllowedAdminEmail(userData?.email))
+  );
 
   return (
     <AuthContext.Provider

@@ -3,6 +3,7 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { rtdbGet } from '../lib/rtdb';
 import { checkAccountStatus } from '../services/accountStatusService';
+import { isAllowedAdminEmail } from '../constants/adminAllowlist';
 
 export const AccountInactiveScreen = ({ logout }: { logout: () => void }) => (
   <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
@@ -119,8 +120,7 @@ export const VendorRoute: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       try {
-        const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-        const isAdmin = userData?.role === 'Admin' || adminEmails.includes(user.email?.toLowerCase() || '');
+        const isAdmin = Boolean(isAllowedAdminEmail(user.email) && (userData?.role === 'Admin' || isAllowedAdminEmail(userData?.email)));
         if (isAdmin) {
           if (active) setIsAuthorizedVendor(true);
           return;

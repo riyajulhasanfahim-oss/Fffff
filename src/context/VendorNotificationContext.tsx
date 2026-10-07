@@ -17,6 +17,7 @@ import {
   markAllNotificationsAsReadInRTDB
 } from '../services/notificationService';
 import { toast } from 'react-hot-toast';
+import { isAllowedAdminEmail } from '../constants/adminAllowlist';
 
 interface VendorNotificationContextType {
   notifications: VendorNotification[];
@@ -93,8 +94,7 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
       return;
     }
 
-    const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-    const isAdmin = userData?.role?.toLowerCase() === 'admin' || adminEmails.includes(user?.email?.toLowerCase() || '');
+    const isAdmin = Boolean(isAllowedAdminEmail(user?.email)) && (userData?.role?.toLowerCase() === 'admin' || isAllowedAdminEmail(userData?.email));
 
     isFirstLoadRef.current = true;
     setLoading(true);

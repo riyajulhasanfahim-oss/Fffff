@@ -7,6 +7,7 @@ import {
   recordFinancialIdempotency, 
   ensureVendorBalanceConsistency 
 } from './resellerSecurityService';
+import { isAllowedAdminEmail } from '../constants/adminAllowlist';
 
 export interface VendorWalletBalances {
   availableBalance: number;
@@ -1192,11 +1193,9 @@ export async function getAuthenticatedVendorIdsAsync(user: any, userData?: any, 
  */
 export function checkIsAdminUser(user: any, userData?: any): boolean {
   if (!user && !userData) return false;
-  const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
   const userEmail = (user?.email || userData?.email || '').toLowerCase().trim();
-  if (userEmail && adminEmails.includes(userEmail)) return true;
-  const role = (userData?.role || (user as any)?.role || '').toLowerCase().trim();
-  return role === 'admin';
+  if (isAllowedAdminEmail(userEmail)) return true;
+  return false;
 }
 
 /**

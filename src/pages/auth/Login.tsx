@@ -10,6 +10,7 @@ import { Mail, Lock, Chrome, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AuthNoticeBanner from '../../components/auth/AuthNoticeBanner';
 import { checkAccountStatus, getPostLoginRedirect } from '../../services/accountStatusService';
+import { ALLOWED_ADMIN_EMAILS, isAllowedAdminEmail } from '../../constants/adminAllowlist';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -166,8 +167,10 @@ export default function Login() {
       await syncUserProfile(userCredential.user, resolvedEmail.trim());
       const uData = await refreshUserData();
       toast.success('লগইন সফল হয়েছে!');
-      const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-      const isUserAdmin = uData?.role === 'Admin' || adminEmails.includes(resolvedEmail.trim().toLowerCase()) || adminEmails.includes(userCredential.user.email?.toLowerCase() || '');
+      const isUserAdmin = Boolean(
+        isAllowedAdminEmail(resolvedEmail.trim()) || 
+        isAllowedAdminEmail(userCredential.user.email)
+      ) && (uData?.role === 'Admin' || isAllowedAdminEmail(userCredential.user.email));
       if (isUserAdmin) {
         navigate('/admin/dashboard', { replace: true });
       } else if (uData?.role === 'Vendor') {
@@ -205,8 +208,7 @@ export default function Login() {
 
   const handlePostAuthRedirect = async (loggedUser: any) => {
     const uData = await refreshUserData();
-    const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-    const isUserAdmin = uData?.role === 'Admin' || adminEmails.includes(loggedUser.email?.toLowerCase() || '');
+    const isUserAdmin = Boolean(isAllowedAdminEmail(loggedUser.email)) && (uData?.role === 'Admin' || isAllowedAdminEmail(loggedUser.email));
     if (isUserAdmin) {
       navigate('/admin/dashboard', { replace: true });
     } else {

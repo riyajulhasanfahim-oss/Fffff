@@ -13,6 +13,7 @@ import AuthNoticeBanner from '../../components/auth/AuthNoticeBanner';
 import { checkAccountStatus, getPostLoginRedirect } from '../../services/accountStatusService';
 import { executeResellerWalletTransaction, isResellerAccount } from '../../services/resellerWalletService';
 import { ResellerTransactionType } from '../../types/resellerWallet';
+import { isAllowedAdminEmail } from '../../constants/adminAllowlist';
 
 export default function Register() {
   const { t } = useTranslation();
@@ -286,8 +287,7 @@ export default function Register() {
     
     const freshUser = await refreshUserData();
     toast.success('Account created successfully! Welcome to RJ WORLD BD.');
-    const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-    const isUserAdmin = freshUser?.role === 'Admin' || adminEmails.includes(userEmail.toLowerCase());
+    const isUserAdmin = Boolean(isAllowedAdminEmail(userEmail) && freshUser?.role === 'Admin');
     if (isUserAdmin) {
       navigate('/admin/dashboard', { replace: true });
     } else {
@@ -346,8 +346,7 @@ export default function Register() {
 
   const handleRegisterPostAuthRedirect = async (loggedUser: any) => {
     const uData = await refreshUserData();
-    const adminEmails = ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'mdfahim776154@gmail.com'];
-    const isUserAdmin = uData?.role === 'Admin' || adminEmails.includes(loggedUser.email?.toLowerCase() || '');
+    const isUserAdmin = Boolean(isAllowedAdminEmail(loggedUser.email) && uData?.role === 'Admin');
     if (isUserAdmin) {
       navigate('/admin/dashboard', { replace: true });
     } else if (uData?.role === 'Vendor') {

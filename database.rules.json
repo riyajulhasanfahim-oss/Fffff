@@ -6,7 +6,7 @@
     },
     "categories": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "stores": {
       ".read": true,
@@ -30,31 +30,31 @@
     },
     "deleted_vendors": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "brands": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "banners": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "sliders": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "coupons": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "flashSales": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "notices": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "reviews": {
       ".read": true,
@@ -67,23 +67,23 @@
     },
     "settings": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "config": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "ranks": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "commission_rules": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "bonus_rules": {
       ".read": true,
-      ".write": "auth != null"
+      ".write": "auth != null && auth.token.admin === true"
     },
     "resellers": {
       ".read": true,
@@ -91,8 +91,11 @@
     },
     "users": {
       "$userId": {
-        ".read": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin')",
-        ".write": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin')"
+        ".read": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        ".write": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        "role": {
+          ".validate": "newData.val() !== 'Admin' && newData.val() !== 'admin' || auth.token.admin === true"
+        }
       }
     },
     "orders": {
@@ -105,20 +108,20 @@
     },
     "reseller_wallet": {
       "$resellerId": {
-        ".read": "auth != null && (auth.uid === $resellerId || root.child('users/' + auth.uid + '/role').val() === 'admin')",
-        ".write": "auth != null && root.child('users/' + auth.uid + '/role').val() === 'admin'"
+        ".read": "auth != null && (auth.uid === $resellerId || auth.token.admin === true)",
+        ".write": "auth != null && auth.token.admin === true"
       }
     },
     "vendor_wallet": {
       "$vendorId": {
-        ".read": "auth != null && (auth.uid === $vendorId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')",
-        ".write": "auth != null && (auth.uid === $vendorId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')"
+        ".read": "auth != null && (auth.uid === $vendorId || auth.token.admin === true)",
+        ".write": "auth != null && (auth.uid === $vendorId || auth.token.admin === true)"
       }
     },
     "wallets": {
       "$userId": {
-        ".read": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')",
-        ".write": "auth != null && (auth.uid === $userId || root.child('users/' + auth.uid + '/role').val() === 'admin' || root.child('users/' + auth.uid + '/role').val() === 'Admin')"
+        ".read": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        ".write": "auth != null && (auth.uid === $userId || auth.token.admin === true)"
       }
     },
     "reseller_orders": {
@@ -172,7 +175,7 @@
       ".indexOn": ["orderId", "timestamp"]
     },
     "admin_notifications": {
-      ".read": "auth != null",
+      ".read": "auth != null && auth.token.admin === true",
       ".write": true
     },
     "vendor_notifications": {
