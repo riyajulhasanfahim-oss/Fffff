@@ -359,19 +359,44 @@ export default function ResellerApplication() {
           updatedAt: Date.now()
         };
 
-        const initialBonus = promoValid ? (promoBonus > 0 ? promoBonus : 50) : 0;
+        // Determine if this is a referral signup
+        let finalReferrerId = referralSponsor?.userId;
+        let finalReferrerName = referralSponsor?.name;
+        let finalReferralCode = referralSponsor?.code;
+
+        if (!finalReferrerId && formData.inviteCode.trim()) {
+          try {
+            const lookup = await lookupReferralCode(formData.inviteCode.trim().toUpperCase());
+            if (lookup.valid && lookup.userId && lookup.userId !== currentUserId) {
+              finalReferrerId = lookup.userId;
+              finalReferrerName = lookup.name;
+              finalReferralCode = lookup.code || formData.inviteCode.trim().toUpperCase();
+            }
+          } catch (lookupErr) {
+            console.warn('[ResellerApplication] Fallback referral lookup error:', lookupErr);
+          }
+        }
+
+        if (finalReferrerId) {
+          resellerPayload.referredBy = finalReferrerId;
+          resellerPayload.referralCodeUsed = finalReferralCode || formData.inviteCode.trim().toUpperCase();
+        }
+
+        // For non-referral standalone promo codes, initialBonus is applied directly.
+        // For referral codes, processReferralRewards handles the ৳50 signup credit + ৳200 referrer credit atomically.
+        const standalonePromoBonus = (!finalReferrerId && promoValid) ? (promoBonus > 0 ? promoBonus : 50) : 0;
         const walletPayload = {
           resellerId: currentUserId,
-          availableBalance: initialBonus,
+          availableBalance: standalonePromoBonus,
           lockedBalance: 0,
-          totalBalance: initialBonus,
+          totalBalance: standalonePromoBonus,
           pendingProfit: 0,
-          releasedProfit: initialBonus,
+          releasedProfit: standalonePromoBonus,
           cancelledProfit: 0,
-          walletBalance: initialBonus,
+          walletBalance: standalonePromoBonus,
           pendingCommission: 0,
-          approvedCommission: initialBonus,
-          lifetimeCommission: initialBonus,
+          approvedCommission: standalonePromoBonus,
+          lifetimeCommission: standalonePromoBonus,
           totalSales: 0,
           totalOrders: 0,
           createdAt: Date.now(),
@@ -392,56 +417,51 @@ export default function ResellerApplication() {
             email: formData.email.trim() || user?.email || '',
             phone: formData.mobileNumber.trim(),
             role: 'Reseller',
-            walletBalance: initialBonus,
-            resellerBalance: initialBonus,
-            referredBy: referralSponsor?.userId || null,
-            referralCodeUsed: referralSponsor?.code || null,
+            walletBalance: standalonePromoBonus,
+            resellerBalance: standalonePromoBonus,
+            referredBy: finalReferrerId || null,
+            referralCodeUsed: finalReferralCode || null,
             updatedAt: Date.now()
           })
         ]);
 
-        // If referral code bonus was applied, record in reseller transactions and ledger
-        if (initialBonus > 0) {
+        // If standalone promo code was applied, record in reseller transactions
+        if (standalonePromoBonus > 0) {
           const now = Date.now();
-          const bonusTxId = `TXN-REF-BONUS-${currentUserId.substring(0, 6)}-${now}`;
+          const bonusTxId = `TXN-PROMO-${currentUserId.substring(0, 6)}-${now}`;
           await Promise.allSettled([
             rtdbSet(`reseller_wallet_transactions/${bonusTxId}`, {
               transactionId: bonusTxId,
               userId: currentUserId,
               resellerId: currentUserId,
-              orderId: `BONUS-${currentUserId.substring(0, 8)}`,
-              amount: initialBonus,
+              orderId: `PROMO-${currentUserId.substring(0, 8)}`,
+              amount: standalonePromoBonus,
               type: 'PROFIT_RELEASED',
               status: 'COMPLETED',
               balanceBefore: { availableBalance: 0, lockedBalance: 0, totalBalance: 0 },
-              balanceAfter: { availableBalance: initialBonus, lockedBalance: 0, totalBalance: initialBonus },
-              description: `রেফারেল কোড বোনাস (৳${initialBonus})`,
-              idempotencyKey: `signup_ref_bonus_${currentUserId}`,
-              metadata: {
-                bonusType: 'reseller_referral_signup',
-                referralCodeUsed: referralSponsor?.code || formData.inviteCode.trim().toUpperCase()
-              },
+              balanceAfter: { availableBalance: standalonePromoBonus, lockedBalance: 0, totalBalance: standalonePromoBonus },
+              description: `প্রোমো কোড বোনাস (৳${standalonePromoBonus})`,
+              idempotencyKey: `promo_bonus_${currentUserId}`,
               createdAt: now,
               updatedAt: now
             }),
             rtdbPush('reseller_transactions', {
               resellerId: currentUserId,
-              orderId: `BONUS-${currentUserId.substring(0, 8)}`,
+              orderId: `PROMO-${currentUserId.substring(0, 8)}`,
               customerName: formData.fullName.trim(),
-              productName: 'রেফারেল বোনাস (অ্যাকাউন্ট খোলার পুরষ্কার)',
-              amount: initialBonus,
+              productName: 'প্রোমো কোড বোনাস',
+              amount: standalonePromoBonus,
               status: 'Approved',
-              createdAt: now,
-              isReferral: true
+              createdAt: now
             })
           ]);
         }
 
-        // Credit referral bonus: ৳50 to new reseller and ৳200 to referrer (atomic & duplicate-safe)
-        if (referralSponsor && referralSponsor.userId) {
+        // Credit referral bonus: exactly ৳50 to new reseller and ৳200 to referrer (atomic & duplicate-safe)
+        if (finalReferrerId && finalReferrerId !== currentUserId) {
           try {
             await processReferralRewards({
-              referrerId: referralSponsor.userId,
+              referrerId: finalReferrerId,
               newUserId: currentUserId,
               newUserName: formData.fullName.trim(),
               newUserEmail: formData.email.trim() || user?.email || '',
@@ -466,7 +486,7 @@ export default function ResellerApplication() {
         setShowPaymentSelectionModal(false);
         setLoading(false);
 
-        toast.success(initialBonus > 0 ? 'পেমেন্ট সফলভাবে যাচাই হয়েছে! রেফারেল বোনাস ৫০ টাকা আপনার ওয়ালেটে যোগ হয়েছে।' : 'পেমেন্ট সফলভাবে যাচাই হয়েছে! রিসেলার ড্যাশবোর্ডে স্বাগতম।');
+        toast.success(finalReferrerId ? 'পেমেন্ট সফলভাবে যাচাই হয়েছে! রেফারেল বোনাস ৫০ টাকা আপনার ওয়ালেটে যোগ হয়েছে।' : 'পেমেন্ট সফলভাবে যাচাই হয়েছে! রিসেলার ড্যাশবোর্ডে স্বাগতম।');
         navigate('/reseller/dashboard', { replace: true });
         return;
       } else {

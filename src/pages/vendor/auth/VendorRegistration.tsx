@@ -668,10 +668,24 @@ export default function VendorRegistration() {
         } catch (_) {}
 
         // Credit referral bonus: ৳50 to new vendor and ৳200 to referrer (atomic & duplicate-safe)
-        if (referralSponsor && referralSponsor.userId) {
+        let finalReferrerId = referralSponsor?.userId;
+        let finalReferrerName = referralSponsor?.name;
+        if (!finalReferrerId && inviteCode.trim()) {
+          try {
+            const lookup = await lookupReferralCode(inviteCode.trim().toUpperCase());
+            if (lookup.valid && lookup.userId && lookup.userId !== currentUserId) {
+              finalReferrerId = lookup.userId;
+              finalReferrerName = lookup.name;
+            }
+          } catch (lookupErr) {
+            console.warn('[VendorRegistration] Fallback referral lookup error:', lookupErr);
+          }
+        }
+
+        if (finalReferrerId && finalReferrerId !== currentUserId) {
           try {
             await processReferralRewards({
-              referrerId: referralSponsor.userId,
+              referrerId: finalReferrerId,
               newUserId: currentUserId,
               newUserName: formData.ownerName.trim(),
               newUserEmail: formData.email.trim() || user?.email || '',
