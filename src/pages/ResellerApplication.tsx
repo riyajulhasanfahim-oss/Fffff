@@ -17,7 +17,14 @@ import RocketPaymentModal from '../components/checkout/RocketPaymentModal';
 import UpayPaymentModal from '../components/checkout/UpayPaymentModal';
 import { verifyPaymentAutomatic, type VerificationResult } from '../services/automaticPaymentVerificationService';
 import { checkAccountStatus } from '../services/accountStatusService';
-import { lookupReferralCode, creditReferralBonus, getOrCreateReferralCode } from '../services/resellerReferralService';
+import { 
+  lookupReferralCode, 
+  processReferralRewards,
+  creditReferralBonus, 
+  getOrCreateReferralCode,
+  NEW_USER_REFERRAL_BONUS,
+  REFERRAL_BONUS_AMOUNT
+} from '../services/resellerReferralService';
 
 export default function ResellerApplication() {
   const { user, userData, refreshUserData } = useAuth();
@@ -144,10 +151,27 @@ export default function ResellerApplication() {
       }
       
       if (code.length >= 3) {
+        // Prevent self-referral
+        if (user && (user.uid.toUpperCase().startsWith(code) || user.uid.toUpperCase() === code)) {
+          setReferralSponsor(null);
+          setPromoBonus(0);
+          setPromoValid(false);
+          setReferralFeedback('নিজের রেফারেল কোড ব্যবহার করা যাবে না।');
+          return;
+        }
+
         try {
-          // 1. First check if it's a valid Reseller Referral Code
+          // 1. First check if it's a valid Referral Code
           const refResult = await lookupReferralCode(code);
           if (refResult.valid && refResult.userId) {
+            if (user && refResult.userId === user.uid) {
+              setReferralSponsor(null);
+              setPromoBonus(0);
+              setPromoValid(false);
+              setReferralFeedback('নিজের রেফারেল কোড ব্যবহার করা যাবে না।');
+              return;
+            }
+
             setReferralSponsor({
               userId: refResult.userId,
               name: refResult.name || 'রেফারার পার্টনার',
@@ -155,7 +179,7 @@ export default function ResellerApplication() {
             });
             setPromoBonus(50);
             setPromoValid(true);
-            setReferralFeedback(`সঠিক রেফারেল কোড (${refResult.name || 'রেফারার'})! অ্যাকাউন্ট খোলার সাথে সাথেই ওয়ালেটে ৫০ টাকা বোনাস যোগ হবে।`);
+            setReferralFeedback(`সঠিক রেফারেল কোড (রেফারার: ${refResult.name || 'রেফারার পার্টনার'})! অ্যাকাউন্ট সফলভাবে তৈরি হলে আপনার ওয়ালেটে ৫০ টাকা বোনাস যোগ হবে।`);
             return;
           }
 
@@ -183,7 +207,7 @@ export default function ResellerApplication() {
             setReferralSponsor(null);
             setPromoBonus(0);
             setPromoValid(false);
-            setReferralFeedback('ভুল রেফারেল কোড। অনুগ্রহ করে সঠিক কোড দিন।');
+            setReferralFeedback('ভুল বা অকার্যকর রেফারেল কোড। অনুগ্রহ করে সঠিক কোড দিন।');
           }
         } catch (error) {
           console.error('[ResellerApplication] Error validating code:', error);
@@ -413,17 +437,18 @@ export default function ResellerApplication() {
           ]);
         }
 
-        // Credit referral bonus to the referrer's reseller wallet
+        // Credit referral bonus: ৳50 to new reseller and ৳200 to referrer (atomic & duplicate-safe)
         if (referralSponsor && referralSponsor.userId) {
           try {
-            await creditReferralBonus(
-              referralSponsor.userId,
-              currentUserId,
-              formData.fullName.trim(),
-              formData.email.trim() || user?.email || ''
-            );
+            await processReferralRewards({
+              referrerId: referralSponsor.userId,
+              newUserId: currentUserId,
+              newUserName: formData.fullName.trim(),
+              newUserEmail: formData.email.trim() || user?.email || '',
+              newUserRole: 'Reseller'
+            });
           } catch (refErr) {
-            console.error('[ResellerApplication] Error crediting referral bonus:', refErr);
+            console.error('[ResellerApplication] Error processing referral rewards:', refErr);
           }
         }
 
@@ -692,11 +717,19 @@ export default function ResellerApplication() {
 
                   {/* Referral / Invite Code */}
                   <div className="space-y-2 pt-2 sm:pt-4 border-t border-slate-100">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    {/* Professional Notification Message */}
+                    <div className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-2.5 sm:p-3 flex items-start gap-2 shadow-2xs">
+                      <span className="text-base sm:text-lg shrink-0 select-none">🎁</span>
+                      <p className="text-xs sm:text-[13px] font-semibold text-amber-950 leading-relaxed">
+                        Referral Code ব্যবহার করে Reseller Account খুলুন এবং সফলভাবে Account তৈরি হলে আপনার Wallet-এ ৫০ টাকা Bonus পান!
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pt-0.5">
                       <label className="block text-xs sm:text-xs md:text-sm font-bold text-slate-700 uppercase tracking-wider">
                         রেফারেল কোড / Referral Code (ঐচ্ছিক)
                       </label>
-                      <span className="text-xs text-primary-main font-semibold">রেফারেল কোড দিলে ৫০ টাকা বোনাস ওয়ালেটে পাবেন</span>
+                      <span className="text-xs text-primary-main font-semibold">সফল রেজিস্ট্রেশনে ৫০ টাকা বোনাস</span>
                     </div>
                     <div className="flex gap-2">
                       <div className="relative flex-1">
@@ -737,7 +770,7 @@ export default function ResellerApplication() {
                     {promoValid === true && (
                       <p className="text-xs sm:text-sm font-semibold text-emerald-600 flex items-center gap-1.5">
                         <CheckCircle className="w-4 h-4 shrink-0 text-emerald-500" />
-                        <span>{referralFeedback || 'সঠিক রেফারেল কোড! একাউন্ট খোলার সাথে সাথেই ওয়ালেটে ৫০ টাকা বোনাস চলে যাবে।'}</span>
+                        <span>{referralFeedback || 'সঠিক রেফারেল কোড! একাউন্ট সফলভাবে তৈরি হলে ওয়ালেটে ৫০ টাকা বোনাস যোগ হবে।'}</span>
                       </p>
                     )}
                     {promoValid === false && formData.inviteCode.length >= 3 && (

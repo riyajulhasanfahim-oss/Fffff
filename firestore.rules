@@ -461,6 +461,14 @@ service cloud.firestore {
       allow write: if isUserAdmin() || isSignedIn();
     }
 
+    match /referral_rewards_log/{logId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /referral_credits/{creditId} {
+      allow read, write: if isSignedIn();
+    }
+
     match /promo_codes/{codeId} {
       allow read: if true;
       allow write: if isUserAdmin() || (isSignedIn() && (resource.data.resellerId == request.auth.uid || request.resource.data.resellerId == request.auth.uid));

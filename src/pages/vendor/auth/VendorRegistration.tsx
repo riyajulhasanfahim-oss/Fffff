@@ -6,8 +6,11 @@ import { auth, db } from '../../../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbUpdate } from '../../../lib/rtdb';
 import { 
   lookupReferralCode, 
+  processReferralRewards,
   creditReferralBonus, 
-  getOrCreateVendorReferralCode 
+  getOrCreateVendorReferralCode,
+  NEW_USER_REFERRAL_BONUS,
+  REFERRAL_BONUS_AMOUNT
 } from '../../../services/resellerReferralService';
 import { 
   Store, ChevronRight, CheckCircle, ArrowLeft, Eye, EyeOff, Copy, Check, 
@@ -120,11 +123,11 @@ export default function VendorRegistration() {
             code: result.code || code
           });
           setReferralValid(true);
-          setReferralFeedback(`সঠিক রেফারেল কোড (${result.name || 'রেফারার পার্টনার'})`);
+          setReferralFeedback(`সঠিক রেফারেল কোড (রেফারার: ${result.name || 'রেফারার পার্টনার'})! একাউন্ট সফলভাবে তৈরি হলে আপনার ওয়ালেটে ৫০ টাকা বোনাস যোগ হবে।`);
         } else {
           setReferralSponsor(null);
           setReferralValid(false);
-          setReferralFeedback('ভুল রেফারেল কোড। অনুগ্রহ করে সঠিক কোড দিন।');
+          setReferralFeedback('ভুল বা অকার্যকর রেফারেল কোড। অনুগ্রহ করে সঠিক কোড দিন।');
         }
       } catch (err) {
         console.warn('Error validating referral code:', err);
@@ -664,16 +667,16 @@ export default function VendorRegistration() {
           }).catch(() => {});
         } catch (_) {}
 
-        // Credit referral bonus to the referrer's wallet
+        // Credit referral bonus: ৳50 to new vendor and ৳200 to referrer (atomic & duplicate-safe)
         if (referralSponsor && referralSponsor.userId) {
           try {
-            await creditReferralBonus(
-              referralSponsor.userId,
-              currentUserId,
-              formData.ownerName.trim(),
-              formData.email.trim() || user?.email || '',
-              'Vendor'
-            );
+            await processReferralRewards({
+              referrerId: referralSponsor.userId,
+              newUserId: currentUserId,
+              newUserName: formData.ownerName.trim(),
+              newUserEmail: formData.email.trim() || user?.email || '',
+              newUserRole: 'Vendor'
+            });
           } catch (refErr) {
             console.error('[VendorRegistration] Error crediting referral bonus:', refErr);
           }
@@ -978,12 +981,20 @@ export default function VendorRegistration() {
               </div>
 
               {/* Referral / Invite Code (Optional) */}
-              <div className="bg-slate-50/80 p-3 sm:p-4 rounded-xl border border-slate-200/80">
-                <div className="flex items-center justify-between mb-1 sm:mb-1.5">
+              <div className="bg-slate-50/90 p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 space-y-2">
+                {/* Professional Notification Message */}
+                <div className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-2.5 sm:p-3 flex items-start gap-2 shadow-2xs">
+                  <span className="text-base sm:text-lg shrink-0 select-none">🎁</span>
+                  <p className="text-xs sm:text-[13px] font-semibold text-amber-950 leading-relaxed">
+                    Referral Code ব্যবহার করে Vendor Account খুলুন এবং সফলভাবে Account তৈরি হলে আপনার Wallet-এ ৫০ টাকা Bonus পান!
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
                   <label className="block text-xs sm:text-xs md:text-sm font-bold text-slate-700 uppercase tracking-wider">
                     রেফারেল / ইনভাইট কোড (ঐচ্ছিক)
                   </label>
-                  <span className="text-[10px] sm:text-xs text-slate-500 font-medium">
+                  <span className="text-[10px] sm:text-xs text-primary-main font-semibold">
                     বন্ধু বা পার্টনারের কোড
                   </span>
                 </div>
@@ -994,8 +1005,8 @@ export default function VendorRegistration() {
                     value={inviteCode} 
                     onChange={(e) => setInviteCode(e.target.value.toUpperCase())} 
                     className={`w-full px-3 sm:px-4 py-2 sm:py-2.5 md:py-3 text-xs sm:text-sm font-mono uppercase bg-white border rounded-lg sm:rounded-xl focus:ring-2 outline-none transition-all placeholder:text-slate-400 ${
-                      referralValid === true ? 'border-emerald-500 focus:ring-emerald-500/20' :
-                      referralValid === false ? 'border-rose-400 focus:ring-rose-400/20' :
+                      referralValid === true ? 'border-emerald-500 focus:ring-emerald-500/20 bg-emerald-50/30' :
+                      referralValid === false ? 'border-rose-400 focus:ring-rose-400/20 bg-rose-50/30' :
                       'border-slate-200 focus:border-primary-main focus:ring-primary-main/20'
                     }`}
                     placeholder="রেফারেল কোড দিন (যেমন: V8A9F1)" 
@@ -1008,8 +1019,8 @@ export default function VendorRegistration() {
                   )}
                 </div>
                 {referralFeedback && (
-                  <p className={`text-[11px] mt-1.5 font-medium ${referralValid === true ? 'text-emerald-700' : 'text-rose-600'}`}>
-                    {referralFeedback}
+                  <p className={`text-[11px] sm:text-xs mt-1.5 font-medium flex items-center gap-1 ${referralValid === true ? 'text-emerald-700' : 'text-rose-600'}`}>
+                    <span>{referralFeedback}</span>
                   </p>
                 )}
               </div>

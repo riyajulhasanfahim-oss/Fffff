@@ -107,13 +107,21 @@ export default function UserReferralModal({ onClose }: UserReferralModalProps) {
         </button>
         
         <div className="text-center mb-6">
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Invite & Earn</h2>
-          <p className="text-sm text-slate-500">
-            Earn ৳10 commission for every ৳1000 product value your friends purchase.
+          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mb-1.5">Invite & Earn (রেফারেল প্রোগ্রাম)</h2>
+          <p className="text-xs sm:text-sm text-slate-600 max-w-sm mx-auto leading-relaxed">
+            🎁 আপনার বন্ধুদের Referral Code দিয়ে Account খুলতে আমন্ত্রণ করুন। সফলভাবে Vendor বা Reseller Account তৈরি হলে আপনি ২০০ টাকা Referral Bonus পাবেন।
           </p>
-          <div className="mt-4 bg-primary-main/10 text-primary-main rounded-xl p-3 inline-block">
-            <p className="text-xs font-bold uppercase tracking-wide">Wallet Balance</p>
-            <p className="text-xl font-black">৳{walletBalance.toFixed(2)}</p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <div className="bg-amber-50 border border-amber-200 text-amber-950 rounded-xl px-3 py-1.5 text-xs font-bold">
+              💰 Referral Bonus: ২০০ টাকা
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl px-3 py-1.5 text-xs font-bold">
+              💸 Bonus Wallet-এ যোগ হওয়ার পর Withdraw করা যাবে।
+            </div>
+          </div>
+          <div className="mt-3 bg-primary-main/10 text-primary-main rounded-xl p-2.5 inline-block">
+            <p className="text-[11px] font-bold uppercase tracking-wide">Wallet Balance</p>
+            <p className="text-lg font-black">৳{walletBalance.toFixed(2)}</p>
           </div>
         </div>
 

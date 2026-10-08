@@ -12,8 +12,11 @@ import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbTransaction } from '../lib/
 import { executeResellerWalletTransaction } from './resellerWalletService';
 import { ResellerTransactionType } from '../types/resellerWallet';
 import { getOrCreateVendorWallet } from './vendorPayoutService';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 
-export const REFERRAL_BONUS_AMOUNT = 200;
+export const REFERRAL_BONUS_AMOUNT = 200; // Referrer gets ৳200
+export const NEW_USER_REFERRAL_BONUS = 50; // New user gets ৳50
 
 export interface ReferralCodeInfo {
   code: string;
@@ -251,6 +254,22 @@ export async function lookupReferralCode(rawCode: string): Promise<ReferrerLooku
       }
     }
 
+    // 6. Check Firestore referral_codes
+    try {
+      const fsSnap = await getDoc(doc(db, 'referral_codes', cleanCode)).catch(() => null);
+      if (fsSnap && fsSnap.exists()) {
+        const d = fsSnap.data();
+        if (d && (d.userId || d.resellerId || d.vendorId)) {
+          return {
+            valid: true,
+            userId: d.userId || d.resellerId || d.vendorId,
+            name: d.resellerName || d.vendorName || d.name || 'রেফারার পার্টনার',
+            code: cleanCode
+          };
+        }
+      }
+    } catch (_) {}
+
     return { valid: false };
   } catch (error) {
     console.error('[ReferralService] Error looking up referral code:', error);
@@ -258,40 +277,142 @@ export async function lookupReferralCode(rawCode: string): Promise<ReferrerLooku
   }
 }
 
+export interface ProcessReferralParams {
+  referrerId: string;
+  newUserId: string;
+  newUserName: string;
+  newUserEmail?: string;
+  newUserRole: 'Reseller' | 'Vendor';
+}
+
+export interface ProcessReferralResult {
+  success: boolean;
+  newUserBonus: number;
+  referrerBonus: number;
+  message: string;
+  alreadyProcessed?: boolean;
+}
+
 /**
- * Credits ৳200 referral bonus to the referrer's wallet upon verified user/reseller/vendor registration.
- * Fully atomic and idempotent to prevent duplicate payouts.
- * Works seamlessly whether the referrer is a Reseller or a Vendor.
+ * Atomically processes both referral bonuses upon verified Vendor or Reseller account creation:
+ * 1. Exactly ৳50 credited to the new registrant's wallet.
+ * 2. Exactly ৳200 credited to the referrer's wallet.
+ * Fully idempotent: prevents any duplicate bonus from page refreshes, retries, or re-registrations.
+ * Both RTDB and Firestore ledger records are maintained.
  */
-export async function creditReferralBonus(
-  referrerId: string,
-  newUserId: string,
-  newUserName: string,
-  newUserEmail?: string,
-  newUserRole: 'Reseller' | 'Vendor' = 'Reseller'
-): Promise<{ success: boolean; amount: number; message: string }> {
+export async function processReferralRewards(
+  params: ProcessReferralParams
+): Promise<ProcessReferralResult> {
+  const { referrerId, newUserId, newUserName, newUserEmail, newUserRole } = params;
+
   if (!referrerId || !newUserId) {
-    return { success: false, amount: 0, message: 'Invalid referrer or user ID' };
+    return { success: false, newUserBonus: 0, referrerBonus: 0, message: 'Invalid referrer or user ID' };
   }
 
   if (referrerId === newUserId) {
-    return { success: false, amount: 0, message: 'Cannot refer oneself' };
+    return { success: false, newUserBonus: 0, referrerBonus: 0, message: 'Cannot refer oneself' };
   }
 
   const recordPath = `referrals/${referrerId}/${newUserId}`;
+  const logPath = `referral_rewards_log/${newUserId}`;
   const now = Date.now();
 
   try {
-    // 1. Idempotency Check: check if already credited
-    const existing = await rtdbGet<any>(recordPath);
-    if (existing && existing.status === 'Completed') {
-      console.warn(`[ReferralService] Referral ${newUserId} already credited for ${referrerId}`);
-      return { success: true, amount: REFERRAL_BONUS_AMOUNT, message: 'Already credited' };
+    // 1. Idempotency Check: check if already credited across RTDB or Firestore
+    const [existingReferral, existingLog] = await Promise.all([
+      rtdbGet<any>(recordPath).catch(() => null),
+      rtdbGet<any>(logPath).catch(() => null)
+    ]);
+
+    if (
+      (existingReferral && existingReferral.status === 'Completed') ||
+      (existingLog && existingLog.status === 'Completed')
+    ) {
+      console.warn(`[ReferralService] Referral for new user ${newUserId} already processed.`);
+      return {
+        success: true,
+        newUserBonus: NEW_USER_REFERRAL_BONUS,
+        referrerBonus: REFERRAL_BONUS_AMOUNT,
+        message: 'ইতিমধ্যে রেফারেল বোনাস প্রদান করা হয়েছে।',
+        alreadyProcessed: true
+      };
     }
 
-    const bonusAmount = REFERRAL_BONUS_AMOUNT; // exactly ৳200
+    // Set immediate lock to avoid race conditions
+    await rtdbSet(logPath, {
+      status: 'Processing',
+      newUserId,
+      referrerId,
+      newUserRole,
+      createdAt: now
+    }).catch(() => {});
 
-    // 2. Determine if referrer is a Vendor or a Reseller
+    // 2. CREDIT ৳50 TO NEW USER'S WALLET
+    if (newUserRole === 'Vendor') {
+      const vendorWallet = await getOrCreateVendorWallet(newUserId);
+      const prevBal = Number(vendorWallet?.balance || 0);
+      const prevLifetime = Number(vendorWallet?.lifetimeEarnings || 0);
+
+      await rtdbUpdate(`vendor_wallet/${newUserId}`, {
+        balance: prevBal + NEW_USER_REFERRAL_BONUS,
+        lifetimeEarnings: prevLifetime + NEW_USER_REFERRAL_BONUS,
+        updatedAt: now
+      });
+
+      await rtdbPush('wallet_transactions', {
+        vendorId: newUserId,
+        orderId: `BONUS-${newUserId.substring(0, 8)}`,
+        type: 'Bonus',
+        amount: NEW_USER_REFERRAL_BONUS,
+        status: 'Completed',
+        description: '🎁 রেফারেল কোড ব্যবহারের জন্য একাউন্ট খোলার বোনাস (৳৫০)',
+        createdAt: now,
+        isReferral: true
+      });
+
+      await rtdbUpdate(`users/${newUserId}`, {
+        walletBalance: prevBal + NEW_USER_REFERRAL_BONUS,
+        referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+        updatedAt: now
+      }).catch(() => {});
+    } else {
+      // Reseller gets ৳50 in reseller wallet
+      await executeResellerWalletTransaction({
+        resellerId: newUserId,
+        userId: newUserId,
+        orderId: `BONUS-${newUserId.substring(0, 8)}`,
+        amount: NEW_USER_REFERRAL_BONUS,
+        type: ResellerTransactionType.PROFIT_RELEASED,
+        status: 'Approved',
+        description: '🎁 রেফারেল কোড ব্যবহারের জন্য একাউন্ট খোলার বোনাস (৳৫০)',
+        idempotencyKey: `signup_ref_bonus_${newUserId}`,
+        metadata: {
+          bonusType: 'reseller_referral_signup',
+          newUserId,
+          referrerId
+        }
+      });
+
+      await rtdbPush('reseller_transactions', {
+        resellerId: newUserId,
+        orderId: `BONUS-${newUserId.substring(0, 8)}`,
+        customerName: newUserName,
+        productName: 'রেফারেল বোনাস (অ্যাকাউন্ট খোলার পুরষ্কার)',
+        amount: NEW_USER_REFERRAL_BONUS,
+        status: 'Approved',
+        createdAt: now,
+        isReferral: true
+      });
+
+      await rtdbUpdate(`users/${newUserId}`, {
+        walletBalance: NEW_USER_REFERRAL_BONUS,
+        resellerBalance: NEW_USER_REFERRAL_BONUS,
+        referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+        updatedAt: now
+      }).catch(() => {});
+    }
+
+    // 3. CREDIT ৳200 TO REFERRER'S WALLET
     const [refVendor, refUser] = await Promise.all([
       rtdbGet<any>(`vendors/${referrerId}`).catch(() => null),
       rtdbGet<any>(`users/${referrerId}`).catch(() => null)
@@ -305,19 +426,18 @@ export async function creditReferralBonus(
       const prevLifetime = Number(currentWallet?.lifetimeEarnings || 0);
 
       await rtdbUpdate(`vendor_wallet/${referrerId}`, {
-        balance: prevBal + bonusAmount,
-        lifetimeEarnings: prevLifetime + bonusAmount,
+        balance: prevBal + REFERRAL_BONUS_AMOUNT,
+        lifetimeEarnings: prevLifetime + REFERRAL_BONUS_AMOUNT,
         updatedAt: now
       });
 
-      // Add to wallet_transactions for immediate UI visibility in Vendor Wallet
       await rtdbPush('wallet_transactions', {
         vendorId: referrerId,
-        orderId: `REF-${newUserId}`,
+        orderId: `REF-${newUserId.substring(0, 8)}`,
         type: 'Bonus',
-        amount: bonusAmount,
+        amount: REFERRAL_BONUS_AMOUNT,
         status: 'Completed',
-        description: `${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস (${newUserName})`,
+        description: `🎁 ${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস (${newUserName})`,
         createdAt: now,
         isReferral: true
       });
@@ -326,44 +446,46 @@ export async function creditReferralBonus(
       await executeResellerWalletTransaction({
         resellerId: referrerId,
         userId: referrerId,
-        orderId: `REF-${newUserId}`,
-        amount: bonusAmount,
+        orderId: `REF-${newUserId.substring(0, 8)}`,
+        amount: REFERRAL_BONUS_AMOUNT,
         type: ResellerTransactionType.PROFIT_RELEASED,
         status: 'Approved',
-        description: `${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস (${newUserName})`,
+        description: `🎁 ${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস (${newUserName})`,
+        idempotencyKey: `referrer_bonus_${newUserId}`,
         metadata: {
           newUserId,
           newUserName,
-          bonusType: 'referral_bonus'
+          newUserRole
         }
       });
 
-      // Also push directly to reseller_transactions for immediate UI visibility
       await rtdbPush('reseller_transactions', {
         resellerId: referrerId,
-        orderId: `REF-${newUserId}`,
+        orderId: `REF-${newUserId.substring(0, 8)}`,
         customerName: newUserName,
         productName: `${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস`,
-        amount: bonusAmount,
+        amount: REFERRAL_BONUS_AMOUNT,
         status: 'Approved',
         createdAt: now,
         isReferral: true
       });
     }
 
-    // 3. Update referral tracking record in common referrals/ node
-    await rtdbSet(recordPath, {
+    // 4. Update referral tracking record in RTDB referrals/
+    const trackingRecord = {
       id: newUserId,
       referredUserId: newUserId,
       referredName: newUserName,
       referredEmail: newUserEmail || '',
-      bonusAmount,
+      bonusAmount: REFERRAL_BONUS_AMOUNT,
+      newUserBonus: NEW_USER_REFERRAL_BONUS,
       status: 'Completed',
       userRole: newUserRole,
       createdAt: now
-    });
+    };
+    await rtdbSet(recordPath, trackingRecord);
 
-    // 4. Update referrer's referral stats atomically
+    // 5. Update referrer's referral stats atomically in RTDB
     await rtdbTransaction(`referral_stats/${referrerId}`, (curr) => {
       const prevCount = Number(curr?.totalReferrals || 0);
       const prevEarnings = Number(curr?.totalEarnings || 0);
@@ -372,26 +494,89 @@ export async function creditReferralBonus(
 
       return {
         totalReferrals: prevCount + 1,
-        totalEarnings: prevEarnings + bonusAmount,
+        totalEarnings: prevEarnings + REFERRAL_BONUS_AMOUNT,
         activeResellers: newUserRole === 'Reseller' ? prevActiveResellers + 1 : prevActiveResellers,
         activeVendors: newUserRole === 'Vendor' ? prevActiveVendors + 1 : prevActiveVendors,
         updatedAt: now
       };
     });
 
+    // 6. Complete the log record in RTDB
+    await rtdbSet(logPath, {
+      ...trackingRecord,
+      referrerId,
+      status: 'Completed'
+    });
+
+    // 7. Dual-persist to Firestore for secure backup & ledger compliance
+    try {
+      await Promise.allSettled([
+        setDoc(doc(db, 'referral_rewards_log', newUserId), {
+          id: newUserId,
+          newUserId,
+          referrerId,
+          newUserName,
+          newUserEmail: newUserEmail || '',
+          newUserRole,
+          newUserBonus: NEW_USER_REFERRAL_BONUS,
+          referrerBonus: REFERRAL_BONUS_AMOUNT,
+          status: 'Completed',
+          createdAt: now
+        }, { merge: true }),
+        setDoc(doc(db, 'referral_credits', newUserId), {
+          id: newUserId,
+          newUserId,
+          referrerId,
+          newUserRole,
+          amount: NEW_USER_REFERRAL_BONUS,
+          referrerAmount: REFERRAL_BONUS_AMOUNT,
+          status: 'Completed',
+          createdAt: now
+        }, { merge: true })
+      ]);
+    } catch (fsErr) {
+      console.warn('[ReferralService] Firestore persistence warning:', fsErr);
+    }
+
     return {
       success: true,
-      amount: bonusAmount,
-      message: `৳${bonusAmount} রেফারেল বোনাস সফলভাবে ওয়ালেটে যোগ করা হয়েছে`
+      newUserBonus: NEW_USER_REFERRAL_BONUS,
+      referrerBonus: REFERRAL_BONUS_AMOUNT,
+      message: `রেফারেল বোনাস সফলভাবে ওয়ালেটে যোগ করা হয়েছে (নতুন একাউন্টে ৳${NEW_USER_REFERRAL_BONUS} এবং রেফারারের ওয়ালেটে ৳${REFERRAL_BONUS_AMOUNT})`
     };
   } catch (error) {
-    console.error('[ReferralService] Error crediting referral bonus:', error);
+    console.error('[ReferralService] Error processing referral rewards:', error);
     return {
       success: false,
-      amount: 0,
-      message: 'Failed to credit referral bonus: ' + String(error)
+      newUserBonus: 0,
+      referrerBonus: 0,
+      message: 'Failed to process referral rewards: ' + String(error)
     };
   }
+}
+
+/**
+ * Backward compatibility wrapper for creditReferralBonus.
+ */
+export async function creditReferralBonus(
+  referrerId: string,
+  newUserId: string,
+  newUserName: string,
+  newUserEmail?: string,
+  newUserRole: 'Reseller' | 'Vendor' = 'Reseller'
+): Promise<{ success: boolean; amount: number; message: string }> {
+  const res = await processReferralRewards({
+    referrerId,
+    newUserId,
+    newUserName,
+    newUserEmail,
+    newUserRole
+  });
+  return {
+    success: res.success,
+    amount: res.referrerBonus,
+    message: res.message
+  };
 }
 
 /**

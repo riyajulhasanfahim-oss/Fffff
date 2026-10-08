@@ -156,14 +156,22 @@ export default function VendorReferral() {
             <div className="max-w-2xl">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md text-sky-200 text-xs font-bold mb-2.5 border border-white/15">
                 <Gift className="w-3.5 h-3.5 text-amber-300" />
-                <span>প্রতি সফল রেফারেল-এ নিশ্চিত ২০০ টাকা বোনাস</span>
+                <span>সফল রেজিস্ট্রেশনে নিশ্চিত ২০০ টাকা বোনাস</span>
               </div>
               <h1 className="text-xl sm:text-2xl md:text-3xl font-black tracking-tight text-white">
                 ভেন্ডর রেফারেল ও ইনভাইট প্রোগ্রাম (Refer & Earn)
               </h1>
-              <p className="mt-1.5 text-xs sm:text-sm text-slate-300 leading-relaxed">
-                আপনার রেফারেল লিংক বা কোড দিয়ে নতুন কেউ জয়েন করলেই সাথে সাথে আপনার ভেন্ডর ওয়ালেটে <strong className="text-amber-300 font-black">৳{REFERRAL_BONUS_AMOUNT}</strong> যোগ হয়ে যাবে।
+              <p className="mt-2 text-xs sm:text-sm text-slate-200 leading-relaxed font-medium">
+                🎁 আপনার বন্ধুদের Referral Code দিয়ে Account খুলতে আমন্ত্রণ করুন। সফলভাবে Vendor বা Reseller Account তৈরি হলে আপনি ২০০ টাকা Referral Bonus পাবেন।
               </p>
+              <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 font-semibold">
+                  💸 Bonus Wallet-এ যোগ হওয়ার পর Withdraw করা যাবে।
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-300 border border-white/10 text-[11px]">
+                  *শুধু সফলভাবে Vendor বা Reseller Account তৈরি হলেই ২০০ টাকা Bonus দেওয়া হবে।
+                </span>
+              </div>
             </div>
 
             <div className="shrink-0 bg-white/10 backdrop-blur-md border border-white/15 p-3.5 sm:p-4 rounded-2xl flex items-center gap-3">
@@ -171,8 +179,9 @@ export default function VendorReferral() {
                 <Award className="w-6 h-6 text-amber-400" />
               </div>
               <div>
-                <p className="text-[11px] text-slate-300 font-semibold uppercase tracking-wider">রেফারেল বোনাস রেট</p>
-                <p className="text-xl sm:text-2xl font-black text-amber-300 font-mono">৳{REFERRAL_BONUS_AMOUNT} / জন</p>
+                <p className="text-[11px] text-slate-300 font-semibold uppercase tracking-wider">💰 Referral Bonus</p>
+                <p className="text-xl sm:text-2xl font-black text-amber-300 font-mono">২০০ টাকা</p>
+                <p className="text-[10px] text-emerald-300 font-medium mt-0.5">ওয়ালেটে যোগ হবে</p>
               </div>
             </div>
           </div>
@@ -393,9 +402,9 @@ export default function VendorReferral() {
                 ১
               </div>
               <div>
-                <h3 className="text-xs font-bold text-slate-900 mb-0.5">লিংক বা কোড পাঠান</h3>
+                <h3 className="text-xs font-bold text-slate-900 mb-0.5">আমন্ত্রণ জানান</h3>
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  আপনার রেফারেল কোড বা লিংকটি মেসেঞ্জার, হোয়াটসঅ্যাপ বা ফেসবুকে বন্ধুদের দিন।
+                  আপনার বন্ধুদের Referral Code দিয়ে Account খুলতে আমন্ত্রণ জানান।
                 </p>
               </div>
             </div>
@@ -405,9 +414,9 @@ export default function VendorReferral() {
                 ২
               </div>
               <div>
-                <h3 className="text-xs font-bold text-slate-900 mb-0.5">মার্চেন্ট অ্যাকাউন্ট চালু</h3>
+                <h3 className="text-xs font-bold text-slate-900 mb-0.5">সফল অ্যাকাউন্ট তৈরি</h3>
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  আপনার বন্ধু রেফারেল কোড ব্যবহার করে ভেন্ডর রেজিস্ট্রেশন সম্পন্ন করবে।
+                  আপনার বন্ধু রেফারেল কোড ব্যবহার করে সফলভাবে Vendor বা Reseller Account তৈরি করবে। শুধু সফলভাবে রেজিস্ট্রেশন সম্পন্ন হলেই বোনাস প্রযোজ্য।
                 </p>
               </div>
             </div>
@@ -417,9 +426,9 @@ export default function VendorReferral() {
                 ৩
               </div>
               <div>
-                <h3 className="text-xs font-bold text-emerald-950 mb-0.5">ইন্সট্যান্ট ৳২০০ লাভ</h3>
+                <h3 className="text-xs font-bold text-emerald-950 mb-0.5">💰 Referral Bonus: ২০০ টাকা</h3>
                 <p className="text-[11px] text-emerald-800 leading-relaxed">
-                  রেজিস্ট্রেশন সম্পূর্ণ হওয়ার সাথে সাথেই আপনার ভেন্ডর ওয়ালেটে ২০০ টাকা যোগ হয়ে যাবে।
+                  সফলভাবে Vendor বা Reseller Account তৈরি হলে আপনি ২০০ টাকা Referral Bonus পাবেন। 💸 Bonus Wallet-এ যোগ হওয়ার পর Withdraw করা যাবে।
                 </p>
               </div>
             </div>
