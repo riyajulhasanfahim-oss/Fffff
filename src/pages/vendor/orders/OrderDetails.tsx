@@ -8,7 +8,8 @@ import {
   ArrowLeft, Clock, CheckCircle, Package, Truck, CheckCircle2, 
   XCircle, User, MapPin, CreditCard, Download, FileText, Printer,
   RefreshCcw, Check, X, ExternalLink, ShieldCheck, ShieldAlert, DollarSign, AlertCircle,
-  Phone, Building2, Compass, Home, Info, AlertTriangle, Copy, Lock, Calendar, RotateCcw
+  Phone, Building2, Compass, Home, Info, AlertTriangle, Copy, Lock, Calendar, RotateCcw,
+  ChevronDown
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { 
@@ -208,6 +209,7 @@ export default function OrderDetails() {
   const [vendorWalletBalances, setVendorWalletBalances] = useState<VendorWalletBalances | null>(null);
   const [isCheckingBalance, setIsCheckingBalance] = useState(false);
   const [isConfirmingResellerOrder, setIsConfirmingResellerOrder] = useState(false);
+  const [showResellerItemBreakdown, setShowResellerItemBreakdown] = useState(false);
 
   // Step 8: Reseller Order Return / Failed Delivery Reporting States
   const [showReturnModal, setShowReturnModal] = useState(false);
@@ -1622,213 +1624,168 @@ export default function OrderDetails() {
 
         {/* Reseller Order Breakdown & Vendor Wallet Reserve Status Panel */}
         {Boolean(order.isResellerOrder || order.resellerId || order.profitStatus) && (
-          <div className="bg-purple-50/70 border border-purple-200/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-purple-100 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold shadow-xs">
-                  <Package className="w-5 h-5" />
+          <div className="bg-purple-50/70 border border-purple-200/80 rounded-2xl p-3.5 sm:p-4 shadow-xs space-y-3">
+            {/* Top row: Reseller info & Profit required */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-purple-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-purple-600 text-white flex items-center justify-center font-bold shadow-xs shrink-0">
+                  <Package className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm sm:text-base font-bold text-purple-950">রিসেলার অর্ডার বিবরণ (Reseller Order Details)</h3>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-200/80 text-purple-800 uppercase tracking-wide">
-                      Profit: {order.profitStatus || 'PENDING'}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xs sm:text-sm font-bold text-purple-950">রিসেলার অর্ডার</h3>
+                    {order.resellerId && (
+                      <span className="text-[11px] font-mono text-purple-800 bg-purple-100 px-1.5 py-0.5 rounded border border-purple-200/60">
+                        ID: {order.resellerId}
+                      </span>
+                    )}
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      order.profitStatus === 'LOCKED' || order.vendorOrderStatus === 'CONFIRMED'
+                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                        : order.profitStatus === 'RELEASED'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                        : 'bg-purple-100 text-purple-800 border border-purple-200'
+                    }`}>
+                      {order.profitStatus === 'LOCKED' || order.vendorOrderStatus === 'CONFIRMED' ? 'প্রফিট লকড' : order.profitStatus === 'RELEASED' ? 'রিলিজড' : 'পেন্ডিং'}
                     </span>
                   </div>
-                  <p className="text-xs text-purple-700">
-                    রিসেলার আইডি (Reseller ID): <span className="font-mono font-bold text-purple-900">{order.resellerId || 'N/A'}</span>
-                  </p>
                 </div>
               </div>
 
-              <div className="text-right">
-                <span className="text-xs text-purple-800 font-bold block tracking-wide">Reseller Profit Reserve Required</span>
-                <span className="text-base sm:text-2xl font-black text-purple-900">
+              <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-xl border border-purple-100 shadow-2xs text-right">
+                <span className="text-xs text-purple-800 font-semibold">রিসেলার প্রফিট:</span>
+                <span className="text-sm sm:text-base font-black text-purple-900">
                   ৳{Number(order.resellerProfit ?? order.priceSnapshot?.resellerProfit ?? 0).toLocaleString('bn-BD')}
                 </span>
               </div>
             </div>
 
-            {/* Vendor Wallet Balance Statistics - Available, Locked, Total Balance (Distinctly Separated) */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 bg-white/90 p-3 rounded-xl border border-purple-100 shadow-2xs">
-              <div className="px-3 py-2 rounded-lg bg-emerald-50/70 border border-emerald-100">
-                <span className="text-[11px] font-semibold text-emerald-800 block">আপনার Available Balance</span>
-                <span className="text-base font-extrabold text-emerald-950">
+            {/* Vendor Wallet Balance Statistics - Compact single row */}
+            <div className="grid grid-cols-3 gap-2 bg-white p-2 sm:p-2.5 rounded-xl border border-purple-100 shadow-2xs text-center text-xs">
+              <div className="px-1 py-0.5">
+                <span className="text-[10px] sm:text-[11px] font-semibold text-emerald-800 block">Available</span>
+                <span className="text-xs sm:text-sm font-extrabold text-emerald-950">
                   ৳{Number(vendorWalletBalances?.availableBalance ?? 0).toLocaleString('bn-BD')}
                 </span>
               </div>
 
-              <div className="px-3 py-2 rounded-lg bg-amber-50/70 border border-amber-100">
-                <span className="text-[11px] font-semibold text-amber-800 block">লকড ব্যালেন্স (Locked Balance)</span>
-                <span className="text-base font-extrabold text-amber-950">
+              <div className="px-1 py-0.5 border-x border-purple-100">
+                <span className="text-[10px] sm:text-[11px] font-semibold text-amber-800 block">Locked</span>
+                <span className="text-xs sm:text-sm font-extrabold text-amber-950">
                   ৳{Number(vendorWalletBalances?.lockedBalance ?? 0).toLocaleString('bn-BD')}
                 </span>
               </div>
 
-              <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200/70">
-                <span className="text-[11px] font-semibold text-slate-700 block">মোট ব্যালেন্স (Total Balance)</span>
-                <span className="text-base font-extrabold text-slate-900">
+              <div className="px-1 py-0.5">
+                <span className="text-[10px] sm:text-[11px] font-semibold text-slate-700 block">Total</span>
+                <span className="text-xs sm:text-sm font-extrabold text-slate-900">
                   ৳{Number(vendorWalletBalances?.totalBalance ?? 0).toLocaleString('bn-BD')}
                 </span>
               </div>
             </div>
 
-            {/* If Profit is LOCKED / Order is CONFIRMED by Vendor */}
-            {(order.profitStatus === 'LOCKED' || order.vendorOrderStatus === 'CONFIRMED') && (
-              <div className="p-4 bg-purple-100/70 border border-purple-300 rounded-xl text-xs text-purple-950 flex items-start gap-3 shadow-2xs">
-                <ShieldCheck className="w-5 h-5 text-purple-700 shrink-0 mt-0.5" />
-                <div className="flex-1 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-bold text-purple-950 text-sm">রিসেলার প্রফিট লকড (Reseller Profit Locked)</span>
-                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-purple-200 text-purple-900 uppercase">
-                      vendorOrderStatus: {order.vendorOrderStatus || 'CONFIRMED'}
-                    </span>
-                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-purple-200 text-purple-900 uppercase">
-                      profitStatus: {order.profitStatus || 'LOCKED'}
-                    </span>
-                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-purple-200 text-purple-900 uppercase">
-                      settlementStatus: {order.settlementStatus || 'LOCKED'}
-                    </span>
-                  </div>
-                  <p className="text-purple-800 leading-relaxed font-medium">
-                    অর্ডার কনফার্ম করার সময় প্রয়োজনীয় রিসেলার প্রফিট (<strong>৳{Number(order.lockedProfitAmount ?? order.resellerProfit ?? 0).toLocaleString('bn-BD')}</strong>) আপনার Available Balance থেকে <strong>Locked Balance</strong>-এ সিকিউরিটি হিসেবে স্থানান্তর করা হয়েছে।
-                    {order.paymentMethod?.toLowerCase() === 'cod' && ' (COD অর্ডারের ক্ষেত্রে প্ল্যাটফর্ম কোনো পেমেন্ট সংগ্রহ করে না; ভেন্ডর ওয়ালেটের এই লকড রিজার্ভই রিসেলার প্রফিটের নিরাপত্তা হিসেবে সংরক্ষিত রয়েছে।)'}
-                  </p>
-                  {order.lockTransactionId && (
-                    <div className="text-[11px] font-mono text-purple-800/80 pt-0.5">
-                      Transaction ID: <span className="font-bold text-purple-950">{order.lockTransactionId}</span>
-                    </div>
-                  )}
-
-                  {/* Step 8: Return / Failed Delivery Status or Action */}
-                  <div className="pt-2 border-t border-purple-200/80 mt-2 flex flex-wrap items-center justify-between gap-2">
-                    {existingReturnRequest ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-purple-950">Return Request:</span>
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold tracking-wide uppercase ${
-                          existingReturnRequest.returnStatus === 'PENDING_ADMIN_REVIEW'
-                            ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                            : existingReturnRequest.returnStatus === 'APPROVED'
-                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                            : 'bg-rose-100 text-rose-900 border border-rose-300'
-                        }`}>
-                          {existingReturnRequest.returnStatus.replace(/_/g, ' ')}
-                        </span>
-                        <span className="text-[11px] text-purple-800 truncate max-w-xs">
-                          (কারণ: {existingReturnRequest.reason})
-                        </span>
-                      </div>
-                    ) : (
-                      order.status !== 'Cancelled' && order.status !== 'Returned' && (
-                        <div className="flex items-center justify-between w-full">
-                          <span className="text-xs text-purple-900 font-medium">
-                            {order.profitStatus === 'RELEASED'
-                              ? 'পণ্য কাস্টমার পরে ফেরত দিলে বা রিফান্ড চাইলে প্রফিট রিভার্সাল রিকুয়েস্ট করুন:'
-                              : 'পণ্য কাস্টমার ফেরত দিলে অথবা ডেলিভারি ফেইল্ড হলে রিপোর্ট করুন:'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setShowReturnModal(true)}
-                            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            {order.profitStatus === 'RELEASED' ? 'Request Reversal' : 'Report Return'}
-                          </button>
-                        </div>
-                      )
-                    )}
-                  </div>
+            {/* Compact Status Notice */}
+            {(order.profitStatus === 'LOCKED' || order.vendorOrderStatus === 'CONFIRMED') ? (
+              <div className="p-2.5 bg-purple-100/70 border border-purple-200 rounded-xl text-xs text-purple-950 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-purple-700 shrink-0" />
+                  <span className="font-medium">
+                    রিসেলার প্রফিট (<strong>৳{Number(order.lockedProfitAmount ?? order.resellerProfit ?? 0).toLocaleString('bn-BD')}</strong>) লকড ব্যালেন্সে সংরক্ষিত রয়েছে।
+                  </span>
                 </div>
-              </div>
-            )}
-
-            {/* Dynamic Balance Check Feedback Banner */}
-            {resellerEligibility && order.status === 'Pending' && order.profitStatus !== 'LOCKED' && order.vendorOrderStatus !== 'CONFIRMED' && (
-              <div>
-                {resellerEligibility.isBalanceSufficient ? (
-                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-start gap-2.5 shadow-2xs">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-                    <div className="flex-1">
-                      <div className="font-bold text-emerald-950 text-sm mb-0.5">
-                        পর্যাপ্ত ওয়ালেট ব্যালেন্স (Available Balance Sufficient)
-                      </div>
-                      <p className="text-emerald-800 leading-relaxed">
-                        আপনার ওয়ালেটে পর্যাপ্ত availableBalance রয়েছে (৳{resellerEligibility.availableBalance}) যা প্রয়োজনীয় Reseller Profit Reserve (৳{resellerEligibility.requiredResellerProfit})-এর সমান বা বেশি। আপনি এখন অর্ডারটি কনফার্ম করতে পারেন।
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-2xs">
-                    <div className="flex items-start gap-2.5">
-                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                      <div>
-                        <div className="font-bold text-amber-950 text-sm mb-1">
-                          Reseller profit reserve করার জন্য Vendor-এর wallet balance যথেষ্ট নয়
-                        </div>
-                        <p className="text-amber-800 font-medium">
-                          Reseller Profit Reserve Required: <span className="font-bold text-purple-900">৳{resellerEligibility.requiredResellerProfit}</span> | আপনার Available Balance: <span className="font-bold text-slate-900">৳{resellerEligibility.availableBalance}</span> | বর্তমান ঘাটতি: <span className="font-bold text-red-600">৳{resellerEligibility.shortfall}</span>
-                        </p>
-                        <p className="text-[11px] text-amber-700 mt-1">
-                          অর্ডারটি কনফার্ম করতে অনুগ্রহ করে নিচের <strong>Deposit</strong> অপশন ব্যবহার করুন।
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleOpenDepositFlow}
-                      className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
-                    >
-                      <CreditCard className="w-4 h-4" />
-                      <span>Deposit</span>
-                    </button>
+                {order.lockTransactionId && (
+                  <span className="text-[10px] font-mono text-purple-800/80 bg-purple-200/60 px-2 py-0.5 rounded">
+                    Tx: {order.lockTransactionId}
+                  </span>
+                )}
+                {existingReturnRequest && (
+                  <div className="w-full flex items-center gap-2 pt-1 border-t border-purple-200/80 text-[11px]">
+                    <span className="font-semibold text-purple-950">রিটার্ন রিকোয়েস্ট:</span>
+                    <span className={`px-2 py-0.5 rounded-full font-bold uppercase text-[10px] ${
+                      existingReturnRequest.returnStatus === 'PENDING_ADMIN_REVIEW'
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                        : existingReturnRequest.returnStatus === 'APPROVED'
+                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                        : 'bg-rose-100 text-rose-900 border border-rose-300'
+                    }`}>
+                      {existingReturnRequest.returnStatus.replace(/_/g, ' ')}
+                    </span>
+                    {existingReturnRequest.reason && (
+                      <span className="text-purple-800 truncate">({existingReturnRequest.reason})</span>
+                    )}
                   </div>
                 )}
               </div>
-            )}
+            ) : resellerEligibility && order.status === 'Pending' ? (
+              resellerEligibility.isBalanceSufficient ? (
+                <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2 shadow-2xs">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="font-medium">
+                    পর্যাপ্ত ওয়ালেট ব্যালেন্স রয়েছে (Available: ৳{resellerEligibility.availableBalance})। আপনি অর্ডারটি কনফার্ম করতে পারেন।
+                  </span>
+                </div>
+              ) : (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>
+                      প্রয়োজনীয় রিসেলার প্রফিট (৳{resellerEligibility.requiredResellerProfit}) এর জন্য ওয়ালেটে <strong>৳{resellerEligibility.shortfall}</strong> ঘাটতি রয়েছে।
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenDepositFlow}
+                    className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Deposit করুন</span>
+                  </button>
+                </div>
+              )
+            ) : null}
 
-            {/* Line items pricing breakdown */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="text-purple-800 border-b border-purple-200 font-semibold bg-purple-100/50">
-                    <th className="px-3 py-2.5 rounded-l-lg">পণ্য (Product)</th>
-                    <th className="px-3 py-2.5 text-center">পরিমাণ (Qty)</th>
-                    <th className="px-3 py-2.5 text-right">ভেন্ডর মূল্য (Vendor Price)</th>
-                    <th className="px-3 py-2.5 text-right">রিসেলার বিক্রয় মূল্য (Selling Price)</th>
-                    <th className="px-3 py-2.5 text-right rounded-r-lg">রিসেলার প্রফিট (Profit)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-purple-100/70 font-medium">
-                  {((order.priceSnapshot?.items && Array.isArray(order.priceSnapshot.items) && order.priceSnapshot.items.length > 0) ? order.priceSnapshot.items : items).map((it: any, idx: number) => {
-                    const vp = Number(it.vendorPrice ?? it.adminPrice ?? it.price ?? 0);
-                    const sp = Number(it.resellerSellingPrice ?? it.price ?? vp);
-                    const qty = Number(it.quantity || 1);
-                    const prof = Number(it.resellerProfit ?? Math.max(0, (sp - vp) * qty));
-                    return (
-                      <tr key={idx} className="hover:bg-purple-100/40">
-                        <td className="px-3 py-2.5 font-bold text-purple-950">
-                          {it.productName || it.name || 'Product'}
-                        </td>
-                        <td className="px-3 py-2.5 text-center text-purple-900 font-bold">x{qty}</td>
-                        <td className="px-3 py-2.5 text-right text-purple-900">৳{vp.toLocaleString('bn-BD')}</td>
-                        <td className="px-3 py-2.5 text-right text-purple-900">৳{sp.toLocaleString('bn-BD')}</td>
-                        <td className="px-3 py-2.5 text-right font-extrabold text-purple-700">৳{prof.toLocaleString('bn-BD')}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Vendor notice */}
-            <div className="p-3 bg-white/95 border border-purple-200 rounded-xl text-xs text-purple-950 flex items-start gap-2 shadow-2xs">
-              <Info className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold text-purple-900">ভেন্ডর অবগতি বার্তা:</span> এই অর্ডারটি একজন নিবন্ধিত রিসেলারের মাধ্যমে তৈরি হয়েছে। 
-                অর্ডার কনফার্ম করার জন্য ভেন্ডর ওয়ালেটে প্রয়োজনীয় রিসেলার প্রফিট রিজার্ভ ব্যালেন্স (৳{Number(order.resellerProfit ?? 0).toLocaleString('bn-BD')}) থাকা আবশ্যক। 
-                এই ধাপে কোনো ব্যালেন্স কাটা হবে না এবং লকড ব্যালেন্সেও পাঠানো হবে না; এটি পরবর্তী ধাপ ৫-এ হবে।
+            {/* Collapsible line items pricing breakdown */}
+            <details className="group pt-0.5">
+              <summary className="flex items-center justify-between text-xs font-semibold text-purple-900 hover:text-purple-950 cursor-pointer py-1 select-none">
+                <span className="flex items-center gap-1.5">
+                  <span>আইটেম অনুযায়ী প্রফিট বিবরণী ({((order.priceSnapshot?.items && Array.isArray(order.priceSnapshot.items) && order.priceSnapshot.items.length > 0) ? order.priceSnapshot.items : items).length}টি আইটেম)</span>
+                </span>
+                <span className="text-[11px] text-purple-600 group-open:hidden">দেখান ▾</span>
+                <span className="text-[11px] text-purple-600 hidden group-open:inline">লুকান ▴</span>
+              </summary>
+              <div className="mt-2 overflow-x-auto rounded-xl border border-purple-200/80 bg-white">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="text-purple-900 border-b border-purple-100 font-semibold bg-purple-50/70">
+                      <th className="px-3 py-2 rounded-l-lg">পণ্য</th>
+                      <th className="px-2 py-2 text-center">পরিমাণ</th>
+                      <th className="px-3 py-2 text-right">ভেন্ডর মূল্য</th>
+                      <th className="px-3 py-2 text-right">বিক্রয় মূল্য</th>
+                      <th className="px-3 py-2 text-right rounded-r-lg">প্রফিট</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-purple-100/70 font-medium">
+                    {((order.priceSnapshot?.items && Array.isArray(order.priceSnapshot.items) && order.priceSnapshot.items.length > 0) ? order.priceSnapshot.items : items).map((it: any, idx: number) => {
+                      const vp = Number(it.vendorPrice ?? it.adminPrice ?? it.price ?? 0);
+                      const sp = Number(it.resellerSellingPrice ?? it.price ?? vp);
+                      const qty = Number(it.quantity || 1);
+                      const prof = Number(it.resellerProfit ?? Math.max(0, (sp - vp) * qty));
+                      return (
+                        <tr key={idx} className="hover:bg-purple-50/40">
+                          <td className="px-3 py-2 font-bold text-purple-950">
+                            {it.productName || it.name || 'Product'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-purple-900 font-bold">x{qty}</td>
+                          <td className="px-3 py-2 text-right text-purple-900">৳{vp.toLocaleString('bn-BD')}</td>
+                          <td className="px-3 py-2 text-right text-purple-900">৳{sp.toLocaleString('bn-BD')}</td>
+                          <td className="px-3 py-2 text-right font-extrabold text-purple-700">৳{prof.toLocaleString('bn-BD')}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            </div>
+            </details>
           </div>
         )}
       </div>
@@ -2288,53 +2245,9 @@ export default function OrderDetails() {
               {/* Courier Action Button */}
               <div className="pt-1">
                 {isResellerOrder && !isResellerConfirmed ? (
-                  <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl text-xs space-y-2.5">
-                    <div className="flex items-start gap-2 text-amber-950">
-                      <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                      <div>
-                        <span className="font-bold block">
-                          কুরিয়ার ট্র্যাকিং লিংক লক রয়েছে
-                        </span>
-                        <p className="text-[11px] text-amber-800 leading-snug mt-0.5">
-                          {resellerEligibility && !resellerEligibility.isBalanceSufficient ? (
-                            <span>
-                              রিসেলার প্রফিট রিজার্ভ করার মতো পর্যাপ্ত ওয়ালেট ব্যালেন্স নেই। ট্র্যাকিং লিংক দেওয়ার পূর্বে অবশ্যই ডিপোজিট করে "অর্ডার কনফার্ম করুন" সম্পন্ন করতে হবে।
-                            </span>
-                          ) : (
-                            <span>
-                              রিসেলার প্রফিট লক করতে প্রথমে "অর্ডার কনফার্ম করুন" সম্পন্ন করুন। কনফার্মেশনের পরই কুরিয়ার ট্র্যাকিং লিংক যুক্ত করা যাবে।
-                            </span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={handleConfirmResellerOrder}
-                        disabled={isConfirmingResellerOrder}
-                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
-                      >
-                        {isConfirmingResellerOrder ? (
-                          <RefreshCcw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Check className="w-3.5 h-3.5" />
-                        )}
-                        <span>অর্ডার কনফার্ম করুন</span>
-                      </button>
-
-                      {resellerEligibility && !resellerEligibility.isBalanceSufficient && (
-                        <button
-                          type="button"
-                          onClick={handleOpenDepositFlow}
-                          className="w-full py-2 bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors shadow-2xs cursor-pointer animate-pulse"
-                        >
-                          <CreditCard className="w-3.5 h-3.5" />
-                          <span>Deposit করুন (ঘাটতি ৳{resellerEligibility.shortfall})</span>
-                        </button>
-                      )}
-                    </div>
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
+                    <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>অর্ডার কনফার্ম করার পর কুরিয়ার ট্র্যাকিং লিংক যুক্ত করা যাবে।</span>
                   </div>
                 ) : order.courierVerificationStatus === 'Pending — Admin Review' ? (
                   <div className="w-full py-2 bg-amber-50 border border-amber-300 text-amber-900 text-center font-bold text-xs rounded-xl flex items-center justify-center gap-1.5">
@@ -2456,40 +2369,14 @@ export default function OrderDetails() {
 
               {/* Vendor Payout / Payment Section */}
               {isCodOrder(order) ? (
-                /* CASH ON DELIVERY (COD): No Wallet Credit, No Payment Held */
-                <div className="pt-2.5 border-t border-gray-100 space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-500 font-medium">পেমেন্ট মেথড:</span>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                      Cash on Delivery (COD)
+                order.status === 'Delivered' ? (
+                  <div className="pt-2 border-t border-gray-100 flex justify-between items-center text-xs">
+                    <span className="text-slate-600 font-medium">ভেন্ডর প্ল্যাটফর্ম ফি:</span>
+                    <span className="font-bold text-amber-700 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-md">
+                      ৳{order.platformFee || 5}
                     </span>
                   </div>
-
-                  <div className="flex justify-between items-center text-gray-700">
-                    <span>COD Amount (Payable):</span>
-                    <span className="font-bold text-gray-900 text-sm">
-                      ৳{resolved.codAmount.toLocaleString('bn-BD')}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center text-gray-700">
-                    <span>ওয়ালেট ক্রেডিট:</span>
-                    <span className="font-bold text-gray-500 text-sm">৳০</span>
-                  </div>
-
-                  {order.status === 'Delivered' && (
-                    <div className="flex justify-between items-center text-gray-700 pt-1 border-t border-slate-100">
-                      <span className="text-slate-600 font-medium text-xs">ভেন্ডর প্ল্যাটফর্ম ফি:</span>
-                      <span className="font-bold text-amber-700 text-xs px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-md">
-                        ৳{order.platformFee || 5} (রেকর্ডকৃত)
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600">
-                    ক্যাশ অন ডেলিভারি (COD) অর্ডারের টাকা কোনোভাবেই ওয়ালেটে জমা বা হোল্ড হবে না। কুরিয়ার ডেলিভারির সময় কাস্টমার থেকে সরাসরি মূল্য সংগ্রহ করবে।
-                  </div>
-                </div>
+                ) : null
               ) : (
                 /* SUCCESSFUL ONLINE PAYMENT: Payment Held with 4-Day Auto-Release */
                 <div className="pt-2.5 border-t border-gray-100 space-y-2">
