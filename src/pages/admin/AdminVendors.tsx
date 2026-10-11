@@ -821,7 +821,7 @@ export default function AdminVendors() {
                     </div>
                     <div className="flex justify-between py-2 border-b border-slate-50">
                       <span className="text-slate-500">Registration Fee</span>
-                      <span className="font-bold text-emerald-600">৳{selectedVendor.registrationFee || 300}</span>
+                      <span className="font-bold text-emerald-600">৳{selectedVendor.registrationFee || 350}</span>
                     </div>
                   </div>
                 </div>

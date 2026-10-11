@@ -737,9 +737,24 @@ app.use((req, res, next) => {
   });
 
   app.get('/api/settings', async (req, res) => {
-    const data = await fetchRtdbNode('settings');
-    res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');
-    res.json(data || {});
+    const rawData = await fetchRtdbNode('settings');
+    const data = (rawData && typeof rawData === 'object') ? { ...rawData } : {};
+
+    // Ensure default registration fees: ৳350 for Vendor, ৳350 for Reseller
+    if (!data.vendor) data.vendor = {};
+    if (!data.reseller) data.reseller = {};
+    if (!data.appConfig) data.appConfig = {};
+
+    data.vendor = { ...data.vendor, registrationFee: data.vendor.registrationFee ?? 350 };
+    data.reseller = { ...data.reseller, registrationFee: data.reseller.registrationFee ?? 350 };
+    data.appConfig = {
+      ...data.appConfig,
+      vendorRegistrationFee: data.appConfig.vendorRegistrationFee ?? 350,
+      resellerRegistrationFee: data.appConfig.resellerRegistrationFee ?? 350
+    };
+
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(data);
   });
 
   // AI Live Support Assistant Route

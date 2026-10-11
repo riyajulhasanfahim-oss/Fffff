@@ -70,7 +70,8 @@ export default function ResellerApplication() {
   const [showUpayModal, setShowUpayModal] = useState<boolean>(false);
   const [selectedPaymentChannel, setSelectedPaymentChannel] = useState<'bkash' | 'nagad' | 'rocket' | 'upay' | null>(null);
   const [paymentErrorMessage, setPaymentErrorMessage] = useState<string>('');
-  const [registrationFeeAmount, setRegistrationFeeAmount] = useState<number>(390);
+  // Reseller Registration Fee: ৳350
+  const [registrationFeeAmount, setRegistrationFeeAmount] = useState<number>(350);
   const [currentInvoiceId, setCurrentInvoiceId] = useState<string>(() => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let inv = 'S2N';

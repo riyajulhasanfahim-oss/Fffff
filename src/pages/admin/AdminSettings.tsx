@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { rtdbGet, rtdbSet, rtdbPush } from '../../lib/rtdb';
+import { rtdbGet, rtdbSet, rtdbPush, rtdbUpdate } from '../../lib/rtdb';
 import { useAuth } from '../../context/AuthContext';
 import { Link } from 'react-router-dom';
 import { Settings, Save, AlertCircle, Shield, CreditCard, ShoppingCart, Users, Briefcase, Bell, HardDrive, DollarSign, Activity, FileText, Wallet, Store, ArrowRight, ExternalLink, Database, Eye, EyeOff, CheckCircle2, Globe, Key, Smartphone } from 'lucide-react';
@@ -31,7 +31,8 @@ export default function AdminSettings() {
     systemEnabled: true,
     registrationEnabled: true,
     pricingEnabled: true,
-    orderingEnabled: true
+    orderingEnabled: true,
+    registrationFee: 350
   });
 
   const [mlmSettings, setMlmSettings] = useState({
@@ -82,6 +83,7 @@ export default function AdminSettings() {
     autoApproveProduct: false,
     orderingEnabled: true,
     settlementDays: 3,
+    registrationFee: 350,
     verifiedSellerPrice: 100,
     verifiedPlanMonths: 2
   });
@@ -216,10 +218,11 @@ export default function AdminSettings() {
         }
       }
 
-      // If updating vendor, also sync verified badge global settings
+      // If updating vendor, also sync verified badge global settings and registration fee
       if (sectionId === 'vendor') {
         const price = Number(currentData.verifiedSellerPrice) || 100;
         const months = Number(currentData.verifiedPlanMonths) || 2;
+        const vRegFee = Number(currentData.registrationFee) || 350;
         try {
           await Promise.allSettled([
             rtdbSet('settings/verifiedBadge', {
@@ -228,14 +231,28 @@ export default function AdminSettings() {
               updatedAt: Date.now(),
               updatedBy: user?.email || 'admin'
             }),
-            rtdbSet('settings/appConfig', {
+            rtdbUpdate('settings/appConfig', {
               verifiedSellerPrice: price,
               verifiedPlanMonths: months,
+              vendorRegistrationFee: vRegFee,
               updatedAt: Date.now()
             })
           ]);
         } catch (syncErr) {
           console.warn('Sync verifiedBadge settings warning:', syncErr);
+        }
+      }
+
+      // If updating reseller, also sync registration fee to appConfig
+      if (sectionId === 'reseller') {
+        const rRegFee = Number(currentData.registrationFee) || 350;
+        try {
+          await rtdbUpdate('settings/appConfig', {
+            resellerRegistrationFee: rRegFee,
+            updatedAt: Date.now()
+          });
+        } catch (syncErr) {
+          console.warn('Sync reseller settings warning:', syncErr);
         }
       }
 
@@ -490,6 +507,23 @@ export default function AdminSettings() {
                       <input type="checkbox" checked={resellerSettings.pricingEnabled} onChange={e => setResellerSettings({...resellerSettings, pricingEnabled: e.target.checked})} className="w-5 h-5 rounded text-primary-main focus:ring-primary-main" />
                       <div><p className="font-semibold text-slate-900">Enable Reseller Pricing Rules</p></div>
                     </label>
+                    <div className="p-4 border border-slate-200 rounded-xl bg-slate-50/50 space-y-1.5">
+                      <label className="block text-sm font-semibold text-slate-800">
+                        রিসেলার রেজিস্ট্রেশন ফি (টাকা) / Reseller Registration Fee
+                      </label>
+                      <p className="text-xs text-slate-500">নতুন রিসেলার অ্যাকাউন্ট অ্যাক্টিভেশনের জন্য ওয়ান-টাইম রেজিস্ট্রেশন ফি</p>
+                      <div className="relative w-full md:w-1/3 pt-1">
+                        <span className="absolute left-3 top-3.5 text-sm font-bold text-slate-400">৳</span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={resellerSettings.registrationFee ?? 350}
+                          onChange={e => setResellerSettings({ ...resellerSettings, registrationFee: Number(e.target.value) })}
+                          className="w-full pl-8 pr-4 py-2 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-primary-main/20 focus:border-primary-main text-sm font-bold text-slate-900"
+                          placeholder="350"
+                        />
+                      </div>
+                    </div>
                     <div className="flex justify-end pt-4">
                     <button onClick={() => handleSave('reseller', resellerSettings, originalValues.reseller)} disabled={saving} className="btn-primary flex items-center gap-2 px-6 py-2 bg-primary-main text-white rounded-lg hover:bg-primary-dark transition-colors">
                       {saving ? 'Saving...' : <><Save className="w-4 h-4"/> Save Settings</>}
@@ -905,6 +939,24 @@ export default function AdminSettings() {
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">Vendor Settlement (Days)</label>
                     <input type="number" value={vendorSettings.settlementDays} onChange={e => setVendorSettings({...vendorSettings, settlementDays: Number(e.target.value)})} className="w-full md:w-1/3 px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-main/20 focus:border-primary-main" />
+                  </div>
+
+                  <div className="p-4 border border-slate-200 rounded-xl bg-slate-50/50 space-y-1.5">
+                    <label className="block text-sm font-semibold text-slate-800">
+                      ভেন্ডর রেজিস্ট্রেশন ফি (টাকা) / Vendor Registration Fee
+                    </label>
+                    <p className="text-xs text-slate-500">নতুন ভেন্ডর স্টোর অ্যাক্টিভেশনের জন্য ওয়ান-টাইম রেজিস্ট্রেশন ফি</p>
+                    <div className="relative w-full md:w-1/3 pt-1">
+                      <span className="absolute left-3 top-3.5 text-sm font-bold text-slate-400">৳</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={vendorSettings.registrationFee ?? 350}
+                        onChange={e => setVendorSettings({ ...vendorSettings, registrationFee: Number(e.target.value) })}
+                        className="w-full pl-8 pr-4 py-2 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-primary-main/20 focus:border-primary-main text-sm font-bold text-slate-900"
+                        placeholder="350"
+                      />
+                    </div>
                   </div>
 
                   {/* Verified Badge Pricing & Duration Settings */}

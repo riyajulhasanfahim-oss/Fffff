@@ -56,8 +56,8 @@ export default function VendorRegistration() {
   const [showUpayModal, setShowUpayModal] = useState<boolean>(false);
   const [selectedPaymentChannel, setSelectedPaymentChannel] = useState<'bkash' | 'nagad' | 'rocket' | 'upay' | null>(null);
   const [paymentErrorMessage, setPaymentErrorMessage] = useState<string>('');
-  // Temporary testing fee: exactly ৳10 (Vendor Activation / Registration Fee)
-  const [registrationFeeAmount, setRegistrationFeeAmount] = useState<number>(10);
+  // Vendor Activation / Registration Fee: ৳350
+  const [registrationFeeAmount, setRegistrationFeeAmount] = useState<number>(350);
   const [currentInvoiceId, setCurrentInvoiceId] = useState<string>(() => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let inv = 'S2N';
