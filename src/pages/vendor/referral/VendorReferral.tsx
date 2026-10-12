@@ -8,23 +8,18 @@ import {
   Check, 
   Users, 
   DollarSign, 
-  TrendingUp, 
   Gift, 
   Award, 
-  ShieldCheck, 
-  ExternalLink,
-  ArrowRight,
+  Store,
   Sparkles,
   Clock,
-  UserCheck,
-  Store
+  UserCheck
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
-import { useVendorStore } from '../../../context/VendorStoreContext';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
-  getOrCreateVendorReferralCode, 
+  getOrCreateReferralCode, 
   getReferralStatsAndHistory, 
   REFERRAL_BONUS_AMOUNT,
   type ReferralItem,
@@ -33,7 +28,6 @@ import {
 
 export default function VendorReferral() {
   const { user, userData } = useAuth();
-  const { vendorInfo } = useVendorStore();
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   
@@ -56,12 +50,8 @@ export default function VendorReferral() {
       if (!user) return;
       try {
         setLoading(true);
-        // 1. Get or create unique vendor referral code
-        const refInfo = await getOrCreateVendorReferralCode(
-          user.uid, 
-          userData?.name, 
-          vendorInfo?.shopName || vendorInfo?.storeName
-        );
+        // 1. Get or create vendor referral code
+        const refInfo = await getOrCreateReferralCode(user.uid, (userData as any)?.storeName || userData?.name, 'Vendor');
         if (isMounted) {
           setActualRefCode(refInfo.code);
           setReferralLink(refInfo.referralLink);
@@ -85,7 +75,7 @@ export default function VendorReferral() {
     return () => {
       isMounted = false;
     };
-  }, [user, userData, vendorInfo]);
+  }, [user, userData]);
 
   const handleCopyLink = () => {
     if (!referralLink) return;
@@ -103,14 +93,14 @@ export default function VendorReferral() {
     setTimeout(() => setCopiedCode(false), 2500);
   };
 
-  const shareText = `RJ WORLD BD-তে ভেন্ডর হিসেবে জয়েন করে অনলাইনে স্টোর খুলে ব্যবসা শুরু করুন! রেজিস্ট্রেশনের সময় আমার রেফারেল কোড ${actualRefCode} ব্যবহার করুন অথবা নিচের লিংকে ক্লিক করুন: ${referralLink}`;
+  const shareText = `RJ WORLD BD-তে ভেন্ডর পার্টনার হিসেবে যোগ দিন এবং আপনার পণ্য লাখো কাস্টমারের কাছে বিক্রি করুন! রেজিস্ট্রেশনের সময় আমার রেফারেল কোড ${actualRefCode} ব্যবহার করুন অথবা নিচের লিংকে ক্লিক করুন: ${referralLink}`;
 
   const handleNativeShare = async () => {
     if (navigator.share) {
       try {
         await navigator.share({
           title: 'RJ WORLD BD ভেন্ডর পার্টনার',
-          text: `RJ WORLD BD-তে ভেন্ডর হিসেবে যুক্ত হয়ে নিজের অনলাইন ব্যবসা বাড়ান! রেফারেল কোড: ${actualRefCode}`,
+          text: `RJ WORLD BD-তে ভেন্ডর হিসেবে যুক্ত হয়ে আপনার বিজনেস বৃদ্ধি করুন! রেফারেল কোড: ${actualRefCode}`,
           url: referralLink,
         });
         toast.success('শেয়ার সম্পন্ন হয়েছে!');
@@ -139,14 +129,13 @@ export default function VendorReferral() {
       name: 'Telegram',
       icon: <Send className="w-5 h-5" />,
       color: 'bg-[#0088cc] hover:bg-[#0077b5] text-white',
-      url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('RJ WORLD BD ভেন্ডর হতে জয়েন করুন! রেফারেল কোড: ' + actualRefCode)}`
+      url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('RJ WORLD BD ভেন্ডর পার্টনার হতে জয়েন করুন! রেফারেল কোড: ' + actualRefCode)}`
     }
   ];
 
   return (
     <VendorLayout>
-      <div className="py-4 sm:py-6 px-3 sm:px-6 lg:px-8 max-w-6xl mx-auto w-full space-y-4 sm:space-y-6">
-        
+      <div className="space-y-4 sm:space-y-6">
         {/* Top Header Banner */}
         <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-primary-main rounded-2xl sm:rounded-3xl p-4 sm:p-7 text-white shadow-md relative overflow-hidden">
           <div className="absolute top-0 right-0 -mr-12 -mt-12 w-48 h-48 bg-primary-main/20 rounded-full blur-3xl pointer-events-none" />
@@ -159,17 +148,17 @@ export default function VendorReferral() {
                 <span>সফল রেজিস্ট্রেশনে নিশ্চিত ২০০ টাকা বোনাস</span>
               </div>
               <h1 className="text-xl sm:text-2xl md:text-3xl font-black tracking-tight text-white">
-                ভেন্ডর রেফারেল ও ইনভাইট প্রোগ্রাম (Refer & Earn)
+                ভেন্ডর রেফারেল প্রোগ্রাম (Refer & Earn)
               </h1>
               <p className="mt-2 text-xs sm:text-sm text-slate-200 leading-relaxed font-medium">
-                🎁 আপনার বন্ধুদের Referral Code দিয়ে Account খুলতে আমন্ত্রণ করুন। সফলভাবে Vendor বা Reseller Account তৈরি হলে আপনি ২০০ টাকা Referral Bonus পাবেন।
+                🎁 আপনার বন্ধুদের Referral Code দিয়ে Account খুলতে আমন্ত্রণ জানান। সফলভাবে Vendor বা Reseller Account তৈরি হলে আপনার ওয়ালেটে ২০০ টাকা বোনাস জমা হবে এবং নতুন ইউজারের ওয়ালেটে ৫০ টাকা যোগ হবে।
               </p>
               <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 font-semibold">
-                  💸 Bonus Wallet-এ যোগ হওয়ার পর Withdraw করা যাবে।
+                  💸 Bonus Vendor Wallet-এ যোগ হওয়ার পর Withdraw করা যাবে।
                 </span>
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-300 border border-white/10 text-[11px]">
-                  *শুধু সফলভাবে Vendor বা Reseller Account তৈরি হলেই ২০০ টাকা Bonus দেওয়া হবে।
+                  *সফলভাবে Vendor বা Reseller Account তৈরি সম্পন্ন হলে বোনাস প্রদান করা হয়।
                 </span>
               </div>
             </div>
@@ -181,7 +170,7 @@ export default function VendorReferral() {
               <div>
                 <p className="text-[11px] text-slate-300 font-semibold uppercase tracking-wider">💰 Referral Bonus</p>
                 <p className="text-xl sm:text-2xl font-black text-amber-300 font-mono">২০০ টাকা</p>
-                <p className="text-[10px] text-emerald-300 font-medium mt-0.5">ওয়ালেটে যোগ হবে</p>
+                <p className="text-[10px] text-emerald-300 font-medium mt-0.5">ওয়ালেটে জমা হবে</p>
               </div>
             </div>
           </div>
@@ -199,7 +188,7 @@ export default function VendorReferral() {
             <p className="text-lg sm:text-2xl font-black text-slate-900 font-sans truncate">
               {stats.totalReferrals}
             </p>
-            <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5 truncate hidden sm:block">যোগদানকারী সংখ্যা</p>
+            <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5 truncate hidden sm:block">আবেদনের সংখ্যা</p>
           </div>
 
           <div className="bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 border border-emerald-200/80 bg-gradient-to-b from-white to-emerald-50/20 shadow-2xs">
@@ -223,15 +212,14 @@ export default function VendorReferral() {
               </div>
             </div>
             <p className="text-lg sm:text-2xl font-black text-slate-900 font-sans truncate">
-              {(stats.activeVendors || 0) + (stats.activeResellers || 0) || stats.totalReferrals}
+              {(stats.activeVendors || 0) + (stats.activeResellers || 0)}
             </p>
-            <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5 truncate hidden sm:block">অ্যাক্টিভ মার্চেন্ট</p>
+            <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5 truncate hidden sm:block">অ্যাক্টিভ পার্টনার</p>
           </div>
         </div>
 
         {/* Main Section: Referral Code & Link + QR Code */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-          
           {/* Referral Code & Links Card (2 columns on desktop) */}
           <div className="lg:col-span-2 bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-200/80 shadow-2xs flex flex-col justify-between space-y-4 sm:space-y-5">
             <div>
@@ -242,7 +230,7 @@ export default function VendorReferral() {
                 </h2>
               </div>
               <p className="text-xs text-slate-500">
-                নিচের কোড বা লিংকটি আপনার ব্যবসায়ী বন্ধুদের সাথে শেয়ার করুন। তারা যখন একাউন্ট খুলবে, কোডটি ব্যবহার করলে আপনি সাথে সাথে ২০০ টাকা বোনাস পাবেন।
+                নিচের কোড বা লিংকটি আপনার বন্ধুদের সাথে শেয়ার করুন। তারা যখন ভেন্ডর বা রিসেলার একাউন্ট খুলবে, কোডটি ব্যবহার করলে আপনি সাথে সাথে ২০০ টাকা কমিশন পাবেন এবং তারা ৫০ টাকা পাবে।
               </p>
             </div>
 
@@ -385,7 +373,6 @@ export default function VendorReferral() {
               </span>
             </div>
           </div>
-
         </div>
 
         {/* How It Works - 3 Step Guide */}
@@ -404,7 +391,7 @@ export default function VendorReferral() {
               <div>
                 <h3 className="text-xs font-bold text-slate-900 mb-0.5">আমন্ত্রণ জানান</h3>
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  আপনার বন্ধুদের Referral Code দিয়ে Account খুলতে আমন্ত্রণ জানান।
+                  আপনার বন্ধুদের Referral Link বা Code দিয়ে Account খুলতে আমন্ত্রণ জানান।
                 </p>
               </div>
             </div>
@@ -416,7 +403,7 @@ export default function VendorReferral() {
               <div>
                 <h3 className="text-xs font-bold text-slate-900 mb-0.5">সফল অ্যাকাউন্ট তৈরি</h3>
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  আপনার বন্ধু রেফারেল কোড ব্যবহার করে সফলভাবে Vendor বা Reseller Account তৈরি করবে। শুধু সফলভাবে রেজিস্ট্রেশন সম্পন্ন হলেই বোনাস প্রযোজ্য।
+                  আপনার বন্ধু রেফারেল কোড ব্যবহার করে সফলভাবে Vendor বা Reseller Account তৈরি সম্পন্ন করবে।
                 </p>
               </div>
             </div>
@@ -426,16 +413,16 @@ export default function VendorReferral() {
                 ৩
               </div>
               <div>
-                <h3 className="text-xs font-bold text-emerald-950 mb-0.5">💰 Referral Bonus: ২০০ টাকা</h3>
+                <h3 className="text-xs font-bold text-emerald-950 mb-0.5">💰 নিশ্চিত ওয়ালেট বোনাস</h3>
                 <p className="text-[11px] text-emerald-800 leading-relaxed">
-                  সফলভাবে Vendor বা Reseller Account তৈরি হলে আপনি ২০০ টাকা Referral Bonus পাবেন। 💸 Bonus Wallet-এ যোগ হওয়ার পর Withdraw করা যাবে।
+                  সফলভাবে অ্যাকাউন্ট তৈরি সম্পন্ন হলে আপনার ওয়ালেটে ২০০ টাকা এবং নতুন ইউজারের ওয়ালেটে ৫০ টাকা জমা হবে।
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Referral History / Joined Users */}
+        {/* Referral History / Joined Partners */}
         <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-200/80 shadow-2xs">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -456,11 +443,11 @@ export default function VendorReferral() {
           ) : history.length === 0 ? (
             <div className="py-8 text-center text-slate-500 space-y-2">
               <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
-                <Users className="w-6 h-6" />
+                <Store className="w-6 h-6" />
               </div>
               <p className="text-xs font-semibold text-slate-700">এখনো কোনো রেফারেল রেকর্ড নেই</p>
               <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
-                উপরে আপনার রেফারেল লিংক বা কোড কপি করে বন্ধুদের সাথে শেয়ার করুন এবং প্রতিটি জয়েনিংয়ে ২০০ টাকা করে আয় শুরু করুন।
+                উপরে আপনার রেফারেল লিংক বা কোড কপি করে বন্ধুদের সাথে শেয়ার করুন এবং প্রতিটি জয়েনিংয়ে ২০০ টাকা করে বোনাস অর্জন করুন।
               </p>
             </div>
           ) : (
@@ -496,7 +483,6 @@ export default function VendorReferral() {
             </div>
           )}
         </div>
-
       </div>
     </VendorLayout>
   );

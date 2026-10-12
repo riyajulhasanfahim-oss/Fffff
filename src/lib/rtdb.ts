@@ -34,7 +34,11 @@ const VIRTUAL_CHAT_COLLECTIONS = new Set([
   'admin_notifications',
   'vendor_warnings',
   'reseller_return_requests',
-  'platform_fees'
+  'platform_fees',
+  'referral_rewards_log',
+  'reseller_transactions',
+  'reseller_wallet_transactions',
+  'referral_credits'
 ]);
 
 const GHOST_GUARDED_COLLECTIONS = new Set([
@@ -238,10 +242,10 @@ async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000
           } catch (_) {}
         }
 
-        if (colName === 'vendor_wallet') {
+        if (colName === 'vendor_wallet' || colName === 'reseller_wallet') {
           const [wSnap, cSnap] = await Promise.all([
-            getDoc(doc(db, 'vendor_wallet', docId)).catch(() => null),
-            getDoc(doc(db, 'chats', 'vendor_wallet', 'items', docId)).catch(() => null)
+            getDoc(doc(db, colName, docId)).catch(() => null),
+            getDoc(doc(db, 'chats', colName, 'items', docId)).catch(() => null)
           ]);
           const wData = wSnap && wSnap.exists() ? { id: wSnap.id, ...wSnap.data() } : null;
           const cData = cSnap && cSnap.exists() ? { id: cSnap.id, ...cSnap.data() } : null;
@@ -355,23 +359,23 @@ async function writeFirestoreNode(
         return true;
       }
 
-      if (colName === 'vendor_wallet') {
+      if (colName === 'vendor_wallet' || colName === 'reseller_wallet') {
         let wrote = false;
         try {
-          await setDoc(doc(db, 'chats', 'vendor_wallet', 'items', docId), { id: docId, ...cleanData }, { merge });
+          await setDoc(doc(db, 'chats', colName, 'items', docId), { id: docId, ...cleanData }, { merge });
           wrote = true;
         } catch (_) {}
         try {
-          await setDoc(doc(db, 'vendor_wallet', docId), { id: docId, ...cleanData }, { merge });
+          await setDoc(doc(db, colName, docId), { id: docId, ...cleanData }, { merge });
           wrote = true;
         } catch (_) {
-          // If vendor rule blocks lockedBalance/resellerProfitReserve change on top-level vendor_wallet,
-          // update allowed fields on top-level doc while full state is preserved in chats/vendor_wallet/items
+          // If security rule blocks lockedBalance/resellerProfitReserve change on top-level wallet,
+          // update allowed fields on top-level doc while full state is preserved in chats/{colName}/items
           try {
             const safeClone = { ...cleanData };
             delete safeClone.lockedBalance;
             delete safeClone.resellerProfitReserve;
-            await setDoc(doc(db, 'vendor_wallet', docId), { id: docId, ...safeClone }, { merge: true });
+            await setDoc(doc(db, colName, docId), { id: docId, ...safeClone }, { merge: true });
           } catch (_) {}
         }
         return wrote;
@@ -449,7 +453,14 @@ async function writeFirestoreNode(
     } else if (parts.length === 4) {
       if (parts[0] === 'chats' && parts[2] === 'messages') {
         const msgId = parts[3];
-        await setDoc(doc(db, 'chats', parts[1], 'messages', msgId), { id: msgId, ...cleanData }, { merge });
+        await setDoc(doc(db, 'chats', parts[1], 'messages', msgId), { id: msgId, ...cleanData }, { merge: true });
+        if (cleanData?.text || cleanData?.imageUrl) {
+          setDoc(doc(db, 'chats', parts[1]), {
+            id: parts[1],
+            lastMessage: cleanData.imageUrl ? 'Sent an image' : cleanData.text,
+            lastMessageTime: cleanData.createdAt || Date.now()
+          }, { merge: true }).catch(() => {});
+        }
         return true;
       }
       if (parts[0] === 'vendors' && parts[2] === 'products') {
@@ -747,6 +758,25 @@ function updateParentCache(itemPath: string, itemData: any, isPartialUpdate: boo
       parentChannel.callbacks.forEach(cb => {
         try { cb(parentChannel.lastData); } catch (_) {}
       });
+    }
+
+    // Also update immediate parent if deeper path (e.g. chats/chatId/messages/msgId -> chats/chatId/messages)
+    if (parts.length > 2) {
+      const immediateParent = parts.slice(0, parts.length - 1).join('/');
+      const immediateKey = parts[parts.length - 1];
+      invalidateRtdbCache(immediateParent);
+      const immChannel = subscriptionChannels.get(immediateParent);
+      if (immChannel && immChannel.lastData && typeof immChannel.lastData === 'object') {
+        if (itemData === null) {
+          delete immChannel.lastData[immediateKey];
+        } else {
+          immChannel.lastData[immediateKey] = itemData;
+        }
+        immChannel.lastJson = JSON.stringify(immChannel.lastData);
+        immChannel.callbacks.forEach(cb => {
+          try { cb(immChannel.lastData); } catch (_) {}
+        });
+      }
     }
 
     if (parent === 'products') {
@@ -1371,13 +1401,26 @@ function dispatchToSubscribers(path: string, data: any, isPartial = false) {
   const channel = subscriptionChannels.get(path);
   if (!channel) return;
 
-  // Protect loaded data from being wiped out by an empty snapshot
-  if (data === null && channel.lastData && typeof channel.lastData === 'object' && Object.keys(channel.lastData).length > 0) {
+  const isMessagesPath = path.includes('/messages');
+
+  // Protect loaded data from being wiped out by an empty snapshot or null
+  if (
+    (data === null || (typeof data === 'object' && data !== null && Object.keys(data).length === 0)) &&
+    channel.lastData &&
+    typeof channel.lastData === 'object' &&
+    Object.keys(channel.lastData).length > 0
+  ) {
     return;
   }
 
   let merged = data;
-  if (isPartial && typeof channel.lastData === 'object' && channel.lastData && typeof data === 'object' && data) {
+  if (
+    (isPartial || isMessagesPath) &&
+    typeof channel.lastData === 'object' &&
+    channel.lastData &&
+    typeof data === 'object' &&
+    data
+  ) {
     merged = { ...channel.lastData, ...data };
   }
 
@@ -1569,7 +1612,7 @@ export function rtdbSubscribe<T = any>(
               () => {}
             )
           );
-        } else if (colName === 'vendor_wallet') {
+        } else if (colName === 'vendor_wallet' || colName === 'reseller_wallet') {
           const refreshWallet = () => {
             fetchFirestoreNode<T>(cleanPath, 3000).then((res) => {
               if (res.ok && res.data) {
@@ -1578,8 +1621,8 @@ export function rtdbSubscribe<T = any>(
             }).catch(() => {});
           };
           fsUnsubs.push(
-            onSnapshot(doc(db, 'vendor_wallet', docId), refreshWallet, () => {}),
-            onSnapshot(doc(db, 'chats', 'vendor_wallet', 'items', docId), refreshWallet, () => {})
+            onSnapshot(doc(db, colName, docId), refreshWallet, () => {}),
+            onSnapshot(doc(db, 'chats', colName, 'items', docId), refreshWallet, () => {})
           );
         } else {
           fsUnsubs.push(
@@ -1604,7 +1647,7 @@ export function rtdbSubscribe<T = any>(
               snap.forEach((d) => {
                 mapObj[d.id] = { id: d.id, ...d.data() };
               });
-              dispatchToSubscribers(cleanPath, mapObj as unknown as T);
+              dispatchToSubscribers(cleanPath, mapObj as unknown as T, true);
             }
           }).catch(() => {});
 
@@ -1617,7 +1660,7 @@ export function rtdbSubscribe<T = any>(
                   mapObj[d.id] = { id: d.id, ...d.data() };
                 });
                 if (Object.keys(mapObj).length > 0) {
-                  dispatchToSubscribers(cleanPath, mapObj as unknown as T);
+                  dispatchToSubscribers(cleanPath, mapObj as unknown as T, true);
                 }
               },
               (err) => {
@@ -1635,7 +1678,8 @@ export function rtdbSubscribe<T = any>(
         dbRef,
         (snap) => {
           if (snap.exists()) {
-            dispatchToSubscribers(cleanPath, snap.val() as T);
+            const isMsg = cleanPath.includes('/messages');
+            dispatchToSubscribers(cleanPath, snap.val() as T, isMsg);
           } else {
             // When the node does not exist in RTDB (e.g. empty messages or new chat),
             // do NOT overwrite if channel already has loaded messages from Firestore/cache!

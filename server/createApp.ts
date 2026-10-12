@@ -5,6 +5,7 @@ import fs from 'fs';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getDatabase } from 'firebase-admin/database';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 import {
@@ -1477,6 +1478,460 @@ app.use((req, res, next) => {
       return res.json({ success: true, message: 'Vendor successfully removed from server' });
     } catch (err: any) {
       console.error('Vendor delete error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Atomically process referral rewards: ৳50 to new user, ৳200 to referrer
+  app.post('/api/referral/process-rewards', async (req, res) => {
+    try {
+      const { referrerId, newUserId, newUserName = '', newUserEmail = '', newUserRole = 'Reseller' } = req.body || {};
+
+      if (!referrerId || !newUserId) {
+        return res.status(400).json({ success: false, error: 'Missing referrerId or newUserId' });
+      }
+
+      if (referrerId === newUserId) {
+        return res.status(400).json({ success: false, error: 'Cannot refer oneself' });
+      }
+
+      const NEW_USER_BONUS = 50;
+      const REFERRER_BONUS = 200;
+      const now = Date.now();
+      const bonusOrderId = `BONUS-${newUserId.substring(0, 8)}`;
+      const refOrderId = `REF-${newUserId.substring(0, 8)}`;
+
+      let adminApp: any = null;
+      try {
+        const apps = getApps();
+        adminApp = apps.length ? apps[0] : initializeApp({
+          projectId: CURRENT_FIREBASE_PROJECT_ID,
+          databaseURL: CURRENT_RTDB_BASE
+        });
+      } catch (_) {}
+
+      const rtdb = adminApp ? getDatabase(adminApp) : null;
+      const fsDb = adminApp ? getFirestore(adminApp) : null;
+
+      // 1. Idempotency Check: check if already completed
+      let isAlreadyCompleted = false;
+      if (rtdb) {
+        try {
+          const logSnap = await rtdb.ref(`referral_rewards_log/${newUserId}`).once('value');
+          if (logSnap.exists() && logSnap.val()?.status === 'Completed') {
+            isAlreadyCompleted = true;
+          }
+        } catch (_) {}
+      }
+      if (!isAlreadyCompleted && fsDb) {
+        try {
+          const fsDoc = await fsDb.collection('referral_rewards_log').doc(newUserId).get();
+          if (fsDoc.exists && fsDoc.data()?.status === 'Completed') {
+            isAlreadyCompleted = true;
+          }
+        } catch (_) {}
+      }
+
+      if (isAlreadyCompleted) {
+        return res.json({
+          success: true,
+          alreadyProcessed: true,
+          newUserBonus: NEW_USER_BONUS,
+          referrerBonus: REFERRER_BONUS,
+          message: 'ইতিমধ্যে রেফারেল বোনাস প্রদান করা হয়েছে।'
+        });
+      }
+
+      // Mark processing in log
+      if (rtdb) {
+        try {
+          await rtdb.ref(`referral_rewards_log/${newUserId}`).set({
+            status: 'Processing',
+            newUserId,
+            referrerId,
+            newUserRole,
+            createdAt: now
+          });
+        } catch (_) {}
+      }
+
+      // 2. CREDIT ৳50 TO NEW USER'S WALLET
+      if (newUserRole === 'Vendor') {
+        if (rtdb) {
+          try {
+            const vwRef = rtdb.ref(`vendor_wallet/${newUserId}`);
+            const vwSnap = await vwRef.once('value');
+            const currentVW = vwSnap.val() || {};
+            const prevBal = Number(currentVW.balance || 0);
+            const prevLifetime = Number(currentVW.lifetimeEarnings || 0);
+            const newBal = prevBal + NEW_USER_BONUS;
+            const newLifetime = prevLifetime + NEW_USER_BONUS;
+
+            await vwRef.update({
+              id: newUserId,
+              vendorId: newUserId,
+              balance: newBal,
+              lifetimeEarnings: newLifetime,
+              updatedAt: now
+            });
+
+            const uRef = rtdb.ref(`users/${newUserId}`);
+            const uSnap = await uRef.once('value');
+            const currentU = uSnap.val() || {};
+            await uRef.update({
+              wallet: (Number(currentU.wallet || 0)) + NEW_USER_BONUS,
+              balance: (Number(currentU.balance || 0)) + NEW_USER_BONUS,
+              walletBalance: newBal,
+              referralBonusEarned: NEW_USER_BONUS,
+              updatedAt: now
+            });
+
+            await rtdb.ref('wallet_transactions').push({
+              vendorId: newUserId,
+              userId: newUserId,
+              orderId: bonusOrderId,
+              type: 'Bonus',
+              amount: NEW_USER_BONUS,
+              status: 'Completed',
+              description: '🎁 রেফারেল কোড ব্যবহারের জন্য একাউন্ট খোলার বোনাস (৳৫০)',
+              createdAt: now,
+              isReferral: true
+            });
+          } catch (rErr) {
+            console.warn('[Referral Backend] RTDB vendor wallet error:', rErr);
+          }
+        }
+        if (fsDb) {
+          try {
+            await fsDb.collection('vendor_wallet').doc(newUserId).set({
+              id: newUserId,
+              vendorId: newUserId,
+              balance: NEW_USER_BONUS,
+              lifetimeEarnings: NEW_USER_BONUS,
+              updatedAt: now
+            }, { merge: true });
+            await fsDb.collection('users').doc(newUserId).set({
+              walletBalance: NEW_USER_BONUS,
+              referralBonusEarned: NEW_USER_BONUS,
+              updatedAt: now
+            }, { merge: true });
+          } catch (_) {}
+        }
+      } else {
+        // Reseller gets ৳50
+        if (rtdb) {
+          try {
+            const rwRef = rtdb.ref(`reseller_wallet/${newUserId}`);
+            const rwSnap = await rwRef.once('value');
+            const currentRW = rwSnap.val() || {};
+            const prevAvail = Number(currentRW.availableBalance ?? currentRW.walletBalance ?? 0);
+            const prevTotal = Number(currentRW.totalBalance || prevAvail);
+            const prevReleased = Number(currentRW.releasedProfit ?? currentRW.lifetimeCommission ?? 0);
+            const newAvail = prevAvail + NEW_USER_BONUS;
+            const newTotal = prevTotal + NEW_USER_BONUS;
+            const newReleased = prevReleased + NEW_USER_BONUS;
+
+            await rwRef.update({
+              resellerId: newUserId,
+              availableBalance: newAvail,
+              walletBalance: newAvail,
+              totalBalance: newTotal,
+              releasedProfit: newReleased,
+              approvedCommission: newAvail,
+              lifetimeCommission: newReleased,
+              updatedAt: now
+            });
+
+            const uRef = rtdb.ref(`users/${newUserId}`);
+            const uSnap = await uRef.once('value');
+            const currentU = uSnap.val() || {};
+            await uRef.update({
+              wallet: (Number(currentU.wallet || 0)) + NEW_USER_BONUS,
+              balance: (Number(currentU.balance || 0)) + NEW_USER_BONUS,
+              walletBalance: newAvail,
+              resellerBalance: newAvail,
+              referralBonusEarned: NEW_USER_BONUS,
+              updatedAt: now
+            });
+
+            const bonusTxId = `TXN-BONUS-${newUserId.substring(0, 6)}-${now}`;
+            await rtdb.ref(`reseller_wallet_transactions/${bonusTxId}`).set({
+              transactionId: bonusTxId,
+              userId: newUserId,
+              resellerId: newUserId,
+              orderId: bonusOrderId,
+              amount: NEW_USER_BONUS,
+              type: 'PROFIT_RELEASED',
+              status: 'COMPLETED',
+              description: '🎁 রেফারেল কোড ব্যবহারের জন্য একাউন্ট খোলার বোনাস (৳৫০)',
+              idempotencyKey: `signup_ref_bonus_${newUserId}`,
+              createdAt: now,
+              updatedAt: now
+            });
+
+            await rtdb.ref('reseller_transactions').push({
+              resellerId: newUserId,
+              orderId: bonusOrderId,
+              customerName: newUserName,
+              productName: 'রেফারেল বোনাস (অ্যাকাউন্ট খোলার পুরষ্কার)',
+              amount: NEW_USER_BONUS,
+              status: 'Approved',
+              createdAt: now,
+              isReferral: true
+            });
+          } catch (rErr) {
+            console.warn('[Referral Backend] RTDB reseller wallet error:', rErr);
+          }
+        }
+        if (fsDb) {
+          try {
+            await fsDb.collection('reseller_wallet').doc(newUserId).set({
+              id: newUserId,
+              resellerId: newUserId,
+              availableBalance: NEW_USER_BONUS,
+              walletBalance: NEW_USER_BONUS,
+              releasedProfit: NEW_USER_BONUS,
+              updatedAt: now
+            }, { merge: true });
+            await fsDb.collection('users').doc(newUserId).set({
+              walletBalance: NEW_USER_BONUS,
+              resellerBalance: NEW_USER_BONUS,
+              referralBonusEarned: NEW_USER_BONUS,
+              updatedAt: now
+            }, { merge: true });
+          } catch (_) {}
+        }
+      }
+
+      // 3. CREDIT ৳200 TO REFERRER'S WALLET
+      if (rtdb) {
+        try {
+          const [refVSnap, refRSnap, refUSnap] = await Promise.all([
+            rtdb.ref(`vendors/${referrerId}`).once('value').catch(() => null),
+            rtdb.ref(`resellers/${referrerId}`).once('value').catch(() => null),
+            rtdb.ref(`users/${referrerId}`).once('value').catch(() => null)
+          ]);
+          const refV = refVSnap?.val();
+          const refR = refRSnap?.val();
+          const refU = refUSnap?.val() || {};
+
+          const isRefVendor = Boolean(refV || refU.role === 'Vendor');
+          const isRefReseller = Boolean(refR || refU.role === 'Reseller');
+
+          const prevUserWallet = Number(refU.wallet ?? refU.balance ?? refU.walletBalance ?? 0);
+          const prevRefEarnings = Number(refU.totalReferralEarnings || 0);
+
+          if (isRefVendor) {
+            const vwRef = rtdb.ref(`vendor_wallet/${referrerId}`);
+            const vwSnap = await vwRef.once('value');
+            const currentVW = vwSnap.val() || {};
+            const prevBal = Number(currentVW.balance || 0);
+            const prevLifetime = Number(currentVW.lifetimeEarnings || 0);
+            const newBal = prevBal + REFERRER_BONUS;
+            const newLifetime = prevLifetime + REFERRER_BONUS;
+
+            await vwRef.update({
+              id: referrerId,
+              vendorId: referrerId,
+              balance: newBal,
+              lifetimeEarnings: newLifetime,
+              updatedAt: now
+            });
+
+            await rtdb.ref(`users/${referrerId}`).update({
+              wallet: prevUserWallet + REFERRER_BONUS,
+              balance: prevUserWallet + REFERRER_BONUS,
+              walletBalance: newBal,
+              totalReferralEarnings: prevRefEarnings + REFERRER_BONUS,
+              updatedAt: now
+            });
+
+            await rtdb.ref('wallet_transactions').push({
+              vendorId: referrerId,
+              userId: referrerId,
+              orderId: refOrderId,
+              type: 'Bonus',
+              amount: REFERRER_BONUS,
+              status: 'Completed',
+              description: `🎁 ${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস (${newUserName || 'নতুন পার্টনার'})`,
+              createdAt: now,
+              isReferral: true
+            });
+
+            if (fsDb) {
+              try {
+                await fsDb.collection('vendor_wallet').doc(referrerId).set({
+                  balance: newBal,
+                  lifetimeEarnings: newLifetime,
+                  updatedAt: now
+                }, { merge: true });
+              } catch (_) {}
+            }
+          } else if (isRefReseller) {
+            const rwRef = rtdb.ref(`reseller_wallet/${referrerId}`);
+            const rwSnap = await rwRef.once('value');
+            const currentRW = rwSnap.val() || {};
+            const prevAvail = Number(currentRW.availableBalance ?? currentRW.walletBalance ?? 0);
+            const prevTotal = Number(currentRW.totalBalance || prevAvail);
+            const prevReleased = Number(currentRW.releasedProfit ?? currentRW.lifetimeCommission ?? 0);
+            const newAvail = prevAvail + REFERRER_BONUS;
+            const newTotal = prevTotal + REFERRER_BONUS;
+            const newReleased = prevReleased + REFERRER_BONUS;
+
+            await rwRef.update({
+              resellerId: referrerId,
+              availableBalance: newAvail,
+              walletBalance: newAvail,
+              totalBalance: newTotal,
+              releasedProfit: newReleased,
+              approvedCommission: newAvail,
+              lifetimeCommission: newReleased,
+              updatedAt: now
+            });
+
+            await rtdb.ref(`users/${referrerId}`).update({
+              wallet: prevUserWallet + REFERRER_BONUS,
+              balance: prevUserWallet + REFERRER_BONUS,
+              walletBalance: newAvail,
+              resellerBalance: newAvail,
+              totalReferralEarnings: prevRefEarnings + REFERRER_BONUS,
+              updatedAt: now
+            });
+
+            const refTxId = `TXN-REF-${referrerId.substring(0, 6)}-${now}`;
+            await rtdb.ref(`reseller_wallet_transactions/${refTxId}`).set({
+              transactionId: refTxId,
+              userId: referrerId,
+              resellerId: referrerId,
+              orderId: refOrderId,
+              amount: REFERRER_BONUS,
+              type: 'PROFIT_RELEASED',
+              status: 'COMPLETED',
+              description: `🎁 ${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস (${newUserName || 'নতুন পার্টনার'})`,
+              idempotencyKey: `referrer_bonus_${newUserId}`,
+              createdAt: now,
+              updatedAt: now
+            });
+
+            await rtdb.ref('reseller_transactions').push({
+              resellerId: referrerId,
+              orderId: refOrderId,
+              customerName: newUserName,
+              productName: `${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস`,
+              amount: REFERRER_BONUS,
+              status: 'Approved',
+              createdAt: now,
+              isReferral: true
+            });
+
+            if (fsDb) {
+              try {
+                await fsDb.collection('reseller_wallet').doc(referrerId).set({
+                  availableBalance: newAvail,
+                  walletBalance: newAvail,
+                  releasedProfit: newReleased,
+                  updatedAt: now
+                }, { merge: true });
+              } catch (_) {}
+            }
+          } else {
+            // Regular user wallet
+            const uwRef = rtdb.ref(`user_wallet/${referrerId}`);
+            const uwSnap = await uwRef.once('value');
+            const currentUW = uwSnap.val() || {};
+            const prevUwBal = Number(currentUW.walletBalance ?? prevUserWallet ?? 0);
+            const newUwBal = prevUwBal + REFERRER_BONUS;
+
+            await uwRef.update({
+              walletBalance: newUwBal,
+              approvedCommission: Number(currentUW.approvedCommission || 0) + REFERRER_BONUS,
+              updatedAt: now
+            });
+
+            await rtdb.ref(`users/${referrerId}`).update({
+              wallet: prevUserWallet + REFERRER_BONUS,
+              balance: prevUserWallet + REFERRER_BONUS,
+              walletBalance: newUwBal,
+              totalReferralEarnings: prevRefEarnings + REFERRER_BONUS,
+              updatedAt: now
+            });
+
+            await rtdb.ref('wallet_transactions').push({
+              userId: referrerId,
+              orderId: refOrderId,
+              type: 'Bonus',
+              amount: REFERRER_BONUS,
+              status: 'Completed',
+              description: `🎁 ${newUserRole === 'Vendor' ? 'ভেন্ডর' : 'রিসেলার'} রেফারেল বোনাস (${newUserName || 'নতুন পার্টনার'})`,
+              createdAt: now,
+              isReferral: true
+            });
+          }
+
+          // 4. Update referral tracking record in RTDB referrals/{referrerId}/{newUserId}
+          await rtdb.ref(`referrals/${referrerId}/${newUserId}`).set({
+            id: newUserId,
+            referredUserId: newUserId,
+            referredName: newUserName,
+            referredEmail: newUserEmail || '',
+            bonusAmount: REFERRER_BONUS,
+            newUserBonus: NEW_USER_BONUS,
+            status: 'Completed',
+            userRole: newUserRole,
+            createdAt: now
+          });
+
+          // 5. Update referrer's referral stats in RTDB
+          const statsRef = rtdb.ref(`referral_stats/${referrerId}`);
+          const statsSnap = await statsRef.once('value');
+          const currStats = statsSnap.val() || {};
+          await statsRef.set({
+            totalReferrals: Number(currStats.totalReferrals || 0) + 1,
+            totalEarnings: Number(currStats.totalEarnings || 0) + REFERRER_BONUS,
+            activeResellers: newUserRole === 'Reseller' ? Number(currStats.activeResellers || 0) + 1 : Number(currStats.activeResellers || 0),
+            activeVendors: newUserRole === 'Vendor' ? Number(currStats.activeVendors || 0) + 1 : Number(currStats.activeVendors || 0),
+            updatedAt: now
+          });
+
+          // 6. Set Completed in referral_rewards_log
+          await rtdb.ref(`referral_rewards_log/${newUserId}`).set({
+            status: 'Completed',
+            newUserId,
+            referrerId,
+            newUserRole,
+            newUserBonus: NEW_USER_BONUS,
+            referrerBonus: REFERRER_BONUS,
+            completedAt: now
+          });
+        } catch (refError) {
+          console.warn('[Referral Backend] RTDB referrer update error:', refError);
+        }
+      }
+
+      if (fsDb) {
+        try {
+          await fsDb.collection('referral_rewards_log').doc(newUserId).set({
+            status: 'Completed',
+            newUserId,
+            referrerId,
+            newUserRole,
+            newUserBonus: NEW_USER_BONUS,
+            referrerBonus: REFERRER_BONUS,
+            completedAt: now
+          }, { merge: true });
+        } catch (_) {}
+      }
+
+      console.log(`[Referral Backend] Successfully credited referral rewards: ৳${NEW_USER_BONUS} to ${newUserId} and ৳${REFERRER_BONUS} to ${referrerId}`);
+
+      return res.json({
+        success: true,
+        newUserBonus: NEW_USER_BONUS,
+        referrerBonus: REFERRER_BONUS,
+        message: 'রেফারেল বোনাস সফলভাবে ওয়ালেটে যুক্ত হয়েছে।'
+      });
+    } catch (err: any) {
+      console.error('[Referral Backend] Error processing rewards:', err);
       return res.status(500).json({ success: false, error: err.message || 'Server error' });
     }
   });

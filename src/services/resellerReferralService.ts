@@ -174,11 +174,11 @@ export async function lookupReferralCode(rawCode: string): Promise<ReferrerLooku
   try {
     // 1. Direct RTDB lookup in referral_codes/{cleanCode}
     const directCode = await rtdbGet<any>(`referral_codes/${cleanCode}`).catch(() => null);
-    if (directCode && directCode.userId) {
+    if (directCode && (directCode.userId || directCode.vendorId || directCode.resellerId)) {
       return {
         valid: true,
-        userId: directCode.userId,
-        name: directCode.resellerName || directCode.vendorName || directCode.name || 'রেফারার পার্টনার',
+        userId: directCode.userId || directCode.vendorId || directCode.resellerId,
+        name: directCode.vendorName || directCode.resellerName || directCode.name || 'রেফারার পার্টনার',
         code: cleanCode
       };
     }
@@ -186,11 +186,11 @@ export async function lookupReferralCode(rawCode: string): Promise<ReferrerLooku
     // 2. Direct RTDB lookup in referral_codes/{rawCode.trim()}
     if (rawCode.trim() !== cleanCode) {
       const rawDirect = await rtdbGet<any>(`referral_codes/${rawCode.trim()}`).catch(() => null);
-      if (rawDirect && rawDirect.userId) {
+      if (rawDirect && (rawDirect.userId || rawDirect.vendorId || rawDirect.resellerId)) {
         return {
           valid: true,
-          userId: rawDirect.userId,
-          name: rawDirect.resellerName || rawDirect.vendorName || rawDirect.name || 'রেফারার পার্টনার',
+          userId: rawDirect.userId || rawDirect.vendorId || rawDirect.resellerId,
+          name: rawDirect.vendorName || rawDirect.resellerName || rawDirect.name || 'রেফারার পার্টনার',
           code: cleanCode
         };
       }
@@ -405,6 +405,36 @@ export async function processReferralRewards(
   const refOrderId = `REF-${newUserId.substring(0, 8)}`;
 
   try {
+    // 0. Attempt Server-side authoritative atomic processing first (elevated Firebase Admin privileges)
+    try {
+      const apiRes = await fetch('/api/referral/process-rewards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          referrerId,
+          newUserId,
+          newUserName: newUserName || '',
+          newUserEmail: newUserEmail || '',
+          newUserRole
+        })
+      });
+      if (apiRes.ok) {
+        const data = await apiRes.json();
+        if (data.success) {
+          console.log('[ReferralService] Successfully processed via authoritative backend API:', data);
+          return {
+            success: true,
+            newUserBonus: data.newUserBonus || NEW_USER_REFERRAL_BONUS,
+            referrerBonus: data.referrerBonus || REFERRAL_BONUS_AMOUNT,
+            message: data.message || 'রেফারেল বোনাস সফলভাবে ওয়ালেটে যুক্ত হয়েছে।',
+            alreadyProcessed: data.alreadyProcessed
+          };
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[ReferralService] Server API processing skipped, continuing with client synchronization:', apiErr);
+    }
+
     // 1. Idempotency Check: check if already credited across RTDB or Firestore
     const [existingReferral, existingLog, existingFsLog] = await Promise.all([
       rtdbGet<any>(recordPath).catch(() => null),

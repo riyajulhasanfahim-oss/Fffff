@@ -1,24 +1,23 @@
 /**
- * AUTHORITATIVE ADMIN ALLOWLIST FOR RJ WORLD BD
- *
- * CRITICAL SECURITY INVARIANT:
- * ONLY these two exact email addresses are permitted to have Admin privileges.
- * NO OTHER ACCOUNT must EVER receive Admin access under any circumstances.
- *
- * Any automatic Admin granting mechanism based on signup, display name, UID, 
- * database role field, query parameter, localStorage flag, or client claim is strictly forbidden.
+ * AUTHORITATIVE ADMIN ALLOWLIST
+ * 
+ * STRICT SECURITY REQUIREMENT:
+ * ONLY THESE TWO EMAIL ACCOUNTS ARE ALLOWED TO BE ADMINS:
+ * 1. riyajulhasanfahim@gmail.com
+ * 2. frofficialbd1@gmail.com
+ * 
+ * NO OTHER ACCOUNT must ever receive Admin access.
  */
 
-export const ALLOWED_ADMIN_EMAILS = Object.freeze([
+export const ALLOWED_ADMIN_EMAILS: readonly string[] = Object.freeze([
   'riyajulhasanfahim@gmail.com',
   'frofficialbd1@gmail.com'
 ]);
 
 /**
- * Returns true strictly if the given email is one of the two authorized admin emails.
+ * Validates whether an email address belongs to the strictly approved admin allowlist.
  */
 export function isAllowedAdminEmail(email?: string | null): boolean {
   if (!email || typeof email !== 'string') return false;
-  const normalized = email.trim().toLowerCase();
-  return ALLOWED_ADMIN_EMAILS.includes(normalized);
+  return ALLOWED_ADMIN_EMAILS.includes(email.trim().toLowerCase());
 }

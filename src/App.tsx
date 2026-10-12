@@ -155,6 +155,16 @@ import SplashScreen from "./components/common/SplashScreen";
 export default function App() {
   useEffect(() => {
     seedFirestoreInitialData();
+    try {
+      const search = window.location.search;
+      if (search) {
+        const params = new URLSearchParams(search);
+        const ref = params.get('ref') || params.get('code') || params.get('invite');
+        if (ref && ref.trim()) {
+          localStorage.setItem('rj_referral_code', ref.trim().toUpperCase());
+        }
+      }
+    } catch (_) {}
   }, []);
 
   return (

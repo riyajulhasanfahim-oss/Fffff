@@ -73,11 +73,15 @@ export default function VendorRegistration() {
   const [referralFeedback, setReferralFeedback] = useState<string>('');
   const [referralValid, setReferralValid] = useState<boolean | null>(null);
 
-  // Auto-populate referral code from URL query params (e.g. ?ref=CODE or ?code=CODE or ?invite=CODE)
+  // Auto-populate referral code from URL query params (e.g. ?ref=CODE or ?code=CODE or ?invite=CODE) or localStorage
   useEffect(() => {
-    const refParam = searchParams.get('ref') || searchParams.get('code') || searchParams.get('invite');
-    if (refParam) {
-      setInviteCode(refParam.trim().toUpperCase());
+    const refParam = searchParams.get('ref') || searchParams.get('code') || searchParams.get('invite') || localStorage.getItem('rj_referral_code');
+    if (refParam && refParam.trim()) {
+      const clean = refParam.trim().toUpperCase();
+      setInviteCode(clean);
+      try {
+        localStorage.setItem('rj_referral_code', clean);
+      } catch (_) {}
     }
   }, [searchParams]);
 
@@ -670,15 +674,18 @@ export default function VendorRegistration() {
         // Credit referral bonus: ৳50 to new vendor and ৳200 to referrer (atomic & duplicate-safe)
         let finalReferrerId = referralSponsor?.userId;
         let finalReferrerName = referralSponsor?.name;
-        if (!finalReferrerId && inviteCode.trim()) {
-          try {
-            const lookup = await lookupReferralCode(inviteCode.trim().toUpperCase());
-            if (lookup.valid && lookup.userId && lookup.userId !== currentUserId) {
-              finalReferrerId = lookup.userId;
-              finalReferrerName = lookup.name;
+        if (!finalReferrerId) {
+          const rawCandidate = inviteCode.trim() || localStorage.getItem('rj_referral_code') || '';
+          if (rawCandidate) {
+            try {
+              const lookup = await lookupReferralCode(rawCandidate.trim().toUpperCase());
+              if (lookup.valid && lookup.userId && lookup.userId !== currentUserId) {
+                finalReferrerId = lookup.userId;
+                finalReferrerName = lookup.name;
+              }
+            } catch (lookupErr) {
+              console.warn('[VendorRegistration] Fallback referral lookup error:', lookupErr);
             }
-          } catch (lookupErr) {
-            console.warn('[VendorRegistration] Fallback referral lookup error:', lookupErr);
           }
         }
 
@@ -691,6 +698,7 @@ export default function VendorRegistration() {
               newUserEmail: formData.email.trim() || user?.email || '',
               newUserRole: 'Vendor'
             });
+            try { localStorage.removeItem('rj_referral_code'); } catch (_) {}
           } catch (refErr) {
             console.error('[VendorRegistration] Error crediting referral bonus:', refErr);
           }

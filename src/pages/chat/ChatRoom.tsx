@@ -38,6 +38,7 @@ export default function ChatRoom() {
   });
   const [productInfo, setProductInfo] = useState<any>(null);
   const [newMessage, setNewMessage] = useState('');
+  const [chatMetadata, setChatMetadata] = useState<any>(null);
   const [chatId, setChatId] = useState<string>(() => queryChatId || (user?.uid && vendorId ? `${user.uid}_${vendorId}` : ''));
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -194,27 +195,25 @@ export default function ChatRoom() {
     };
     resolveVendor();
 
-    // Ensure chat metadata exists in RTDB without blocking UI
+    // Ensure chat metadata exists without wiping messages or overwriting lastMessage
     rtdbGet<any>(`chats/${directChatId}`).then(existing => {
       if (!isMounted) return;
-      if (!existing) {
-        rtdbSet(`chats/${directChatId}`, {
+      if (existing) {
+        setChatMetadata(existing);
+        rtdbUpdate(`chats/${directChatId}`, { unreadCountCustomer: 0 }).catch(() => {});
+      } else {
+        rtdbUpdate(`chats/${directChatId}`, {
           id: directChatId,
           customerId: user.uid,
           customerName: userData?.name || user.displayName || 'Customer',
           customerEmail: user.email || '',
-          vendorId: vendorId,
-          storeId: vendorId,
+          vendorId: vendorInfo?.userId || vendorInfo?.vendorId || vendorInfo?.id || vendorId,
+          storeId: vendorInfo?.storeId || vendorInfo?.id || vendorId,
           vendorName: vendorInfo?.shopName || vendorInfo?.name || 'Vendor',
           vendorLogo: vendorInfo?.shopLogo || vendorInfo?.logo || '',
-          lastMessage: '',
-          lastMessageTime: Date.now(),
           unreadCountCustomer: 0,
-          unreadCountVendor: 0,
           createdAt: Date.now()
         }).catch(() => {});
-      } else {
-        rtdbUpdate(`chats/${directChatId}`, { unreadCountCustomer: 0 }).catch(() => {});
       }
     }).catch(() => {});
 

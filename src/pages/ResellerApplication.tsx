@@ -54,11 +54,15 @@ export default function ResellerApplication() {
   const [referralSponsor, setReferralSponsor] = useState<{ userId: string; name: string; code: string } | null>(null);
   const [referralFeedback, setReferralFeedback] = useState<string>('');
 
-  // Auto-populate referral code from URL query params (e.g. ?ref=CODE or ?code=CODE)
+  // Auto-populate referral code from URL query params (e.g. ?ref=CODE or ?code=CODE) or localStorage
   useEffect(() => {
-    const refParam = searchParams.get('ref') || searchParams.get('code') || searchParams.get('invite');
-    if (refParam) {
-      setFormData(prev => ({ ...prev, inviteCode: refParam.trim().toUpperCase() }));
+    const refParam = searchParams.get('ref') || searchParams.get('code') || searchParams.get('invite') || localStorage.getItem('rj_referral_code');
+    if (refParam && refParam.trim()) {
+      const clean = refParam.trim().toUpperCase();
+      setFormData(prev => ({ ...prev, inviteCode: clean }));
+      try {
+        localStorage.setItem('rj_referral_code', clean);
+      } catch (_) {}
     }
   }, [searchParams]);
 
@@ -365,16 +369,19 @@ export default function ResellerApplication() {
         let finalReferrerName = referralSponsor?.name;
         let finalReferralCode = referralSponsor?.code;
 
-        if (!finalReferrerId && formData.inviteCode.trim()) {
-          try {
-            const lookup = await lookupReferralCode(formData.inviteCode.trim().toUpperCase());
-            if (lookup.valid && lookup.userId && lookup.userId !== currentUserId) {
-              finalReferrerId = lookup.userId;
-              finalReferrerName = lookup.name;
-              finalReferralCode = lookup.code || formData.inviteCode.trim().toUpperCase();
+        if (!finalReferrerId) {
+          const rawCandidate = formData.inviteCode.trim() || localStorage.getItem('rj_referral_code') || '';
+          if (rawCandidate) {
+            try {
+              const lookup = await lookupReferralCode(rawCandidate.trim().toUpperCase());
+              if (lookup.valid && lookup.userId && lookup.userId !== currentUserId) {
+                finalReferrerId = lookup.userId;
+                finalReferrerName = lookup.name;
+                finalReferralCode = lookup.code || rawCandidate.trim().toUpperCase();
+              }
+            } catch (lookupErr) {
+              console.warn('[ResellerApplication] Fallback referral lookup error:', lookupErr);
             }
-          } catch (lookupErr) {
-            console.warn('[ResellerApplication] Fallback referral lookup error:', lookupErr);
           }
         }
 
@@ -383,21 +390,24 @@ export default function ResellerApplication() {
           resellerPayload.referralCodeUsed = finalReferralCode || formData.inviteCode.trim().toUpperCase();
         }
 
-        // For non-referral standalone promo codes, initialBonus is applied directly.
-        // For referral codes, processReferralRewards handles the ৳50 signup credit + ৳200 referrer credit atomically.
+        // For non-referral standalone promo codes, promoBonus is applied.
+        // For referral signup, initial ৳50 bonus is granted.
         const standalonePromoBonus = (!finalReferrerId && promoValid) ? (promoBonus > 0 ? promoBonus : 50) : 0;
+        const initialReferralBonus = finalReferrerId ? 50 : 0;
+        const initialBalance = standalonePromoBonus || initialReferralBonus;
+
         const walletPayload = {
           resellerId: currentUserId,
-          availableBalance: standalonePromoBonus,
+          availableBalance: initialBalance,
           lockedBalance: 0,
-          totalBalance: standalonePromoBonus,
+          totalBalance: initialBalance,
           pendingProfit: 0,
-          releasedProfit: standalonePromoBonus,
+          releasedProfit: initialBalance,
           cancelledProfit: 0,
-          walletBalance: standalonePromoBonus,
+          walletBalance: initialBalance,
           pendingCommission: 0,
-          approvedCommission: standalonePromoBonus,
-          lifetimeCommission: standalonePromoBonus,
+          approvedCommission: initialBalance,
+          lifetimeCommission: initialBalance,
           totalSales: 0,
           totalOrders: 0,
           createdAt: Date.now(),
@@ -418,8 +428,9 @@ export default function ResellerApplication() {
             email: formData.email.trim() || user?.email || '',
             phone: formData.mobileNumber.trim(),
             role: 'Reseller',
-            walletBalance: standalonePromoBonus,
-            resellerBalance: standalonePromoBonus,
+            walletBalance: initialBalance,
+            resellerBalance: initialBalance,
+            referralBonusEarned: initialReferralBonus,
             referredBy: finalReferrerId || null,
             referralCodeUsed: finalReferralCode || null,
             updatedAt: Date.now()
@@ -468,6 +479,7 @@ export default function ResellerApplication() {
               newUserEmail: formData.email.trim() || user?.email || '',
               newUserRole: 'Reseller'
             });
+            try { localStorage.removeItem('rj_referral_code'); } catch (_) {}
           } catch (refErr) {
             console.error('[ResellerApplication] Error processing referral rewards:', refErr);
           }

@@ -109,7 +109,7 @@
     "reseller_wallet": {
       "$resellerId": {
         ".read": "auth != null && (auth.uid === $resellerId || auth.token.admin === true)",
-        ".write": "auth != null && auth.token.admin === true"
+        ".write": "auth != null && (auth.uid === $resellerId || auth.token.admin === true)"
       }
     },
     "vendor_wallet": {
@@ -202,6 +202,26 @@
     "referral_stats": {
       ".read": "auth != null",
       ".write": "auth != null"
+    },
+    "referral_rewards_log": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "reseller_transactions": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["resellerId", "createdAt", "status"]
+    },
+    "reseller_wallet_transactions": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["resellerId", "createdAt", "status"]
+    },
+    "user_wallet": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        ".write": "auth != null"
+      }
     },
     "wallet_transactions": {
       ".read": "auth != null",
