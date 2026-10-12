@@ -763,6 +763,8 @@ export async function adminApproveCourierReview(params: {
   if (customerId) {
     try {
       await rtdbPush(`notifications/${customerId}`, {
+        userId: customerId,
+        recipientId: customerId,
         title: `আপনার অর্ডার #${orderNum} কুরিয়ারে শিপ করা হয়েছে!`,
         message: `${courierName}-এর মাধ্যমে আপনার পার্সেল পাঠানো হয়েছে। ট্র্যাকিং নম্বর: ${trackingId}। লাইভ ট্র্যাক করতে ক্লিক করুন।`,
         type: 'order',

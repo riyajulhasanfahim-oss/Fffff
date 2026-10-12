@@ -198,6 +198,7 @@ export async function sendVendorNotification(params: {
     const payload = {
       vendorId,
       userId: vendorId,
+      recipientId: vendorId,
       title,
       message,
       type,
@@ -208,18 +209,14 @@ export async function sendVendorNotification(params: {
       metadata: metadata || null
     };
 
-    const notifId = await rtdbPush('vendor_notifications', payload);
+    // 1. Push directly to vendor's isolated notification inbox: vendor_notifications/${vendorId}
+    const notifId = await rtdbPush(`vendor_notifications/${vendorId}`, payload);
 
-    // Also dual-write to general notifications path so user never misses alerts
+    // 2. Also dual-write to vendor's private general notifications path: notifications/${vendorId}
     try {
       await rtdbPush(`notifications/${vendorId}`, {
-        title,
-        message,
-        type: 'order',
-        link: link || '',
-        createdAt: now,
-        timestamp: now,
-        read: false
+        ...payload,
+        id: notifId || undefined
       });
     } catch (_) {}
 

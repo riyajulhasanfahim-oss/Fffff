@@ -271,11 +271,12 @@ export function subscribeToUserReads(
 /**
  * Unified listener that aggregates:
  * 1) User's private notifications (`notifications/${userId}`)
- * 2) Global / broadcast notifications (`notifications`)
- * 3) Vendor notifications if role is Vendor (`vendor_notifications`)
+ * 2) Global / broadcast notifications from Admin (`global_notifications`)
+ * 3) Vendor notifications if role is Vendor (`vendor_notifications/${userId}`)
+ * 4) Admin notifications if role is Admin (`admin_notifications`)
  * 
- * Includes deep deduplication by unique ID and fingerprint, and filters out
- * internal chat messages from general notifications.
+ * Enforces strict UID recipient isolation:
+ * Users can ONLY receive their own notifications or global admin broadcasts.
  */
 export function subscribeToAllUserNotifications(
   userId: string,
@@ -303,6 +304,13 @@ export function subscribeToAllUserNotifications(
       // Do not mix raw chat messages with general marketing/system notifications
       if (item.type === 'message' || item.type === 'chat') continue;
 
+      // Strict UID boundary verification: if it has an explicit target that is not this user, discard
+      const recipient = item.userId || item.metadata?.recipientId || item.vendorId;
+      const isGlobal = item.targetType === 'all' || item.metadata?.isGlobal === true;
+      if (!isGlobal && recipient && recipient !== userId && recipient !== 'all' && role !== 'admin') {
+        continue;
+      }
+
       if (seenIds.has(item.id)) continue;
       seenIds.add(item.id);
 
@@ -325,6 +333,7 @@ export function subscribeToAllUserNotifications(
       if (snap && typeof snap === 'object') {
         Object.entries(snap).forEach(([id, item]) => {
           if (item && typeof item === 'object' && (item.title || item.message || item.body)) {
+            // Guarantee recipient is the current user
             rawMap.set(id, {
               id,
               title: item.title || 'বিজ্ঞপ্তি',
@@ -343,32 +352,30 @@ export function subscribeToAllUserNotifications(
     }
   );
 
-  // 2. Listen to global / broadcast notifications in RTDB: notifications
+  // 2. Listen to global / broadcast announcements from Admin: global_notifications
   const unsubGlobal = rtdbSubscribe<Record<string, any>>(
-    'notifications',
+    'global_notifications',
     (snap) => {
       if (snap && typeof snap === 'object') {
         Object.entries(snap).forEach(([id, item]) => {
           if (!item || typeof item !== 'object') return;
 
-          // Guard against nested user buckets: if item has no direct notification fields, skip
           const hasDirectFields = Boolean(item.title || item.message || item.body || item.type || item.createdAt);
           if (!hasDirectFields) return;
 
           const target = String(item.targetType || 'all').toLowerCase();
-          const isSingle = target === 'single' || Boolean(item.targetUserId) || (Boolean(item.userId) && target !== 'all');
           
           let matchesRole = false;
-          if (isSingle) {
-            matchesRole = item.userId === userId || item.targetUserId === userId;
-          } else if (target === 'all') {
+          if (target === 'all' || !target) {
             matchesRole = true;
           } else if (target === 'users' || target === 'user' || target === 'customer' || target === 'general') {
-            matchesRole = role === 'user' || role === 'customer' || !role;
+            matchesRole = role === 'user' || role === 'customer' || !role || role === 'admin';
           } else if (target === 'vendors' || target === 'vendor') {
             matchesRole = role === 'vendor' || role === 'admin';
           } else if (target === 'resellers' || target === 'reseller' || target === 'mlm') {
             matchesRole = role === 'reseller' || role === 'admin';
+          } else if (target === 'single') {
+            matchesRole = item.userId === userId || item.targetUserId === userId || item.recipientId === userId;
           }
 
           if (matchesRole) {
@@ -381,7 +388,7 @@ export function subscribeToAllUserNotifications(
               createdAt: Number(item.createdAt || item.timestamp || Date.now()),
               targetType: item.targetType,
               imageUrl: item.imageUrl || item.image || item.banner || item.metadata?.imageUrl || item.metadata?.image,
-              metadata: item.metadata || (item.productId ? { productId: item.productId } : undefined)
+              metadata: { ...(item.metadata || {}), isGlobal: true, targetType: item.targetType }
             });
           }
         });
@@ -390,27 +397,52 @@ export function subscribeToAllUserNotifications(
     }
   );
 
-  // 3. If user is vendor, also subscribe to vendor_notifications
+  // 3. If user is vendor, subscribe to vendor-specific isolated path: vendor_notifications/${userId}
   let unsubVendor: (() => void) | null = null;
   if (role === 'vendor' || role === 'admin') {
     unsubVendor = rtdbSubscribe<Record<string, any>>(
-      'vendor_notifications',
+      `vendor_notifications/${userId}`,
       (snap) => {
         if (snap && typeof snap === 'object') {
           Object.entries(snap).forEach(([id, item]) => {
             if (item && typeof item === 'object') {
-              if (item.vendorId === userId || item.userId === userId || role === 'admin') {
-                rawMap.set(id, {
-                  id,
-                  title: item.title || 'ভেন্ডর আপডেট',
-                  message: item.message || item.body || '',
-                  type: item.type || 'vendor',
-                  link: item.link || '/vendor/notifications',
-                  createdAt: Number(item.createdAt || item.timestamp || Date.now()),
-                  vendorId: item.vendorId,
-                  metadata: item.metadata
-                });
-              }
+              rawMap.set(id, {
+                id,
+                title: item.title || 'ভেন্ডর আপডেট',
+                message: item.message || item.body || '',
+                type: item.type || 'vendor',
+                link: item.link || '/vendor/notifications',
+                createdAt: Number(item.createdAt || item.timestamp || Date.now()),
+                vendorId: userId,
+                userId,
+                metadata: item.metadata
+              });
+            }
+          });
+        }
+        emit();
+      }
+    );
+  }
+
+  // 4. If user is admin, also listen to admin_notifications for withdrawals and system alerts
+  let unsubAdmin: (() => void) | null = null;
+  if (role === 'admin') {
+    unsubAdmin = rtdbSubscribe<Record<string, any>>(
+      'admin_notifications',
+      (snap) => {
+        if (snap && typeof snap === 'object') {
+          Object.entries(snap).forEach(([id, item]) => {
+            if (item && typeof item === 'object') {
+              rawMap.set(id, {
+                id,
+                title: item.title || 'এডমিন নোটিফিকেশন',
+                message: item.message || item.body || '',
+                type: item.type || 'system',
+                link: item.link || '/admin/notifications',
+                createdAt: Number(item.createdAt || item.timestamp || Date.now()),
+                metadata: item.metadata
+              });
             }
           });
         }
@@ -423,6 +455,7 @@ export function subscribeToAllUserNotifications(
     unsubUserPrivate();
     unsubGlobal();
     if (unsubVendor) unsubVendor();
+    if (unsubAdmin) unsubAdmin();
   };
 }
 
@@ -476,9 +509,12 @@ export async function sendAdminNotification(
   if (payload.targetType === 'single' && payload.targetUserId) {
     notifData.userId = payload.targetUserId;
     notifData.targetUserId = payload.targetUserId;
+    notifData.recipientId = payload.targetUserId;
     if (payload.targetUserName) {
       notifData.targetUserName = payload.targetUserName;
     }
+  } else {
+    notifData.isGlobal = true;
   }
 
   const tasks: Promise<any>[] = [];
@@ -486,19 +522,14 @@ export async function sendAdminNotification(
   // 1. History log for Admin Panel
   tasks.push(rtdbSet(`notificationHistory/${id}`, notifData));
 
-  // 2. Real-time distribution (Strictly no duplicate paths!)
+  // 2. Real-time distribution
   if (payload.targetType === 'single' && payload.targetUserId) {
     // Write ONLY to user's private inbox
     tasks.push(rtdbSet(`notifications/${payload.targetUserId}/${id}`, notifData));
-  } else if (payload.targetType === 'vendors') {
-    // Write to vendor notifications
-    tasks.push(rtdbSet(`vendor_notifications/${id}`, {
-      ...notifData,
-      vendorId: 'all',
-      isGlobal: true
-    }));
   } else {
-    // Broadcast for 'all', 'users', 'resellers'
+    // Broadcast for 'all', 'users', 'resellers', 'vendors' to global_notifications
+    tasks.push(rtdbSet(`global_notifications/${id}`, notifData));
+    // Also save in notifications/${id} for admin history backwards-compatibility
     tasks.push(rtdbSet(`notifications/${id}`, notifData));
   }
 
@@ -676,25 +707,40 @@ export async function getNotificationById(
 
   let data: any = null;
 
-  // 1. Global notifications
-  data = await rtdbGet<any>(`notifications/${id}`).catch(() => null);
-
-  // 2. Private notifications
-  if (!data && userId) {
+  // 1. Private user notification
+  if (userId) {
     data = await rtdbGet<any>(`notifications/${userId}/${id}`).catch(() => null);
+    if (!data) {
+      data = await rtdbGet<any>(`vendor_notifications/${userId}/${id}`).catch(() => null);
+    }
   }
 
-  // 3. Notification history
+  // 2. Global broadcast notifications
+  if (!data) {
+    data = await rtdbGet<any>(`global_notifications/${id}`).catch(() => null);
+  }
+
+  // 3. Fallbacks
+  if (!data) {
+    data = await rtdbGet<any>(`notifications/${id}`).catch(() => null);
+  }
+
   if (!data) {
     data = await rtdbGet<any>(`notificationHistory/${id}`).catch(() => null);
   }
 
-  // 4. Vendor notifications
   if (!data) {
     data = await rtdbGet<any>(`vendor_notifications/${id}`).catch(() => null);
   }
 
   if (data) {
+    // If not a global notification, ensure caller matches the recipient
+    const isGlobal = data.targetType === 'all' || data.isGlobal === true;
+    const recipient = data.recipientId || data.targetUserId || data.userId || data.vendorId;
+    if (!isGlobal && userId && recipient && recipient !== userId && recipient !== 'all') {
+      return null;
+    }
+
     return {
       id,
       title: data.title || 'বিজ্ঞপ্তি',
@@ -702,7 +748,7 @@ export async function getNotificationById(
       type: data.type || 'system',
       link: data.link || (data.productId ? `/product/${data.productId}` : (data.route ? `/${data.route}` : (data.metadata?.link || (data.metadata?.productId ? `/product/${data.metadata.productId}` : undefined)))),
       createdAt: Number(data.createdAt || data.timestamp || Date.now()),
-      userId: data.userId || data.targetUserId,
+      userId: data.userId || data.targetUserId || data.recipientId,
       targetType: data.targetType,
       imageUrl: data.imageUrl || data.image || data.banner || data.metadata?.imageUrl || data.metadata?.image,
       metadata: data.metadata || (data.productId ? { productId: data.productId } : undefined)

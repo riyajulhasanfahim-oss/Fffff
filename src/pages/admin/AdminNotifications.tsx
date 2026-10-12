@@ -427,6 +427,7 @@ export default function AdminNotifications() {
       setDeletingId(id);
       await Promise.allSettled([
         rtdbSet(`notifications/${id}`, null),
+        rtdbSet(`global_notifications/${id}`, null),
         rtdbSet(`notificationHistory/${id}`, null)
       ]);
       setHistory(prev => prev.filter(h => h.id !== id));

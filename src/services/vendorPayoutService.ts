@@ -756,6 +756,8 @@ export async function refundCustomerDispute(orderData: any, adminUser: any, note
     if (customerId && customerId !== 'guest') {
       try {
         await rtdbPush(`notifications/${customerId}`, {
+          userId: customerId,
+          recipientId: customerId,
           type: 'dispute_resolved',
           title: 'রিপোর্ট সমাধান: রিফান্ড অনুমোদিত',
           message: `আপনার #${orderData.orderId || mainOrderId} অর্ডারের রিপোর্ট পর্যালোচনা শেষে রিফান্ড অনুমোদন করা হয়েছে।`,
@@ -768,14 +770,21 @@ export async function refundCustomerDispute(orderData: any, adminUser: any, note
 
     if (vendorId) {
       try {
-        await rtdbPush(`notifications/${vendorId}`, {
+        const vPayload = {
+          vendorId,
+          userId: vendorId,
+          recipientId: vendorId,
           type: 'dispute_resolved',
           title: 'রিপোর্ট সমাধান: রিফান্ড',
           message: `অর্ডার #${orderData.orderId || mainOrderId}-এর কাস্টমার রিপোর্ট পর্যালোচনা শেষে রিফান্ড অনুমোদিত হয়েছে।`,
           orderId: orderData.orderId || mainOrderId,
           createdAt: Date.now(),
           read: false
-        });
+        };
+        await Promise.allSettled([
+          rtdbPush(`vendor_notifications/${vendorId}`, vPayload),
+          rtdbPush(`notifications/${vendorId}`, vPayload)
+        ]);
       } catch (_) {}
     }
 
@@ -870,6 +879,8 @@ export async function rejectCustomerDisputeAndRelease(orderData: any, adminUser:
     if (customerId && customerId !== 'guest') {
       try {
         await rtdbPush(`notifications/${customerId}`, {
+          userId: customerId,
+          recipientId: customerId,
           type: 'dispute_rejected',
           title: 'রিপোর্ট সমাধান: পর্যালোচনা সম্পন্ন',
           message: `আপনার #${orderData.orderId || mainOrderId} অর্ডারের রিপোর্ট পর্যালোচনা শেষে সিদ্ধান্ত হয়েছে: ${note || 'পেমেন্ট রিলিজ করা হয়েছে'}।`,
@@ -882,14 +893,21 @@ export async function rejectCustomerDisputeAndRelease(orderData: any, adminUser:
 
     if (vendorId) {
       try {
-        await rtdbPush(`notifications/${vendorId}`, {
+        const vPayload = {
+          vendorId,
+          userId: vendorId,
+          recipientId: vendorId,
           type: 'dispute_resolved',
           title: 'পেমেন্ট রিলিজ সম্পন্ন',
           message: `অর্ডার #${orderData.orderId || mainOrderId}-এর কাস্টমার রিপোর্ট পর্যালোচনা শেষে ৳${payoutAmount} আপনার ওয়ালেটে জমা হয়েছে।`,
           orderId: orderData.orderId || mainOrderId,
           createdAt: Date.now(),
           read: false
-        });
+        };
+        await Promise.allSettled([
+          rtdbPush(`vendor_notifications/${vendorId}`, vPayload),
+          rtdbPush(`notifications/${vendorId}`, vPayload)
+        ]);
       } catch (_) {}
     }
 

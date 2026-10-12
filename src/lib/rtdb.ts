@@ -124,7 +124,8 @@ async function fetchFilteredCollectionDocs(colName: string): Promise<Record<stri
       if (!uid) return mapObj;
       const snaps = await Promise.all([
         getDocs(fsQuery(collection(db, 'vendor_notifications'), fsWhere('vendorId', '==', uid))).catch(() => null),
-        getDocs(fsQuery(collection(db, 'vendor_notifications'), fsWhere('userId', '==', uid))).catch(() => null)
+        getDocs(fsQuery(collection(db, 'vendor_notifications'), fsWhere('userId', '==', uid))).catch(() => null),
+        getDocs(fsQuery(collection(db, 'vendor_notifications'), fsWhere('recipientId', '==', uid))).catch(() => null)
       ]);
       snaps.forEach(collectSnap);
       return mapObj;
@@ -132,8 +133,11 @@ async function fetchFilteredCollectionDocs(colName: string): Promise<Record<stri
 
     if (colName === 'notifications') {
       if (!uid) return mapObj;
-      const snap = await getDocs(fsQuery(collection(db, 'notifications'), fsWhere('userId', '==', uid))).catch(() => null);
-      collectSnap(snap);
+      const snaps = await Promise.all([
+        getDocs(fsQuery(collection(db, 'notifications'), fsWhere('userId', '==', uid))).catch(() => null),
+        getDocs(fsQuery(collection(db, 'notifications'), fsWhere('recipientId', '==', uid))).catch(() => null)
+      ]);
+      snaps.forEach(collectSnap);
       return mapObj;
     }
 
@@ -1562,11 +1566,13 @@ export function rtdbSubscribe<T = any>(
             } else if (colName === 'vendor_notifications' && uid) {
               fsUnsubs.push(
                 onSnapshot(fsQuery(collection(db, 'vendor_notifications'), fsWhere('vendorId', '==', uid)), triggerFilteredRefresh, () => {}),
-                onSnapshot(fsQuery(collection(db, 'vendor_notifications'), fsWhere('userId', '==', uid)), triggerFilteredRefresh, () => {})
+                onSnapshot(fsQuery(collection(db, 'vendor_notifications'), fsWhere('userId', '==', uid)), triggerFilteredRefresh, () => {}),
+                onSnapshot(fsQuery(collection(db, 'vendor_notifications'), fsWhere('recipientId', '==', uid)), triggerFilteredRefresh, () => {})
               );
             } else if (colName === 'notifications' && uid) {
               fsUnsubs.push(
-                onSnapshot(fsQuery(collection(db, 'notifications'), fsWhere('userId', '==', uid)), triggerFilteredRefresh, () => {})
+                onSnapshot(fsQuery(collection(db, 'notifications'), fsWhere('userId', '==', uid)), triggerFilteredRefresh, () => {}),
+                onSnapshot(fsQuery(collection(db, 'notifications'), fsWhere('recipientId', '==', uid)), triggerFilteredRefresh, () => {})
               );
             }
           };

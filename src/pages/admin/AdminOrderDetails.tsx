@@ -282,6 +282,8 @@ export default function AdminOrderDetails() {
       if (customerId) {
         try {
           await rtdbPush(`notifications/${customerId}`, {
+            userId: customerId,
+            recipientId: customerId,
             title: `অর্ডারের স্ট্যাটাস আপডেট: ${newStatus}`,
             message: `আপনার অর্ডার #${(order.orderId || order.id).substring(0, 10)} এখন "${newStatus}" হয়েছে।`,
             type: 'order',

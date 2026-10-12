@@ -99,44 +99,59 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
     isFirstLoadRef.current = true;
     setLoading(true);
 
-    const unsubVendorNotifs = rtdbSubscribe<any>('vendor_notifications', (snap) => {
+    // 1. Subscribe to vendor-specific isolated notifications: vendor_notifications/${user.uid}
+    const unsubVendorNotifs = rtdbSubscribe<any>(`vendor_notifications/${user.uid}`, (snap) => {
       setLoading(false);
       handleNotifUpdate(snap, 'vendor_notifications');
     });
 
+    // 2. Subscribe to user's general notifications: notifications/${user.uid}
     const unsubUserNotifs = rtdbSubscribe<any>(`notifications/${user.uid}`, (snap) => {
       handleNotifUpdate(snap, 'user_notifications');
     });
 
+    // 3. Subscribe to admin global notifications: global_notifications
+    const unsubGlobalNotifs = rtdbSubscribe<any>('global_notifications', (snap) => {
+      handleNotifUpdate(snap, 'global_notifications');
+    });
+
     let currentVendorSnap: any = null;
     let currentUserSnap: any = null;
+    let currentGlobalSnap: any = null;
 
     const handleNotifUpdate = (snap: any, source: string) => {
       if (source === 'vendor_notifications') currentVendorSnap = snap;
       if (source === 'user_notifications') currentUserSnap = snap;
+      if (source === 'global_notifications') currentGlobalSnap = snap;
 
       const combinedMap = new Map<string, any>();
 
+      // Items from vendor's isolated node: vendor_notifications/${user.uid}
       if (currentVendorSnap && typeof currentVendorSnap === 'object') {
         Object.keys(currentVendorSnap).forEach((key) => {
           const item = currentVendorSnap[key];
-          if (!item) return;
-          const itemVendorId = item.vendorId || item.userId;
-          const matchesUser = 
-            itemVendorId === user.uid || 
-            item.vendorId === user.uid || 
-            item.userId === user.uid ||
-            (item.metadata && item.metadata.vendorId === user.uid);
-          if (matchesUser || isAdmin) {
-            combinedMap.set(key, { id: key, ...item });
-          }
+          if (!item || typeof item !== 'object') return;
+          combinedMap.set(key, { id: key, ...item, vendorId: user.uid });
         });
       }
 
+      // Items from user's isolated node: notifications/${user.uid}
       if (currentUserSnap && typeof currentUserSnap === 'object') {
         Object.keys(currentUserSnap).forEach((key) => {
           const item = currentUserSnap[key];
-          if (item) {
+          if (!item || typeof item !== 'object') return;
+          combinedMap.set(key, { id: key, ...item });
+        });
+      }
+
+      // Items from global broadcast: only if targeted to all or vendors
+      if (currentGlobalSnap && typeof currentGlobalSnap === 'object') {
+        Object.keys(currentGlobalSnap).forEach((key) => {
+          const item = currentGlobalSnap[key];
+          if (!item || typeof item !== 'object') return;
+          const target = String(item.targetType || 'all').toLowerCase();
+          const matchesVendor = target === 'all' || target === 'vendors' || target === 'vendor' || item.vendorId === user.uid || item.targetUserId === user.uid || isAdmin;
+          if (matchesVendor) {
             combinedMap.set(key, { id: key, ...item });
           }
         });
@@ -146,6 +161,13 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
       const currentReads = userReadsRef.current;
 
       combinedMap.forEach((item, key) => {
+        // Double-check isolation: never allow another vendor's or user's private notification
+        const isGlobal = item.targetType === 'all' || item.isGlobal === true;
+        const recipient = item.vendorId || item.userId || item.recipientId || item.targetUserId;
+        if (!isGlobal && recipient && recipient !== user.uid && recipient !== 'all' && !isAdmin) {
+          return;
+        }
+
         const isRead = Boolean(item.read || currentReads[key]?.read);
         list.push({
           id: key,
@@ -205,6 +227,7 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
     return () => {
       unsubVendorNotifs();
       unsubUserNotifs();
+      unsubGlobalNotifs();
     };
   }, [user?.uid, userData?.role, user?.email]);
 
@@ -285,11 +308,15 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
     try {
       if (user) {
         await markNotificationAsReadInRTDB(user.uid, id);
+        await rtdbUpdate(`vendor_notifications/${user.uid}/${id}`, {
+          read: true,
+          updatedAt: Date.now()
+        }).catch(() => {});
       }
       await rtdbUpdate(`vendor_notifications/${id}`, {
         read: true,
         updatedAt: Date.now()
-      });
+      }).catch(() => {});
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
     } catch (err) {
       console.warn('Failed to mark notification as read:', err);
@@ -303,10 +330,13 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
 
       if (user) {
         await markAllNotificationsAsReadInRTDB(user.uid, unread.map(n => n.id));
+        await Promise.allSettled(
+          unread.map(n => rtdbUpdate(`vendor_notifications/${user.uid}/${n.id}`, { read: true, updatedAt: Date.now() }))
+        );
       }
 
       await Promise.allSettled(
-        unread.map(n => rtdbUpdate(`vendor_notifications/${n.id}`, { read: true, updatedAt: Date.now() }))
+        unread.map(n => rtdbUpdate(`vendor_notifications/${n.id}`, { read: true, updatedAt: Date.now() }).catch(() => {}))
       );
 
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
@@ -319,26 +349,34 @@ export const VendorNotificationProvider: React.FC<{ children: React.ReactNode }>
 
   const deleteNotification = useCallback(async (id: string) => {
     try {
-      await rtdbRemove(`vendor_notifications/${id}`);
+      if (user) {
+        await rtdbRemove(`vendor_notifications/${user.uid}/${id}`).catch(() => {});
+      }
+      await rtdbRemove(`vendor_notifications/${id}`).catch(() => {});
       setNotifications(prev => prev.filter(n => n.id !== id));
       toast.success('নোটিফিকেশন মুছে ফেলা হয়েছে');
     } catch (err) {
       console.warn('Failed to delete notification:', err);
       toast.error('মুছে ফেলা যায়নি');
     }
-  }, []);
+  }, [user]);
 
   const clearAll = useCallback(async () => {
     try {
+      if (user) {
+        await Promise.allSettled(
+          notifications.map(n => rtdbRemove(`vendor_notifications/${user.uid}/${n.id}`).catch(() => {}))
+        );
+      }
       await Promise.allSettled(
-        notifications.map(n => rtdbRemove(`vendor_notifications/${n.id}`))
+        notifications.map(n => rtdbRemove(`vendor_notifications/${n.id}`).catch(() => {}))
       );
       setNotifications([]);
       toast.success('সকল নোটিফিকেশন ক্লিয়ার করা হয়েছে');
     } catch (err) {
       console.warn('Failed to clear notifications:', err);
     }
-  }, [notifications]);
+  }, [user, notifications]);
 
   return (
     <VendorNotificationContext.Provider

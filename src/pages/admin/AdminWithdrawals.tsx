@@ -211,9 +211,11 @@ export default function AdminWithdrawals() {
       } else if (targetUserId) {
         // Customer / User RTDB notification
         rtdbPush(`notifications/${targetUserId}`, {
+          userId: targetUserId,
+          recipientId: targetUserId,
           title: `Withdrawal ${newStatus}`,
           message: `আপনার ৳${selectedWithdrawal.amount} উত্তোলনের রিকোয়েস্ট (${selectedWithdrawal.paymentMethod}) ${newStatus === 'Approved' ? 'অনুমোদিত' : newStatus === 'Paid' ? 'পরিশোধিত' : newStatus === 'Rejected' ? 'বাতিল' : newStatus} হয়েছে।${adminNote ? ` নোট: ${adminNote}` : ''}`,
-          type: 'withdrawal',
+          type: 'withdraw',
           status: newStatus,
           amount: selectedWithdrawal.amount,
           read: false,

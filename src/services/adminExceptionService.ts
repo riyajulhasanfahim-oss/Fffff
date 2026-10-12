@@ -427,15 +427,21 @@ export async function nudgeVendorForOrder(
 
     // Create a notification for the vendor in RTDB
     if (vendorId) {
-      await rtdbPush(`notifications/${vendorId}`, {
+      const notifData = {
+        vendorId,
         userId: vendorId,
+        recipientId: vendorId,
         title: '⚠️ Urgent Order Attention Required',
         message: `Admin sent a priority reminder regarding Order #${orderId.substring(0, 8)}: ${reason}`,
         type: 'warning',
         orderId: mainOrderId,
         read: false,
         createdAt: Date.now()
-      });
+      };
+      await Promise.allSettled([
+        rtdbPush(`vendor_notifications/${vendorId}`, notifData),
+        rtdbPush(`notifications/${vendorId}`, notifData)
+      ]);
     }
 
     return { success: true, message: 'Urgent reminder notification sent to vendor.' };

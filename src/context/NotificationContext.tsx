@@ -328,7 +328,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     // Also remove from vendor notifications if applicable
-    if (userData?.role === 'Vendor' || userData?.role === 'admin') {
+    if (user && (userData?.role === 'Vendor' || userData?.role === 'admin')) {
+      await rtdbRemove(`vendor_notifications/${user.uid}/${id}`).catch(() => {});
       await rtdbRemove(`vendor_notifications/${id}`).catch(() => {});
     }
 

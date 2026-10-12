@@ -259,14 +259,17 @@ export default function WithdrawDashboard() {
       }).catch(() => {});
 
       // 5. Notify Admin in RTDB
-      await rtdbPush('vendor_notifications', {
+      await rtdbPush('admin_notifications', {
         userId: 'admin',
+        recipientId: 'admin',
         title: 'নতুন ভেন্ডর উইথড্র রিকোয়েস্ট',
         message: `${wallet?.storeName || 'ভেন্ডর'} ৳${numAmount} উত্তোলনের রিকোয়েস্ট পাঠিয়েছে (${method} - ${cleanNumber})`,
         read: false,
         type: 'withdraw',
         withdrawId: withdrawKey,
-        timestamp: Date.now()
+        vendorId: user?.uid,
+        timestamp: Date.now(),
+        createdAt: Date.now()
       }).catch(() => {});
       
       toast.success('উইথড্র রিকোয়েস্ট সফলভাবে সাবমিট হয়েছে এবং এডমিন প্যানেলে পাঠানো হয়েছে!');

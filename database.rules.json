@@ -178,8 +178,40 @@
       ".read": "auth != null && auth.token.admin === true",
       ".write": true
     },
+    "notifications": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        ".write": "auth != null"
+      }
+    },
     "vendor_notifications": {
-      ".read": "auth != null",
+      "$vendorId": {
+        ".read": "auth != null && (auth.uid === $vendorId || auth.token.admin === true)",
+        ".write": "auth != null"
+      }
+    },
+    "global_notifications": {
+      ".read": true,
+      ".write": "auth != null && auth.token.admin === true"
+    },
+    "user_notification_reads": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        ".write": "auth != null && (auth.uid === $userId || auth.token.admin === true)"
+      }
+    },
+    "user_notification_dismissed": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        ".write": "auth != null && (auth.uid === $userId || auth.token.admin === true)"
+      }
+    },
+    "notificationHistory": {
+      ".read": "auth != null && auth.token.admin === true",
+      ".write": "auth != null && auth.token.admin === true"
+    },
+    "notification_analytics": {
+      ".read": true,
       ".write": true
     },
     "vendor_wallet_transactions": {

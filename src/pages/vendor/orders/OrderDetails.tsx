@@ -1154,16 +1154,20 @@ export default function OrderDetails() {
         timestamp: Date.now()
       });
 
-      // Notify Customer
-      await rtdbPush('vendor_notifications', {
-        userId: order.customerId, 
-        title: `Order Status Updated: ${newStatus}`,
-        message: `Your order #${order.orderId?.substring(0,8)} is now ${newStatus}. ${statusNote}`,
-        read: false,
-        type: 'order_update',
-        timestamp: Date.now(),
-        link: `/orders/${order.id}`
-      });
+      // Notify Customer in customer's private notifications
+      if (order.customerId) {
+        await rtdbPush(`notifications/${order.customerId}`, {
+          userId: order.customerId, 
+          recipientId: order.customerId,
+          title: `Order Status Updated: ${newStatus}`,
+          message: `Your order #${order.orderId?.substring(0,8)} is now ${newStatus}. ${statusNote}`,
+          read: false,
+          type: 'order',
+          timestamp: Date.now(),
+          createdAt: Date.now(),
+          link: `/orders/${order.id}`
+        }).catch(() => {});
+      }
 
       toast.success(`Order marked as ${newStatus}`);
       setShowStatusModal(false);
@@ -1351,19 +1355,23 @@ export default function OrderDetails() {
         timestamp: now
       });
 
-      // Notify Customer
-      try {
-        await rtdbPush('vendor_notifications', {
-          userId: order.customerId, 
-          title: `Order Status Updated: ${targetStatus}`,
-          message: `Your order #${pureId.substring(0,8)} is now ${targetStatus}.`,
-          read: false,
-          type: 'order_update',
-          timestamp: now,
-          link: `/orders/${pureId}`
-        });
-      } catch (e) {
-        console.warn('Error adding notification in RTDB', e);
+      // Notify Customer in customer's private notifications
+      if (order.customerId) {
+        try {
+          await rtdbPush(`notifications/${order.customerId}`, {
+            userId: order.customerId, 
+            recipientId: order.customerId,
+            title: `Order Status Updated: ${targetStatus}`,
+            message: `Your order #${pureId.substring(0,8)} is now ${targetStatus}.`,
+            read: false,
+            type: 'order',
+            timestamp: now,
+            createdAt: now,
+            link: `/orders/${pureId}`
+          });
+        } catch (e) {
+          console.warn('Error adding notification in RTDB', e);
+        }
       }
 
       if (targetStatus === 'Accepted') {

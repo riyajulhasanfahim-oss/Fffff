@@ -283,19 +283,58 @@ service cloud.firestore {
       allow update, delete: if isUserAdmin();
     }
 
-    // Notifications
+    // Notifications - UID isolation: Users can only read their own notifications or global broadcasts
     match /notifications/{notificationId} {
-      allow read, write: if true;
+      allow read: if isUserAdmin() || 
+        resource.data.targetType == 'all' || 
+        resource.data.isGlobal == true || 
+        (isSignedIn() && (
+          resource.data.userId == request.auth.uid || 
+          resource.data.recipientId == request.auth.uid || 
+          resource.data.targetUserId == request.auth.uid
+        ));
+      allow create, write: if isSignedIn() || isUserAdmin();
+
       match /{document=**} {
-        allow read, write: if true;
+        allow read: if isUserAdmin() || 
+          (isSignedIn() && (
+            request.auth.uid == notificationId ||
+            resource.data.userId == request.auth.uid ||
+            resource.data.recipientId == request.auth.uid ||
+            resource.data.targetUserId == request.auth.uid
+          ));
+        allow write: if isSignedIn() || isUserAdmin();
       }
     }
 
     match /vendor_notifications/{notificationId} {
-      allow read, write: if true;
+      allow read: if isUserAdmin() || 
+        resource.data.targetType == 'all' || 
+        resource.data.isGlobal == true || 
+        (isSignedIn() && (
+          resource.data.vendorId == request.auth.uid || 
+          resource.data.userId == request.auth.uid || 
+          resource.data.recipientId == request.auth.uid || 
+          resource.data.targetUserId == request.auth.uid
+        ));
+      allow create, write: if isSignedIn() || isUserAdmin();
+
       match /{document=**} {
-        allow read, write: if true;
+        allow read: if isUserAdmin() || 
+          (isSignedIn() && (
+            request.auth.uid == notificationId ||
+            resource.data.vendorId == request.auth.uid ||
+            resource.data.userId == request.auth.uid ||
+            resource.data.recipientId == request.auth.uid ||
+            resource.data.targetUserId == request.auth.uid
+          ));
+        allow write: if isSignedIn() || isUserAdmin();
       }
+    }
+
+    match /global_notifications/{notificationId} {
+      allow read: if true;
+      allow write: if isUserAdmin();
     }
 
     // Reseller and MLM ecosystem
