@@ -34,13 +34,13 @@ export default function CoverFlashBanner() {
 
   const handleCtaClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigate('/category/all?deal=flash');
+    navigate('/flash-sale');
   };
 
   return (
     <div className="w-full max-w-7xl mx-auto px-2.5 sm:px-4 lg:px-8 pt-2 sm:pt-3.5">
       <div 
-        onClick={() => navigate('/category/all?deal=flash')}
+        onClick={() => navigate('/flash-sale')}
         className="relative w-full h-[120px] xs:h-[140px] sm:h-[185px] md:h-[225px] lg:h-[260px] rounded-2xl overflow-hidden shadow-sm border border-amber-500/30 cursor-pointer select-none transition-all duration-300 hover:shadow-md group"
         style={{
           background: 'linear-gradient(115deg, #d80f0f 0%, #ea2310 38%, #f85b00 78%, #ff6e00 100%)'

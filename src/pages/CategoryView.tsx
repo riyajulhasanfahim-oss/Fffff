@@ -124,7 +124,16 @@ export default function CategoryView() {
     }
     const q = searchQuery.trim() || initialQuery.trim();
     if (!q) return [];
-    return matchProductsDarazStyle(allMarketplaceProducts, q);
+    const matched = matchProductsDarazStyle(allMarketplaceProducts, q);
+    // Prioritize boosted products in search results
+    matched.sort((a, b) => {
+      const isBoostedA = (a as any).boosted && (!(a as any).boostExpiresAt || (a as any).boostExpiresAt > Date.now());
+      const isBoostedB = (b as any).boosted && (!(b as any).boostExpiresAt || (b as any).boostExpiresAt > Date.now());
+      if (isBoostedA && !isBoostedB) return -1;
+      if (!isBoostedA && isBoostedB) return 1;
+      return 0;
+    });
+    return matched;
   }, [isSearchMode, isImageSearch, imageSearchMatches, searchQuery, initialQuery, allMarketplaceProducts]);
 
   const [searchPage, setSearchPage] = useState(1);
@@ -333,7 +342,14 @@ export default function CategoryView() {
         result.sort((a, b) => (a.isNew === b.isNew ? 0 : a.isNew ? -1 : 1));
         break;
       default:
-        // recommended: preserve default or weighted order
+        // recommended: Boosted products rank on top, followed by default order
+        result.sort((a, b) => {
+          const isBoostedA = (a as any).boosted && (!(a as any).boostExpiresAt || (a as any).boostExpiresAt > Date.now());
+          const isBoostedB = (b as any).boosted && (!(b as any).boostExpiresAt || (b as any).boostExpiresAt > Date.now());
+          if (isBoostedA && !isBoostedB) return -1;
+          if (!isBoostedA && isBoostedB) return 1;
+          return 0;
+        });
         break;
     }
 

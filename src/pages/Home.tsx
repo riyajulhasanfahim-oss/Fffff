@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import CoverFlashBanner from '../components/home/CoverFlashBanner';
@@ -9,15 +9,20 @@ import ProductSection from '../components/home/ProductSection';
 import AllProductsFeed from '../components/home/AllProductsFeed';
 import ProductCard, { Product } from '../components/ui/ProductCard';
 import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts } from '../services/productService';
+import { subscribeToActiveFlashSaleProducts } from '../services/flashSaleService';
+import { subscribeToActiveAds, recordAdImpression, recordAdClick, AdCampaignRecord } from '../services/adCampaignService';
 import { 
-  ArrowRight, Flame, Clock, ChevronDown, ChevronUp
+  ArrowRight, Flame, Clock, ChevronDown, ChevronUp, Megaphone, Zap
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export default function Home() {
+  const navigate = useNavigate();
   const [allProducts, setAllProducts] = useState<Product[]>(() => getCachedMarketplaceProducts());
   const [loading, setLoading] = useState<boolean>(() => allProducts.length === 0);
   const [isFlashExpanded, setIsFlashExpanded] = useState<boolean>(false);
+  const [activeFlashProducts, setActiveFlashProducts] = useState<Product[]>([]);
+  const [activeAdBanners, setActiveAdBanners] = useState<AdCampaignRecord[]>([]);
 
   // Flash Sale Countdown Timer
   const [timeLeft, setTimeLeft] = useState({ hours: 6, minutes: 34, seconds: 20 });
@@ -35,6 +40,39 @@ export default function Home() {
       }, 350);
       return () => clearTimeout(scrollTimer);
     }
+  }, []);
+
+  // Subscribe to real active Flash Sale products
+  useEffect(() => {
+    const unsub = subscribeToActiveFlashSaleProducts((list) => {
+      setActiveFlashProducts(list);
+      if (list.length > 0) {
+        const endTimes = list.map(p => p.flashSale?.endTime).filter(Boolean) as number[];
+        if (endTimes.length > 0) {
+          const earliest = Math.min(...endTimes);
+          const diff = Math.max(0, earliest - Date.now());
+          const totalSec = Math.floor(diff / 1000);
+          setTimeLeft({
+            hours: Math.floor(totalSec / 3600),
+            minutes: Math.floor((totalSec % 3600) / 60),
+            seconds: totalSec % 60
+          });
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Subscribe to active Ads (Banners, Sliders, Spotlights)
+  useEffect(() => {
+    const unsub = subscribeToActiveAds(undefined, (ads) => {
+      setActiveAdBanners(ads);
+      // Record impressions for newly viewed ads
+      ads.forEach(ad => {
+        recordAdImpression(ad.id).catch(() => {});
+      });
+    });
+    return () => unsub();
   }, []);
 
   useEffect(() => {
@@ -84,9 +122,14 @@ export default function Home() {
     };
   }, []);
 
-  // Derived: Best Selling / Top Products from all vendors
+  // Derived: Best Selling / Top Products from all vendors (Boosted products rank on top!)
   const bestSelling = useMemo(() => {
     const sorted = [...allProducts].sort((a, b) => {
+      const isBoostedA = (a as any).boosted && (!(a as any).boostExpiresAt || (a as any).boostExpiresAt > Date.now());
+      const isBoostedB = (b as any).boosted && (!(b as any).boostExpiresAt || (b as any).boostExpiresAt > Date.now());
+      if (isBoostedA && !isBoostedB) return -1;
+      if (!isBoostedA && isBoostedB) return 1;
+
       const aScore = (a.soldCount || 0) * 2 + (a.rating || 0) + (a.reviewsCount || 0);
       const bScore = (b.soldCount || 0) * 2 + (b.rating || 0) + (b.reviewsCount || 0);
       if (aScore === bScore) {
@@ -97,13 +140,10 @@ export default function Home() {
     return sorted;
   }, [allProducts]);
 
-  // Derived: Flash Sale Products from all vendors
+  // Derived: Strictly Active Flash Sale Products (Approved, within start/end time, stock > 0)
   const flashSaleProducts = useMemo(() => {
-    const discounted = allProducts.filter(p => 
-      (p.discount || 0) > 0 || (p.originalPrice && p.originalPrice > p.price)
-    );
-    return discounted.length > 0 ? discounted : allProducts;
-  }, [allProducts]);
+    return activeFlashProducts;
+  }, [activeFlashProducts]);
 
   // Derived: New Arrivals from all vendors (sorted by newest created or updated)
   const newArrivals = useMemo(() => {
@@ -184,7 +224,7 @@ export default function Home() {
 
                   {/* Right: Compelling Click Button */}
                   <Link
-                    to="/deals"
+                    to="/flash-sale"
                     className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 sm:px-5 sm:py-2 bg-slate-950 hover:bg-slate-900 text-amber-300 hover:text-amber-200 text-xs sm:text-sm font-black rounded-xl shadow-md transition-all active:scale-95 whitespace-nowrap self-start sm:self-auto cursor-pointer group"
                   >
                     <span>সব ডিল দেখুন</span>
@@ -232,6 +272,41 @@ export default function Home() {
 
             </div>
           </section>
+        )}
+
+        {/* Dynamic Vendor Ad Campaigns (Active Approved Banners) */}
+        {activeAdBanners.length > 0 && (
+          <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 py-2">
+            {activeAdBanners.slice(0, 2).map((ad) => (
+              <div 
+                key={ad.id}
+                onClick={() => {
+                  recordAdClick(ad.id).catch(() => {});
+                  if (ad.productId) {
+                    navigate(`/product/${ad.productId}`);
+                  }
+                }}
+                className="relative rounded-2xl overflow-hidden shadow-sm border border-purple-200 cursor-pointer group mb-3 bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 text-white"
+              >
+                <div className="flex flex-col sm:flex-row items-center justify-between p-4 sm:p-6 gap-4">
+                  <div className="space-y-1.5 text-center sm:text-left z-10">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500 text-white">
+                      <Megaphone className="w-3 h-3" /> স্পন্সরড বিজ্ঞাপন
+                    </span>
+                    <h3 className="text-base sm:text-2xl font-black text-white">{ad.title}</h3>
+                    <p className="text-xs sm:text-sm text-purple-200">
+                      ভেন্ডর: {ad.vendorName || 'Verified Vendor'} • {ad.productName}
+                    </p>
+                  </div>
+                  {ad.bannerUrl && (
+                    <div className="w-full sm:w-60 h-28 sm:h-32 rounded-xl overflow-hidden border border-white/20 shrink-0">
+                      <img src={ad.bannerUrl} alt={ad.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {/* 6. NEW ARRIVALS */}

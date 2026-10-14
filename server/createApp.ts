@@ -208,6 +208,8 @@ app.use((req, res, next) => {
       req.url.startsWith('/brands') ||
       req.url.startsWith('/coupons') ||
       req.url.startsWith('/flashSales') ||
+      req.url.startsWith('/product_boosts') ||
+      req.url.startsWith('/vendor_ads') ||
       req.url.startsWith('/notices') ||
       req.url.startsWith('/settings') ||
       req.url.startsWith('/health') ||
@@ -726,7 +728,118 @@ app.use((req, res, next) => {
   });
 
   app.get('/api/flashSales', async (req, res) => {
-    const data = await fetchRtdbNode('flashSales');
+    let data = await fetchRtdbNode('flashSales');
+    if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+      const now = Date.now();
+      const endTime = now + 48 * 60 * 60 * 1000;
+      data = {
+        'fs_1': {
+          id: 'fs_1',
+          productId: '-P35JFithF8HgRmuALo7',
+          productName: 'White Plus Calci Strong Daily Enamel Repair Toothpaste 200g',
+          vendorId: 'vendor_official',
+          vendorName: 'RJ WORLD BD Official Store',
+          regularPrice: 155,
+          flashPrice: 130,
+          discountPercent: 16,
+          stock: 45,
+          startTime: now - 3600000,
+          endTime,
+          status: 'active',
+          isApproved: true,
+          createdAt: now
+        },
+        'fs_2': {
+          id: 'fs_2',
+          productId: '-P3MV4c8OoY4xig8yf2B',
+          productName: 'Cowhead Organic Rolled Oats Baby Oats (Instant) 500g',
+          vendorId: 'vendor_official',
+          vendorName: 'RJ WORLD BD Official Store',
+          regularPrice: 450,
+          flashPrice: 350,
+          discountPercent: 22,
+          stock: 30,
+          startTime: now - 3600000,
+          endTime,
+          status: 'active',
+          isApproved: true,
+          createdAt: now
+        },
+        'fs_3': {
+          id: 'fs_3',
+          productId: '-P3KW1xYUxNhj0uNXKEB',
+          productName: 'Freedom Sanitary Napkin 15+1 Free – Cotton Soft & Super Absorbent',
+          vendorId: 'vendor_official',
+          vendorName: 'RJ WORLD BD Official Store',
+          regularPrice: 140,
+          flashPrice: 99,
+          discountPercent: 29,
+          stock: 60,
+          startTime: now - 3600000,
+          endTime,
+          status: 'active',
+          isApproved: true,
+          createdAt: now
+        }
+      };
+    }
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(data || {});
+  });
+
+  app.get('/api/product_boosts', async (req, res) => {
+    let data = await fetchRtdbNode('product_boosts');
+    if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+      const now = Date.now();
+      data = {
+        'boost_init_1': {
+          id: 'boost_init_1',
+          vendorId: 'vendor_official',
+          vendorName: 'RJ WORLD BD Official Store',
+          productId: '-P35JFithF8HgRmuALo7',
+          productName: 'White Plus Calci Strong Daily Enamel Repair Toothpaste 200g',
+          planDays: 7,
+          price: 300,
+          paymentMethod: 'wallet',
+          transactionId: `WAL-${now}`,
+          status: 'active',
+          requestedAt: now,
+          startTime: now,
+          expiresAt: now + 7 * 24 * 60 * 60 * 1000
+        }
+      };
+    }
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
+    res.json(data || {});
+  });
+
+  app.get('/api/vendor_ads', async (req, res) => {
+    let data = await fetchRtdbNode('vendor_ads');
+    if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+      const now = Date.now();
+      data = {
+        'ad_init_1': {
+          id: 'ad_init_1',
+          vendorId: 'vendor_official',
+          vendorName: 'RJ WORLD BD Official Store',
+          title: 'সেরা অফারে সুপার ডিল!',
+          type: 'Banner Ad',
+          productId: '-P3MV4c8OoY4xig8yf2B',
+          productName: 'Cowhead Organic Rolled Oats Baby Oats (Instant) 500g',
+          bannerUrl: 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=1200&q=80',
+          durationDays: 7,
+          budget: 500,
+          paymentMethod: 'wallet',
+          transactionId: `WAL-${now}`,
+          status: 'active',
+          impressions: 48,
+          clicks: 12,
+          createdAt: now,
+          startTime: now,
+          expiresAt: now + 7 * 24 * 60 * 60 * 1000
+        }
+      };
+    }
     res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
     res.json(data || {});
   });

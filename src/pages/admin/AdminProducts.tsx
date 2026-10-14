@@ -2,14 +2,22 @@ import React, { useEffect, useState } from 'react';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../../lib/firebase';
 import { rtdbList, rtdbSet, rtdbUpdate, rtdbPush } from '../../lib/rtdb';
-import { Search, Plus, Edit, Trash2, Eye, Image as ImageIcon, CheckCircle, XCircle, Package, TrendingUp, AlertTriangle, Archive, Filter } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Eye, Image as ImageIcon, CheckCircle, XCircle, Package, TrendingUp, AlertTriangle, Archive, Filter, Flame, Rocket, Megaphone, Zap, Clock, Check, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import { StorageManager } from '../../services/storage/StorageManager';
 import { MAIN_CATEGORIES } from '../../constants/categories';
+import { FlashSaleItem, adminApproveFlashSale, adminRejectFlashSale, updateFlashSaleStatus, deleteFlashSale } from '../../services/flashSaleService';
+import { ProductBoostRecord, adminApproveBoost, adminRejectBoost } from '../../services/productBoostService';
+import { AdCampaignRecord, adminApproveAd, adminRejectAd } from '../../services/adCampaignService';
 
 export default function AdminProducts() {
+  const [activeAdminTab, setActiveAdminTab] = useState<'all' | 'flash' | 'boost' | 'ads'>('all');
+  const [flashSales, setFlashSales] = useState<FlashSaleItem[]>([]);
+  const [boosts, setBoosts] = useState<ProductBoostRecord[]>([]);
+  const [adCampaigns, setAdCampaigns] = useState<AdCampaignRecord[]>([]);
+
   const [products, setProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>(MAIN_CATEGORIES);
   const [vendors, setVendors] = useState<any[]>([]);
@@ -66,13 +74,16 @@ export default function AdminProducts() {
     try {
       setLoading(true);
       
-      const [pList, cList, uList, vList, sList, serverRes] = await Promise.all([
+      const [pList, cList, uList, vList, sList, serverRes, fsList, bList, adList] = await Promise.all([
         rtdbList<any>('products').catch(() => []),
         rtdbList<any>('categories').catch(() => []),
         rtdbList<any>('users').catch(() => []),
         rtdbList<any>('vendors').catch(() => []),
         rtdbList<any>('stores').catch(() => []),
-        fetch('/api/products').then(r => r.json()).catch(() => null)
+        fetch('/api/products').then(r => r.json()).catch(() => null),
+        rtdbList<FlashSaleItem>('flashSales').catch(() => []),
+        rtdbList<ProductBoostRecord>('product_boosts').catch(() => []),
+        rtdbList<AdCampaignRecord>('vendor_ads').catch(() => [])
       ]);
       
       const pDataMap = new Map<string, any>();
@@ -109,11 +120,100 @@ export default function AdminProducts() {
       const uniqueVendors = Array.from(new Map(allVendors.map(item => [item.id, item])).values());
       setVendors(uniqueVendors);
 
+      setFlashSales(fsList.map(f => ({ id: f.id, ...f.data })));
+      setBoosts(bList.map(b => ({ id: b.id, ...b.data })));
+      setAdCampaigns(adList.map(a => ({ id: a.id, ...a.data })));
+
     } catch (error) {
       console.error('Error fetching data from RTDB:', error);
       toast.error('Failed to load data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Promotion Admin Action Handlers
+  const handleApproveFlashSaleItem = async (fs: FlashSaleItem) => {
+    try {
+      await adminApproveFlashSale(fs.id, fs.productId);
+      toast.success(`ফ্ল্যাশ সেল "${fs.productName}" অনুমোদিত হয়েছে!`);
+      fetchInitialData();
+    } catch (err) {
+      toast.error('অনুমোদন ব্যর্থ হয়েছে');
+    }
+  };
+
+  const handleRejectFlashSaleItem = async (fs: FlashSaleItem) => {
+    try {
+      await adminRejectFlashSale(fs.id, fs.productId);
+      toast.success('ফ্ল্যাশ সেল বাতিল করা হয়েছে');
+      fetchInitialData();
+    } catch (err) {
+      toast.error('বাতিল করা সম্ভব হয়নি');
+    }
+  };
+
+  const handleEndFlashSaleItem = async (fs: FlashSaleItem) => {
+    try {
+      await updateFlashSaleStatus(fs.id, fs.productId, 'ended');
+      toast.success('ফ্ল্যাশ সেল সমাপ্ত করা হয়েছে');
+      fetchInitialData();
+    } catch (err) {
+      toast.error('স্ট্যাটাস পরিবর্তন ব্যর্থ হয়েছে');
+    }
+  };
+
+  const handleDeleteFlashSaleItem = async (fs: FlashSaleItem) => {
+    if (window.confirm('আপনি কি এই ফ্ল্যাশ সেল রেকর্ডটি মুছে ফেলতে চান?')) {
+      try {
+        await deleteFlashSale(fs.id, fs.productId);
+        toast.success('ফ্ল্যাশ সেল মুছে ফেলা হয়েছে');
+        fetchInitialData();
+      } catch (err) {
+        toast.error('মুছে ফেলতে সমস্যা হয়েছে');
+      }
+    }
+  };
+
+  const handleApproveBoostItem = async (boost: ProductBoostRecord) => {
+    try {
+      await adminApproveBoost(boost.id);
+      toast.success(`"${boost.productName}" এর বুস্ট অনুমোদিত ও সক্রিয় হয়েছে!`);
+      fetchInitialData();
+    } catch (err) {
+      toast.error('বুস্ট অনুমোদন ব্যর্থ হয়েছে');
+    }
+  };
+
+  const handleRejectBoostItem = async (boost: ProductBoostRecord) => {
+    const reason = window.prompt('প্রত্যাখ্যানের কারণ লিখুন (ঐচ্ছিক):') || undefined;
+    try {
+      await adminRejectBoost(boost.id, reason);
+      toast.success('বুস্ট রিকোয়েস্ট প্রত্যাখ্যাত হয়েছে');
+      fetchInitialData();
+    } catch (err) {
+      toast.error('প্রত্যাখ্যান ব্যর্থ হয়েছে');
+    }
+  };
+
+  const handleApproveAdItem = async (ad: AdCampaignRecord) => {
+    try {
+      await adminApproveAd(ad.id);
+      toast.success(`অ্যাড ক্যাম্পেইন "${ad.title}" অনুমোদিত ও লাইভ করা হয়েছে!`);
+      fetchInitialData();
+    } catch (err) {
+      toast.error('অ্যাড অনুমোদন ব্যর্থ হয়েছে');
+    }
+  };
+
+  const handleRejectAdItem = async (ad: AdCampaignRecord) => {
+    const reason = window.prompt('বিজ্ঞাপন বাতিলের কারণ লিখুন (ঐচ্ছিক):') || undefined;
+    try {
+      await adminRejectAd(ad.id, reason);
+      toast.success('অ্যাড ক্যাম্পেইন বাতিল করা হয়েছে');
+      fetchInitialData();
+    } catch (err) {
+      toast.error('বাতিল করা সম্ভব হয়নি');
     }
   };
 
@@ -425,7 +525,64 @@ export default function AdminProducts() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {/* Sub Tabs: Products, Flash Sales, Product Boosts, Ad Campaigns */}
+      <div className="flex border-b border-slate-200 gap-2 overflow-x-auto pb-0.5">
+        <button
+          type="button"
+          onClick={() => setActiveAdminTab('all')}
+          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 ${
+            activeAdminTab === 'all'
+              ? 'bg-white text-primary-main border-b-2 border-primary-main shadow-xs'
+              : 'text-slate-500 hover:text-slate-900 bg-slate-50'
+          }`}
+        >
+          <Package className="w-4 h-4" />
+          <span>All Products ({products.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveAdminTab('flash')}
+          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 ${
+            activeAdminTab === 'flash'
+              ? 'bg-white text-amber-600 border-b-2 border-amber-500 shadow-xs'
+              : 'text-slate-500 hover:text-slate-900 bg-slate-50'
+          }`}
+        >
+          <Flame className="w-4 h-4 text-amber-500" />
+          <span>Flash Sales ({flashSales.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveAdminTab('boost')}
+          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 ${
+            activeAdminTab === 'boost'
+              ? 'bg-white text-pink-600 border-b-2 border-pink-500 shadow-xs'
+              : 'text-slate-500 hover:text-slate-900 bg-slate-50'
+          }`}
+        >
+          <Rocket className="w-4 h-4 text-pink-500" />
+          <span>Product Boosts ({boosts.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveAdminTab('ads')}
+          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 ${
+            activeAdminTab === 'ads'
+              ? 'bg-white text-purple-600 border-b-2 border-purple-500 shadow-xs'
+              : 'text-slate-500 hover:text-slate-900 bg-slate-50'
+          }`}
+        >
+          <Megaphone className="w-4 h-4 text-purple-500" />
+          <span>Ad Campaigns ({adCampaigns.length})</span>
+        </button>
+      </div>
+
+      {activeAdminTab === 'all' && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
           <p className="text-xs text-slate-500 font-medium mb-1">Total Products</p>
           <p className="text-xl font-bold text-slate-900">{products.length}</p>
@@ -651,6 +808,467 @@ export default function AdminProducts() {
           </table>
         </div>
       </div>
+    </>
+  )}
+
+      {/* 2. FLASH SALES MANAGEMENT TAB */}
+      {activeAdminTab === 'flash' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Total Flash Sales</p>
+              <p className="text-xl font-bold text-slate-900">{flashSales.length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Active Now</p>
+              <p className="text-xl font-bold text-emerald-600">
+                {flashSales.filter(f => f.status === 'active' && f.endTime > Date.now() && f.stock > 0).length}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Pending Approval</p>
+              <p className="text-xl font-bold text-amber-600">
+                {flashSales.filter(f => f.status === 'pending' || !f.isApproved).length}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Ended / Expired</p>
+              <p className="text-xl font-bold text-slate-500">
+                {flashSales.filter(f => f.status === 'ended' || (f.endTime && Date.now() >= f.endTime)).length}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Flame className="w-4 h-4 text-amber-500" />
+                ফ্ল্যাশ সেল অফার তালিকা (Vendor Flash Sales)
+              </h3>
+              <span className="text-xs text-slate-500">মোট {flashSales.length} টি</span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-white text-slate-500 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 font-semibold">পণ্য ও ভেন্ডর</th>
+                    <th className="px-6 py-4 font-semibold">মূল্য ও ছাড়</th>
+                    <th className="px-6 py-4 font-semibold">স্টক সীমা</th>
+                    <th className="px-6 py-4 font-semibold">সময়সীমা</th>
+                    <th className="px-6 py-4 font-semibold">স্ট্যাটাস</th>
+                    <th className="px-6 py-4 font-semibold text-right">অ্যাকশন</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {flashSales.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-slate-400">
+                        কোনো ফ্ল্যাশ সেল রিকোয়েস্ট পাওয়া যায়নি।
+                      </td>
+                    </tr>
+                  ) : (
+                    flashSales.map((fs) => {
+                      const isExpired = fs.endTime && Date.now() >= fs.endTime;
+                      const isLive = fs.status === 'active' && !isExpired && fs.stock > 0;
+
+                      return (
+                        <tr key={fs.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden flex-shrink-0">
+                                {fs.productImage ? (
+                                  <img referrerPolicy="no-referrer" src={fs.productImage} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-slate-400">
+                                    <Package className="w-5 h-5" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="max-w-xs">
+                                <span className="font-semibold text-slate-900 block truncate">{fs.productName}</span>
+                                <span className="text-xs text-slate-400">ভেন্ডর: {fs.vendorName || fs.vendorId}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="space-y-0.5">
+                              <div className="text-emerald-600 font-bold">ফ্ল্যাশ: ৳{fs.flashPrice}</div>
+                              <div className="text-xs text-slate-400 line-through">রেগুলার: ৳{fs.regularPrice}</div>
+                              <div className="text-xs font-semibold text-red-600">{fs.discountPercent}% ছাড়</div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="font-mono font-bold text-slate-800">{fs.stock} টি</span>
+                          </td>
+                          <td className="px-6 py-4 text-xs">
+                            <div className="text-slate-600">
+                              শুরু: {new Date(fs.startTime).toLocaleDateString('bn-BD')}
+                            </div>
+                            <div className="text-slate-600">
+                              শেষ: {new Date(fs.endTime).toLocaleDateString('bn-BD')}
+                            </div>
+                            {isLive && (
+                              <div className="text-amber-600 font-bold mt-0.5">
+                                বাকি: {Math.max(0, Math.floor((fs.endTime - Date.now()) / (1000 * 60 * 60)))} ঘণ্টা
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
+                              isLive ? 'bg-emerald-100 text-emerald-800' :
+                              fs.status === 'pending' ? 'bg-amber-100 text-amber-800' :
+                              fs.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>
+                              {isLive ? 'Active (লাইভ)' : (fs.status === 'pending' ? 'Pending' : (isExpired ? 'Expired' : fs.status))}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {fs.status !== 'active' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveFlashSaleItem(fs)}
+                                  className="px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border border-emerald-200"
+                                >
+                                  অনুমোদন
+                                </button>
+                              )}
+                              {isLive && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEndFlashSaleItem(fs)}
+                                  className="px-2.5 py-1 bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border border-amber-200"
+                                >
+                                  বন্ধ করুন
+                                </button>
+                              )}
+                              {fs.status !== 'rejected' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectFlashSaleItem(fs)}
+                                  className="px-2.5 py-1 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border border-red-200"
+                                >
+                                  বাতিল
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteFlashSaleItem(fs)}
+                                className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                                title="মুছে ফেলুন"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. PRODUCT BOOSTS TAB */}
+      {activeAdminTab === 'boost' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Total Boost Requests</p>
+              <p className="text-xl font-bold text-slate-900">{boosts.length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Active Boosts</p>
+              <p className="text-xl font-bold text-pink-600">
+                {boosts.filter(b => b.status === 'active' && (!b.expiresAt || b.expiresAt > Date.now())).length}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Pending Approval</p>
+              <p className="text-xl font-bold text-amber-600">
+                {boosts.filter(b => b.status === 'pending').length}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Boost Revenue</p>
+              <p className="text-xl font-bold text-emerald-600">
+                ৳{boosts.filter(b => b.status === 'active').reduce((acc, b) => acc + (Number(b.price) || 0), 0)}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Rocket className="w-4 h-4 text-pink-500" />
+                প্রোডাক্ট বুস্ট রিকোয়েস্ট (Product Boost Management)
+              </h3>
+              <span className="text-xs text-slate-500">মোট {boosts.length} টি</span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-white text-slate-500 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 font-semibold">পণ্য ও ভেন্ডর</th>
+                    <th className="px-6 py-4 font-semibold">প্ল্যান ও ফি</th>
+                    <th className="px-6 py-4 font-semibold">পেমেন্ট মেথড ও TrxID</th>
+                    <th className="px-6 py-4 font-semibold">মেয়াদ</th>
+                    <th className="px-6 py-4 font-semibold">স্ট্যাটাস</th>
+                    <th className="px-6 py-4 font-semibold text-right">অ্যাকশন</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {boosts.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-slate-400">
+                        কোনো বুস্ট রিকোয়েস্ট পাওয়া যায়নি।
+                      </td>
+                    </tr>
+                  ) : (
+                    boosts.map((boost) => {
+                      const isExpired = boost.expiresAt && Date.now() >= boost.expiresAt;
+                      const isActive = boost.status === 'active' && !isExpired;
+
+                      return (
+                        <tr key={boost.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden flex-shrink-0">
+                                {boost.productImage ? (
+                                  <img referrerPolicy="no-referrer" src={boost.productImage} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-slate-400">
+                                    <Package className="w-5 h-5" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="max-w-xs">
+                                <span className="font-semibold text-slate-900 block truncate">{boost.productName}</span>
+                                <span className="text-xs text-slate-400">ভেন্ডর: {boost.vendorName || boost.vendorId}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-slate-900">{boost.planDays} দিন</div>
+                            <div className="text-xs text-emerald-600 font-semibold">৳{boost.price}</div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="uppercase text-xs font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                              {boost.paymentMethod}
+                            </span>
+                            {boost.transactionId && (
+                              <div className="font-mono text-xs font-bold text-slate-800 mt-1">
+                                TrxID: {boost.transactionId}
+                              </div>
+                            )}
+                            {boost.senderPhone && (
+                              <div className="text-[11px] text-slate-500">ফোন: {boost.senderPhone}</div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-xs text-slate-600">
+                            <div>রিকোয়েস্ট: {new Date(boost.requestedAt).toLocaleDateString('bn-BD')}</div>
+                            {boost.expiresAt && (
+                              <div className="text-pink-600 font-bold mt-0.5">
+                                শেষ: {new Date(boost.expiresAt).toLocaleDateString('bn-BD')}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
+                              isActive ? 'bg-pink-100 text-pink-800' :
+                              boost.status === 'pending' ? 'bg-amber-100 text-amber-800' :
+                              boost.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>
+                              {isActive ? 'Active (বুস্টেড)' : (boost.status === 'pending' ? 'Pending' : (isExpired ? 'Expired' : boost.status))}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {boost.status === 'pending' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveBoostItem(boost)}
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                                >
+                                  অনুমোদন
+                                </button>
+                              )}
+                              {boost.status !== 'rejected' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectBoostItem(boost)}
+                                  className="px-2.5 py-1 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border border-red-200"
+                                >
+                                  বাতিল
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. AD CAMPAIGNS TAB */}
+      {activeAdminTab === 'ads' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Total Campaigns</p>
+              <p className="text-xl font-bold text-slate-900">{adCampaigns.length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Active Ads</p>
+              <p className="text-xl font-bold text-purple-600">
+                {adCampaigns.filter(a => a.status === 'active' && (!a.expiresAt || a.expiresAt > Date.now())).length}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Total Impressions</p>
+              <p className="text-xl font-bold text-blue-600">
+                {adCampaigns.reduce((acc, a) => acc + (a.impressions || 0), 0)}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
+              <p className="text-xs text-slate-500 font-medium mb-1">Total Clicks</p>
+              <p className="text-xl font-bold text-emerald-600">
+                {adCampaigns.reduce((acc, a) => acc + (a.clicks || 0), 0)}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Megaphone className="w-4 h-4 text-purple-500" />
+                অ্যাড ক্যাম্পেইন রিকোয়েস্ট (Vendor Ad Campaigns)
+              </h3>
+              <span className="text-xs text-slate-500">মোট {adCampaigns.length} টি</span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-white text-slate-500 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 font-semibold">বিজ্ঞাপন ও ব্যানার</th>
+                    <th className="px-6 py-4 font-semibold">পণ্য ও ভেন্ডর</th>
+                    <th className="px-6 py-4 font-semibold">বাজেট ও মেয়াদ</th>
+                    <th className="px-6 py-4 font-semibold">পেমেন্ট TrxID</th>
+                    <th className="px-6 py-4 font-semibold">পারফরম্যান্স</th>
+                    <th className="px-6 py-4 font-semibold">স্ট্যাটাস</th>
+                    <th className="px-6 py-4 font-semibold text-right">অ্যাকশন</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {adCampaigns.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-12 text-slate-400">
+                        কোনো অ্যাড ক্যাম্পেইন রিকোয়েস্ট পাওয়া যায়নি।
+                      </td>
+                    </tr>
+                  ) : (
+                    adCampaigns.map((ad) => {
+                      const isExpired = ad.expiresAt && Date.now() >= ad.expiresAt;
+                      const isActive = ad.status === 'active' && !isExpired;
+
+                      return (
+                        <tr key={ad.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-16 h-10 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden flex-shrink-0">
+                                {ad.bannerUrl ? (
+                                  <img referrerPolicy="no-referrer" src={ad.bannerUrl} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-slate-400">
+                                    <ImageIcon className="w-5 h-5" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="max-w-xs">
+                                <span className="font-bold text-slate-900 block truncate">{ad.title}</span>
+                                <span className="text-[11px] font-semibold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
+                                  {ad.type}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="font-semibold text-slate-800 truncate max-w-[150px]">{ad.productName}</div>
+                            <div className="text-xs text-slate-400">ভেন্ডর: {ad.vendorName || ad.vendorId}</div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-emerald-600">৳{ad.budget}</div>
+                            <div className="text-xs text-slate-500">{ad.durationDays} দিন</div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="uppercase text-[11px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                              {ad.paymentMethod}
+                            </span>
+                            {ad.transactionId && (
+                              <div className="font-mono text-xs font-bold text-slate-800 mt-1">
+                                {ad.transactionId}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-xs">
+                            <div className="text-blue-600 font-semibold">{ad.impressions || 0} ইম্প্রেশন</div>
+                            <div className="text-emerald-600 font-semibold">{ad.clicks || 0} ক্লিক</div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
+                              isActive ? 'bg-purple-100 text-purple-800' :
+                              ad.status === 'pending_approval' ? 'bg-amber-100 text-amber-800' :
+                              ad.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>
+                              {isActive ? 'Active (লাইভ)' : (ad.status === 'pending_approval' ? 'Pending' : (isExpired ? 'Expired' : ad.status))}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {ad.status === 'pending_approval' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveAdItem(ad)}
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                                >
+                                  অনুমোদন
+                                </button>
+                              )}
+                              {ad.status !== 'rejected' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectAdItem(ad)}
+                                  className="px-2.5 py-1 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border border-red-200"
+                                >
+                                  বাতিল
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add/Edit Modal */}
       {isModalOpen && (

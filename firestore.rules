@@ -558,5 +558,20 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isUserAdmin();
     }
+
+    match /flashSales/{id} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /product_boosts/{id} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /vendor_ads/{id} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
   }
 }

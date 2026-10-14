@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { ShoppingCart, Heart, Star, Check, Sparkles, Flame, Eye } from 'lucide-react';
+import { ShoppingCart, Heart, Star, Check, Sparkles, Flame, Eye, Zap, Rocket, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useCart } from '../../contexts/CartContext';
 import { useWishlist } from '../../contexts/WishlistContext';
@@ -45,12 +45,56 @@ export interface Product {
   createdAt?: number;
   updatedAt?: number;
   slug?: string;
+  regularPrice?: number;
+  boosted?: boolean;
+  boostExpiresAt?: number | null;
+  flashSale?: {
+    id?: string;
+    active: boolean;
+    price: number;
+    regularPrice: number;
+    discount?: number;
+    stock?: number;
+    startTime?: number;
+    endTime?: number;
+    isApproved?: boolean;
+    status?: string;
+  };
 }
 
 interface ProductCardProps {
   product: Product;
   showAddToCart?: boolean;
   badgeText?: string;
+}
+
+function CardFlashTimer({ endTime }: { endTime: number }) {
+  const [rem, setRem] = useState('');
+  useEffect(() => {
+    const update = () => {
+      const diff = Math.max(0, endTime - Date.now());
+      if (diff <= 0) {
+        setRem('শেষ');
+        return;
+      }
+      const totalSec = Math.floor(diff / 1000);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      setRem(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`);
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [endTime]);
+
+  if (!rem) return null;
+  return (
+    <span className="px-1.5 py-0.5 text-[9px] font-black bg-black/85 backdrop-blur-xs text-amber-300 rounded-md shadow-xs flex items-center gap-1 font-mono">
+      <Clock className="w-2.5 h-2.5 text-amber-300 animate-pulse" />
+      <span>{rem}</span>
+    </span>
+  );
 }
 
 export default function ProductCard({ product, showAddToCart = false, badgeText }: ProductCardProps) {
@@ -160,8 +204,25 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
         
         {/* Floating Badges (Top-Left) */}
         <div className="absolute top-2 left-2 flex flex-col gap-1 z-10 pointer-events-none">
-          {discountPercent && discountPercent > 0 && (
-            <span className="px-2 py-0.5 text-[10px] sm:text-[11px] font-extrabold bg-gradient-to-r from-rose-500 to-red-600 text-white rounded-full shadow-sm flex items-center gap-0.5 animate-pulse">
+          {product.flashSale?.active && (
+            <div className="flex flex-col gap-1 items-start">
+              <span className="px-2 py-0.5 text-[10px] font-extrabold bg-gradient-to-r from-red-600 via-amber-500 to-yellow-500 text-white rounded-full shadow-sm flex items-center gap-1 animate-pulse">
+                <Zap className="w-2.5 h-2.5 fill-white" />
+                <span>ফ্ল্যাশ সেল</span>
+              </span>
+              {product.flashSale.endTime && (
+                <CardFlashTimer endTime={product.flashSale.endTime} />
+              )}
+            </div>
+          )}
+          {product.boosted && (!product.boostExpiresAt || product.boostExpiresAt > Date.now()) && (
+            <span className="px-2 py-0.5 text-[10px] font-extrabold bg-gradient-to-r from-pink-600 to-purple-600 text-white rounded-full shadow-sm flex items-center gap-1">
+              <Rocket className="w-2.5 h-2.5 fill-white" />
+              <span>Featured</span>
+            </span>
+          )}
+          {discountPercent && discountPercent > 0 && !product.flashSale?.active && (
+            <span className="px-2 py-0.5 text-[10px] sm:text-[11px] font-extrabold bg-gradient-to-r from-rose-500 to-red-600 text-white rounded-full shadow-sm flex items-center gap-0.5">
               <Flame className="w-2.5 h-2.5 fill-white" />
               <span>-{discountPercent}%</span>
             </span>
@@ -171,7 +232,7 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
               ✨ নতুন
             </span>
           )}
-          {badgeText && (
+          {badgeText && !product.flashSale?.active && (
             <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-500 text-white rounded-full shadow-xs">
               {badgeText}
             </span>

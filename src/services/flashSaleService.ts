@@ -1,239 +1,338 @@
-import { rtdbGet, rtdbSet, rtdbUpdate, rtdbList, rtdbSubscribe } from '../lib/rtdb';
+import { rtdbList, rtdbGet, rtdbSet, rtdbUpdate, rtdbRemove, rtdbPush, rtdbSubscribe } from '../lib/rtdb';
+import { Product } from '../components/ui/ProductCard';
+import { normalizeProduct } from './productService';
 
-export interface FlashSaleData {
-  active: boolean;
-  flashPrice: number;
+export interface FlashSaleItem {
+  id: string;
+  productId: string;
+  productName: string;
+  vendorId: string;
+  vendorName?: string;
+  productImage?: string;
   regularPrice: number;
-  discountPercent?: number;
-  startTime: number | string;
-  endTime: number | string;
-  stock?: number;
-  soldCount?: number;
-  approved?: boolean;
+  flashPrice: number;
+  discountPercent: number;
+  stock: number;         // Allocated flash sale stock limit
+  soldCount?: number;    // Count sold during this flash sale
+  startTime: number;     // Milliseconds timestamp
+  endTime: number;       // Milliseconds timestamp
+  status: 'active' | 'pending' | 'ended' | 'rejected';
+  isApproved?: boolean;  // Admin approval flag
+  createdAt: number;
   updatedAt?: number;
 }
 
 /**
- * Checks whether a product has a valid, currently active, admin-approved flash sale.
- * - Admin approved or not explicitly rejected
- * - Current time >= startTime and <= endTime
- * - Stock > 0
+ * Validates whether a flash sale is strictly active right now.
+ * Criteria:
+ * 1. Admin-approved or active status
+ * 2. Current time between startTime and endTime
+ * 3. Flash sale stock > 0
  */
-export function isProductInActiveFlashSale(product: any): boolean {
-  if (!product) return false;
-
+export function isFlashSaleActive(fs: FlashSaleItem | any): boolean {
+  if (!fs) return false;
   const now = Date.now();
-  const fs: FlashSaleData | undefined = product.flashSale;
 
-  if (fs) {
-    // 1. Must be active
-    if (fs.active === false || product.flashSaleActive === false) return false;
+  const isApproved = fs.isApproved !== false && fs.status !== 'rejected' && fs.status !== 'ended';
+  const isStatusActive = fs.status === 'active' || fs.status === 'approved' || fs.isApproved === true || fs.active === true;
+  if (!isApproved || !isStatusActive) return false;
 
-    // 2. Must be approved (defaults to true unless explicitly rejected/false)
-    if (fs.approved === false || product.flashSaleApproved === false) return false;
+  const start = Number(fs.startTime) || 0;
+  const end = Number(fs.endTime) || 0;
 
-    // 3. Timing checks
-    const startTime = fs.startTime 
-      ? new Date(fs.startTime).getTime() 
-      : (product.flashSaleStartTime ? new Date(product.flashSaleStartTime).getTime() : 0);
-      
-    const endTime = fs.endTime 
-      ? new Date(fs.endTime).getTime() 
-      : (product.flashSaleEndTime ? new Date(product.flashSaleEndTime).getTime() : 0);
+  // If start is in the future, it's not active yet
+  if (start > 0 && now < start) return false;
 
-    if (startTime && !isNaN(startTime) && now < startTime) return false;
-    if (endTime && !isNaN(endTime) && now > endTime) return false;
+  // If end is in the past, it has expired
+  if (end > 0 && now >= end) return false;
 
-    // 4. Stock check
-    const allocatedStock = fs.stock !== undefined ? Number(fs.stock) : Number(product.flashSaleStock ?? product.stock ?? 10);
-    const overallStock = Number(product.stock ?? 10);
+  // If flash sale stock is depleted, it's no longer active
+  const stock = Number(fs.stock);
+  if (!isNaN(stock) && stock <= 0) return false;
 
-    if (allocatedStock <= 0 || overallStock <= 0) return false;
+  return true;
+}
 
-    return true;
+/**
+ * Fetches all raw flash sale records from RTDB
+ */
+export async function fetchAllFlashSales(): Promise<FlashSaleItem[]> {
+  try {
+    const list = await rtdbList<FlashSaleItem>('flashSales');
+    return list.map(item => ({ id: item.id, ...item.data }));
+  } catch (err) {
+    console.error('Error fetching flashSales:', err);
+    return [];
   }
+}
 
-  // Fallback check for flat product properties
-  if (product.flashSaleActive === true) {
-    if (product.flashSaleApproved === false) return false;
+/**
+ * Fetches all products currently active in Flash Sale.
+ * Merges flash sale pricing, discount, and countdown data onto the product.
+ * Filters out expired flash sales and products with zero stock.
+ */
+export async function fetchActiveFlashSaleProducts(): Promise<Product[]> {
+  try {
+    const [flashSalesList, productsList] = await Promise.all([
+      fetchAllFlashSales(),
+      rtdbList<any>('products').catch(() => [])
+    ]);
 
-    const start = product.flashSaleStartTime ? new Date(product.flashSaleStartTime).getTime() : 0;
-    const end = product.flashSaleEndTime ? new Date(product.flashSaleEndTime).getTime() : 0;
+    const productsMap = new Map<string, any>();
+    productsList.forEach(p => {
+      productsMap.set(p.id, { id: p.id, ...p.data });
+    });
 
-    if (start && now < start) return false;
-    if (end && now > end) return false;
+    const activeList: Product[] = [];
+    const processedProductIds = new Set<string>();
+    const now = Date.now();
 
-    const stock = Number(product.flashSaleStock ?? product.stock ?? 10);
-    if (stock <= 0) return false;
+    // 1. Process flash sales from the 'flashSales' table
+    for (const fs of flashSalesList) {
+      if (!isFlashSaleActive(fs)) continue;
 
-    return true;
-  }
+      const rawProd = productsMap.get(fs.productId);
+      if (!rawProd) continue;
 
-  // Fallback for deals marked as 'flash' with valid discount and stock
-  if (product.deal === 'flash' || product.isFlashSale === true) {
-    const stock = Number(product.stock ?? 10);
-    if (stock <= 0) return false;
+      // Product must be active and have positive stock
+      const prodStock = Number(rawProd.stock ?? rawProd.stockCount ?? 1);
+      if (prodStock <= 0) continue;
+      if (rawProd.status === 'Archived' || rawProd.status === 'Inactive' || rawProd.status === 'Deleted') continue;
 
-    if (product.flashSaleExpiresAt && now > Number(product.flashSaleExpiresAt)) {
-      return false;
+      const normalized = normalizeProduct(rawProd, fs.productId);
+      const regularPrice = Number(fs.regularPrice) || normalized.originalPrice || normalized.price || 0;
+      const flashPrice = Number(fs.flashPrice) || normalized.price;
+      const discountPercent = fs.discountPercent || (regularPrice > flashPrice ? Math.round(((regularPrice - flashPrice) / regularPrice) * 100) : 0);
+
+      activeList.push({
+        ...normalized,
+        name: fs.productName || normalized.name,
+        price: flashPrice,
+        originalPrice: regularPrice > flashPrice ? regularPrice : normalized.originalPrice,
+        discount: discountPercent > 0 ? discountPercent : normalized.discount,
+        stock: Math.min(prodStock, Number(fs.stock) || prodStock),
+        flashSale: {
+          active: true,
+          price: flashPrice,
+          regularPrice: regularPrice,
+          discount: discountPercent,
+          stock: Number(fs.stock) || prodStock,
+          startTime: fs.startTime,
+          endTime: fs.endTime,
+          isApproved: true,
+          status: 'active'
+        }
+      });
+      processedProductIds.add(fs.productId);
     }
-    return true;
-  }
 
-  return false;
+    // 2. Also check any products that have embedded flashSale object
+    for (const [pId, rawProd] of productsMap.entries()) {
+      if (processedProductIds.has(pId)) continue;
+      if (!rawProd || !rawProd.flashSale) continue;
+
+      const fs = rawProd.flashSale;
+      if (!isFlashSaleActive(fs)) continue;
+
+      const prodStock = Number(rawProd.stock ?? rawProd.stockCount ?? 1);
+      if (prodStock <= 0) continue;
+      if (rawProd.status === 'Archived' || rawProd.status === 'Inactive' || rawProd.status === 'Deleted') continue;
+
+      const normalized = normalizeProduct(rawProd, pId);
+      const regularPrice = Number(fs.regularPrice) || normalized.originalPrice || normalized.price || 0;
+      const flashPrice = Number(fs.price || fs.flashPrice) || normalized.price;
+      const discountPercent = fs.discount || fs.discountPercent || (regularPrice > flashPrice ? Math.round(((regularPrice - flashPrice) / regularPrice) * 100) : 0);
+
+      activeList.push({
+        ...normalized,
+        price: flashPrice,
+        originalPrice: regularPrice > flashPrice ? regularPrice : normalized.originalPrice,
+        discount: discountPercent > 0 ? discountPercent : normalized.discount,
+        stock: Math.min(prodStock, Number(fs.stock) || prodStock),
+        flashSale: {
+          active: true,
+          price: flashPrice,
+          regularPrice: regularPrice,
+          discount: discountPercent,
+          stock: Number(fs.stock) || prodStock,
+          startTime: fs.startTime,
+          endTime: fs.endTime,
+          isApproved: true,
+          status: 'active'
+        }
+      });
+      processedProductIds.add(pId);
+    }
+
+    // Sort by largest discount first
+    activeList.sort((a, b) => (b.discount || 0) - (a.discount || 0));
+    return activeList;
+  } catch (err) {
+    console.error('Error fetching active flash sale products:', err);
+    return [];
+  }
 }
 
 /**
- * Returns normalized pricing, discount, stock, and timing for a flash sale product.
+ * Real-time subscription to active Flash Sale products.
+ * Ticks every 1 second to drop products the exact moment their Flash Sale expires.
  */
-export function getProductFlashSaleDetails(product: any) {
-  const fs: FlashSaleData | undefined = product.flashSale;
-  const now = Date.now();
+export function subscribeToActiveFlashSaleProducts(callback: (products: Product[]) => void): () => void {
+  let isMounted = true;
+  let cachedProducts: Product[] = [];
 
-  const regPrice = Number(
-    fs?.regularPrice || 
-    product.regularPrice || 
-    product.originalPrice || 
-    product.price || 
-    0
-  );
-
-  let flashPrice = Number(
-    fs?.flashPrice || 
-    product.flashSalePrice || 
-    product.salePrice || 
-    product.price || 
-    0
-  );
-
-  if (flashPrice >= regPrice && regPrice > 0) {
-    flashPrice = Math.round(regPrice * 0.7); // Fallback sensible 30% discount if identical
-  }
-
-  const discountPercent = fs?.discountPercent || 
-    (regPrice > flashPrice ? Math.round(((regPrice - flashPrice) / regPrice) * 100) : (product.discount || 0));
-
-  const startTime = fs?.startTime 
-    ? new Date(fs.startTime).getTime() 
-    : (product.flashSaleStartTime ? new Date(product.flashSaleStartTime).getTime() : 0);
-
-  // Default duration is 24 hours from today if not set
-  const endTime = fs?.endTime 
-    ? new Date(fs.endTime).getTime() 
-    : (product.flashSaleEndTime ? new Date(product.flashSaleEndTime).getTime() : (now + 24 * 60 * 60 * 1000));
-
-  const remainingMs = Math.max(0, endTime - now);
-  const stock = fs?.stock !== undefined ? Number(fs.stock) : Number(product.flashSaleStock ?? product.stock ?? 10);
-  const soldCount = fs?.soldCount !== undefined ? Number(fs.soldCount) : Number(product.soldCount ?? 0);
-
-  return {
-    isActive: isProductInActiveFlashSale(product),
-    flashPrice,
-    regularPrice: regPrice,
-    discountPercent: discountPercent > 0 ? discountPercent : 20,
-    startTime,
-    endTime,
-    remainingMs,
-    stock,
-    soldCount,
-    totalQuota: stock + soldCount
-  };
-}
-
-/**
- * Save or update a flash sale for a product
- */
-export async function saveProductFlashSale(productId: string, vendorId: string, data: {
-  flashPrice: number;
-  regularPrice: number;
-  discountPercent?: number;
-  startTime: string | number;
-  endTime: string | number;
-  stock: number;
-  active?: boolean;
-}) {
-  const flashSalePayload: FlashSaleData = {
-    active: data.active !== false,
-    flashPrice: Number(data.flashPrice),
-    regularPrice: Number(data.regularPrice),
-    discountPercent: data.discountPercent || Math.round(((data.regularPrice - data.flashPrice) / data.regularPrice) * 100),
-    startTime: data.startTime,
-    endTime: data.endTime,
-    stock: Number(data.stock),
-    soldCount: 0,
-    approved: true,
-    updatedAt: Date.now()
+  const refresh = async () => {
+    if (!isMounted) return;
+    const prods = await fetchActiveFlashSaleProducts();
+    if (isMounted) {
+      cachedProducts = prods;
+      callback(prods);
+    }
   };
 
-  const productUpdates: Record<string, any> = {
-    flashSale: flashSalePayload,
-    flashSaleActive: flashSalePayload.active,
-    flashSalePrice: flashSalePayload.flashPrice,
-    flashSaleStartTime: flashSalePayload.startTime,
-    flashSaleEndTime: flashSalePayload.endTime,
-    flashSaleStock: flashSalePayload.stock,
-    flashSaleApproved: true,
-    updatedAt: Date.now()
-  };
+  // Immediate fetch
+  refresh();
 
-  // 1. Update in RTDB products
-  await rtdbUpdate(`products/${productId}`, productUpdates);
-
-  // 2. Also register in flash_sales node for fast index
-  await rtdbSet(`flash_sales/${productId}`, {
-    productId,
-    vendorId,
-    ...flashSalePayload
+  // RTDB subscriptions
+  const unsubFlash = rtdbSubscribe('flashSales', () => {
+    refresh();
+  });
+  const unsubProducts = rtdbSubscribe('products', () => {
+    refresh();
   });
 
-  // 3. Sync to server API if available
-  fetch(`/api/products/${productId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(productUpdates)
-  }).catch(() => {});
+  // Second-level ticker to auto-evict expired sales without waiting for DB changes
+  const interval = setInterval(() => {
+    if (!isMounted) return;
+    const now = Date.now();
+    const stillActive = cachedProducts.filter(p => {
+      const fs = p.flashSale;
+      if (!fs) return false;
+      if (fs.endTime && now >= fs.endTime) return false;
+      return true;
+    });
 
-  return flashSalePayload;
+    if (stillActive.length !== cachedProducts.length) {
+      cachedProducts = stillActive;
+      callback(stillActive);
+    }
+  }, 1000);
+
+  return () => {
+    isMounted = false;
+    clearInterval(interval);
+    unsubFlash();
+    unsubProducts();
+  };
 }
 
 /**
- * Toggle flash sale active/inactive
+ * Saves or updates a vendor Flash Sale request
  */
-export async function toggleProductFlashSaleStatus(productId: string, active: boolean) {
-  const updates = {
-    'flashSale/active': active,
-    flashSaleActive: active,
-    updatedAt: Date.now()
+export async function saveFlashSale(item: Partial<FlashSaleItem> & { productId: string; vendorId: string }): Promise<string> {
+  const now = Date.now();
+  const id = item.id || `fs_${item.productId}_${now}`;
+
+  const regularPrice = Number(item.regularPrice) || 0;
+  const flashPrice = Number(item.flashPrice) || 0;
+  const discountPercent = item.discountPercent || (regularPrice > flashPrice ? Math.round(((regularPrice - flashPrice) / regularPrice) * 100) : 0);
+
+  const payload: FlashSaleItem = {
+    id,
+    productId: item.productId,
+    productName: item.productName || 'Flash Sale Product',
+    vendorId: item.vendorId,
+    vendorName: item.vendorName || '',
+    productImage: item.productImage || '',
+    regularPrice,
+    flashPrice,
+    discountPercent,
+    stock: Number(item.stock) || 10,
+    soldCount: item.soldCount || 0,
+    startTime: Number(item.startTime) || now,
+    endTime: Number(item.endTime) || (now + 24 * 60 * 60 * 1000), // Default 24h
+    status: item.status || 'active',
+    isApproved: item.isApproved !== undefined ? item.isApproved : true,
+    createdAt: item.createdAt || now,
+    updatedAt: now
   };
-  await rtdbUpdate(`products/${productId}`, updates);
-  await rtdbUpdate(`flash_sales/${productId}`, { active, updatedAt: Date.now() }).catch(() => {});
-  
-  fetch(`/api/products/${productId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ flashSaleActive: active })
+
+  await rtdbSet(`flashSales/${id}`, payload);
+
+  // Sync onto product in RTDB
+  await rtdbUpdate(`products/${item.productId}`, {
+    flashSale: {
+      id,
+      active: payload.status === 'active',
+      price: payload.flashPrice,
+      regularPrice: payload.regularPrice,
+      discount: payload.discountPercent,
+      stock: payload.stock,
+      startTime: payload.startTime,
+      endTime: payload.endTime,
+      status: payload.status,
+      isApproved: payload.isApproved
+    }
+  }).catch(() => {});
+
+  return id;
+}
+
+/**
+ * Toggles flash sale active / paused / ended status
+ */
+export async function updateFlashSaleStatus(id: string, productId: string, status: 'active' | 'ended' | 'rejected' | 'pending'): Promise<void> {
+  await rtdbUpdate(`flashSales/${id}`, {
+    status,
+    updatedAt: Date.now()
+  });
+
+  await rtdbUpdate(`products/${productId}`, {
+    'flashSale/active': status === 'active',
+    'flashSale/status': status
   }).catch(() => {});
 }
 
 /**
- * Remove flash sale from product
+ * Admin: Approves a Flash Sale
  */
-export async function removeProductFlashSale(productId: string) {
-  const updates = {
-    flashSale: null,
-    flashSaleActive: false,
-    flashSalePrice: null,
-    flashSaleStartTime: null,
-    flashSaleEndTime: null,
-    flashSaleStock: null,
+export async function adminApproveFlashSale(id: string, productId: string): Promise<void> {
+  await rtdbUpdate(`flashSales/${id}`, {
+    status: 'active',
+    isApproved: true,
     updatedAt: Date.now()
-  };
-  await rtdbUpdate(`products/${productId}`, updates);
-  await rtdbSet(`flash_sales/${productId}`, null).catch(() => {});
+  });
 
-  fetch(`/api/products/${productId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ flashSaleActive: false, flashSale: null })
+  await rtdbUpdate(`products/${productId}`, {
+    'flashSale/active': true,
+    'flashSale/status': 'active',
+    'flashSale/isApproved': true
+  }).catch(() => {});
+}
+
+/**
+ * Admin: Rejects a Flash Sale
+ */
+export async function adminRejectFlashSale(id: string, productId: string): Promise<void> {
+  await rtdbUpdate(`flashSales/${id}`, {
+    status: 'rejected',
+    isApproved: false,
+    updatedAt: Date.now()
+  });
+
+  await rtdbUpdate(`products/${productId}`, {
+    'flashSale/active': false,
+    'flashSale/status': 'rejected',
+    'flashSale/isApproved': false
+  }).catch(() => {});
+}
+
+/**
+ * Deletes a Flash Sale
+ */
+export async function deleteFlashSale(id: string, productId: string): Promise<void> {
+  await rtdbRemove(`flashSales/${id}`);
+  await rtdbUpdate(`products/${productId}`, {
+    flashSale: null
   }).catch(() => {});
 }

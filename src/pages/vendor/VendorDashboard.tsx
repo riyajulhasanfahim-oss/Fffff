@@ -35,6 +35,7 @@ import {
   Headset,
   Rocket,
   Megaphone,
+  Flame,
   Truck,
   Phone,
   Mail,
@@ -1130,6 +1131,7 @@ export default function VendorDashboard() {
             { name: 'Store Helpline', path: '/vendor/support', icon: Headset, color: 'text-sky-600', bg: 'bg-sky-50' },
             { name: 'Product Boost', path: '/vendor/boost', icon: Rocket, color: 'text-pink-600', bg: 'bg-pink-50' },
             { name: 'Product Ads', path: '/vendor/ads', icon: Megaphone, color: 'text-purple-600', bg: 'bg-purple-50' },
+            { name: 'Flash Sale', path: '/vendor/flash-sale', icon: Flame, color: 'text-amber-600', bg: 'bg-amber-50' },
           ].map((service, index) => {
             const Icon = service.icon;
 

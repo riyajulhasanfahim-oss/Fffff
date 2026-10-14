@@ -50,7 +50,18 @@
     },
     "flashSales": {
       ".read": true,
-      ".write": "auth != null && auth.token.admin === true"
+      ".write": "auth != null",
+      ".indexOn": ["productId", "vendorId", "status", "startTime", "endTime"]
+    },
+    "product_boosts": {
+      ".read": true,
+      ".write": "auth != null",
+      ".indexOn": ["productId", "vendorId", "status", "expiresAt"]
+    },
+    "vendor_ads": {
+      ".read": true,
+      ".write": "auth != null",
+      ".indexOn": ["productId", "vendorId", "status", "type", "expiresAt"]
     },
     "notices": {
       ".read": true,

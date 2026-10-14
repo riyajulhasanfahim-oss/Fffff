@@ -104,6 +104,8 @@ import VendorSettings from "./pages/vendor/settings/VendorSettings";
 import VendorHelpline from "./pages/vendor/support/VendorHelpline";
 import VendorProductBoost from "./pages/vendor/boost/VendorProductBoost";
 import VendorProductAds from "./pages/vendor/ads/VendorProductAds";
+import VendorFlashSale from "./pages/vendor/flash-sale/VendorFlashSale";
+import FlashSalePage from "./pages/FlashSalePage";
 import VendorReviewsPage from "./pages/vendor/reviews/VendorReviewsPage";
 import VendorLogin from "./pages/vendor/auth/VendorLogin";
 import ResellerLogin from "./pages/reseller/ResellerLogin";
@@ -193,6 +195,9 @@ export default function App() {
               <Route path="/wishlist" element={<WishlistPage />} />
               <Route path="/store/:vendorId" element={<VendorStore />} />
               <Route path="/brands" element={<AllBrands />} />
+              <Route path="/flash-sale" element={<FlashSalePage />} />
+              <Route path="/flash-sales" element={<FlashSalePage />} />
+              <Route path="/deals" element={<FlashSalePage />} />
               
               
               <Route path="/my-chats" element={
@@ -397,6 +402,8 @@ export default function App() {
             <Route path="/vendor/helpline" element={<VendorRoute><VendorHelpline /></VendorRoute>} />
             <Route path="/vendor/boost" element={<VendorRoute><VendorProductBoost /></VendorRoute>} />
             <Route path="/vendor/ads" element={<VendorRoute><VendorProductAds /></VendorRoute>} />
+            <Route path="/vendor/flash-sale" element={<VendorRoute><VendorFlashSale /></VendorRoute>} />
+            <Route path="/vendor/flash-sales" element={<VendorRoute><VendorFlashSale /></VendorRoute>} />
             <Route path="/vendor/platform-fee" element={<VendorRoute><VendorPlatformFee /></VendorRoute>} />
             <Route path="/vendor/referrals" element={<VendorRoute><VendorReferral /></VendorRoute>} />
           

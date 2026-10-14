@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Check } from 'lucide-react';
 import { motion } from 'motion/react';
-import { Star, Heart, Share2, ShoppingCart, ShieldCheck, Truck, RefreshCw, DollarSign, ArrowRight, MessageCircle, Store, CheckCircle2, BadgeCheck, Zap, Loader2 } from 'lucide-react';
+import { Star, Heart, Share2, ShoppingCart, ShieldCheck, Truck, RefreshCw, DollarSign, ArrowRight, MessageCircle, Store, CheckCircle2, BadgeCheck, Zap, Loader2, Flame, Clock } from 'lucide-react';
 import VerifiedBadge from '../ui/VerifiedBadge';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -903,6 +903,30 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
       </div>
 
       <hr className="border-slate-100" />
+
+      {/* Flash Sale Banner (if active) */}
+      {(product as any).flashSale?.active && (
+        <div className="p-3 rounded-xl bg-gradient-to-r from-red-600 via-amber-500 to-yellow-500 text-white shadow-sm flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 rounded-lg bg-black/20 backdrop-blur-xs flex items-center justify-center">
+              <Flame className="w-5 h-5 text-amber-200 fill-amber-300 animate-pulse" />
+            </span>
+            <div>
+              <div className="text-xs font-black tracking-wide flex items-center gap-1.5">
+                <span>ফ্ল্যাশ সেল স্পেশাল অফার!</span>
+                <span className="px-1.5 py-0.2 rounded bg-black/30 text-[10px] text-amber-200 font-bold">সীমিত সময়</span>
+              </div>
+              <div className="text-[11px] text-amber-100 font-medium">অর্ডারে পাচ্ছেন আকর্ষণীয় ফ্ল্যাশ মূল্য</div>
+            </div>
+          </div>
+          {(product as any).flashSale?.endTime && (
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 backdrop-blur-xs text-amber-200 text-xs font-mono font-black border border-white/20">
+              <Clock className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+              <span>বাকি: {Math.max(0, Math.floor(((product as any).flashSale.endTime - Date.now()) / (1000 * 60 * 60)))}h {Math.max(0, Math.floor((((product as any).flashSale.endTime - Date.now()) % (1000 * 60 * 60)) / (1000 * 60)))}m</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Pricing & Stock & Age Info */}
       <div>

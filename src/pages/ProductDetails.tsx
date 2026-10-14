@@ -15,6 +15,7 @@ import { useCart } from '../contexts/CartContext';
 import { useWishlist } from '../contexts/WishlistContext';
 import { useAuth } from '../context/AuthContext';
 import { fetchProductById, normalizeProduct } from '../services/productService';
+import { isFlashSaleActive, fetchAllFlashSales } from '../services/flashSaleService';
 import { updateClientSeo, resetDefaultSeo } from '../utils/seo';
 import { formatDirectImageUrl, PLACEHOLDER_PRODUCT_IMAGE } from '../utils/imageUrl';
 
@@ -154,15 +155,43 @@ export default function ProductDetails() {
           ? [featImg, ...filteredImages]
           : (filteredImages.length > 0 ? filteredImages : (featImg ? [featImg] : []));
 
+        // Check active flash sale if not directly embedded on rawProd
+        if (!rawProd.flashSale && rawProd.id) {
+          try {
+            const allFs = await fetchAllFlashSales();
+            const matchedFs = allFs.find(f => f.productId === rawProd.id && isFlashSaleActive(f));
+            if (matchedFs) {
+              rawProd.flashSale = {
+                active: true,
+                price: Number(matchedFs.flashPrice),
+                regularPrice: Number(matchedFs.regularPrice),
+                discount: matchedFs.discountPercent,
+                stock: Number(matchedFs.stock),
+                startTime: matchedFs.startTime,
+                endTime: matchedFs.endTime,
+                isApproved: true,
+                status: 'active'
+              };
+            }
+          } catch (_) {}
+        }
+
         // Price calculations
-        const regPrice = rawProd.regularPrice !== undefined && rawProd.regularPrice !== null
-          ? Number(rawProd.regularPrice)
-          : (rawProd.originalPrice ? Number(rawProd.originalPrice) : Number(rawProd.price) || 0);
+        const hasActiveFlash = rawProd.flashSale && isFlashSaleActive(rawProd.flashSale);
+        const regPrice = hasActiveFlash
+          ? (Number(rawProd.flashSale.regularPrice) || Number(rawProd.regularPrice) || Number(rawProd.originalPrice) || Number(rawProd.price) || 0)
+          : (rawProd.regularPrice !== undefined && rawProd.regularPrice !== null
+            ? Number(rawProd.regularPrice)
+            : (rawProd.originalPrice ? Number(rawProd.originalPrice) : Number(rawProd.price) || 0));
 
         const currentPrice = Number(rawProd.price) || 0;
         const hasValidSale = rawProd.salePrice !== undefined && rawProd.salePrice !== null && Number(rawProd.salePrice) > 0 && Number(rawProd.salePrice) < regPrice;
-        const effectivePrice = hasValidSale ? Number(rawProd.salePrice) : currentPrice;
-        const discountPercent = rawProd.discount || (hasValidSale && regPrice > effectivePrice ? Math.round(((regPrice - effectivePrice) / regPrice) * 100) : undefined);
+        const effectivePrice = hasActiveFlash
+          ? Number(rawProd.flashSale.price || rawProd.flashSale.flashPrice)
+          : (hasValidSale ? Number(rawProd.salePrice) : currentPrice);
+        const discountPercent = hasActiveFlash
+          ? (rawProd.flashSale.discount || (regPrice > effectivePrice ? Math.round(((regPrice - effectivePrice) / regPrice) * 100) : 0))
+          : (rawProd.discount || (hasValidSale && regPrice > effectivePrice ? Math.round(((regPrice - effectivePrice) / regPrice) * 100) : undefined));
 
         // Parse arrays
         const colorsList = Array.isArray(rawProd.colors) 
@@ -213,8 +242,11 @@ export default function ProductDetails() {
           videoUrl: rawProd.videoUrl && String(rawProd.videoUrl).trim() !== '' ? String(rawProd.videoUrl).trim() : undefined,
           price: effectivePrice,
           regularPrice: regPrice,
-          originalPrice: hasValidSale ? regPrice : undefined,
+          originalPrice: (hasActiveFlash || hasValidSale) ? regPrice : undefined,
           discount: discountPercent,
+          flashSale: hasActiveFlash ? rawProd.flashSale : undefined,
+          boosted: !!rawProd.boosted,
+          boostExpiresAt: rawProd.boostExpiresAt || undefined,
           resellerPrice: rawProd.resellerPrice !== undefined && rawProd.resellerPrice !== null && Number(rawProd.resellerPrice) > 0 ? Number(rawProd.resellerPrice) : undefined,
           inStock: rawProd.inStock !== undefined ? !!rawProd.inStock : ((Number(rawProd.stock) || Number(rawProd.stockCount) || 0) > 0),
           stockCount: rawProd.stock !== undefined ? Number(rawProd.stock) : (rawProd.stockCount !== undefined ? Number(rawProd.stockCount) : undefined),
