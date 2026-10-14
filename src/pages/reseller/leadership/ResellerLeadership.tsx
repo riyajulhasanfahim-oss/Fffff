@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Header from '../../../components/layout/Header';
 import Footer from '../../../components/layout/Footer';
 import { useAuth } from '../../../context/AuthContext';
-import { db } from '../../../lib/firebase';
+import { db, auth } from '../../../lib/firebase';
 import { doc, getDoc, collection, query, getDocs, where, setDoc } from 'firebase/firestore';
 import { Award, Target, Shield, Crown, Users, DollarSign, Wallet, Activity, CheckCircle, TrendingUp, Infinity, Landmark, RefreshCw, Copy, Check, Share2 } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -77,8 +77,16 @@ export default function ResellerLeadership() {
   });
 
   const [referralCode, setReferralCode] = useState<string>(() => {
-    if (cachedLeadershipData && cachedLeadershipData.userId === user?.uid) {
+    if (cachedLeadershipData && cachedLeadershipData.userId === user?.uid && cachedLeadershipData.referralCode) {
       return cachedLeadershipData.referralCode;
+    }
+    const uid = user?.uid || auth?.currentUser?.uid || (typeof window !== 'undefined' ? (localStorage.getItem('rj_last_uid') || '') : '');
+    if (uid) {
+      try {
+        const cached = localStorage.getItem('rj_ref_code_' + uid);
+        if (cached) return cached.toUpperCase();
+      } catch (_) {}
+      return uid.substring(0, 8).toUpperCase();
     }
     return '';
   });

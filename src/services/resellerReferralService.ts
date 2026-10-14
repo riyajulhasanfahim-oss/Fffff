@@ -92,13 +92,29 @@ export async function getOrCreateReferralCode(
       ? `${window.location.origin}/become-vendor?ref=${code}`
       : `${window.location.origin}/reseller/apply?ref=${code}`;
 
+  // Instant local cache check (0ms)
+  if (typeof window !== 'undefined') {
+    const cachedLocal = localStorage.getItem('rj_ref_code_' + userId);
+    if (cachedLocal && cachedLocal.trim()) {
+      const c = cachedLocal.trim().toUpperCase();
+      return {
+        code: c,
+        referralLink: defaultLink(c)
+      };
+    }
+  }
+
   try {
-    // 1. Check if user already has a referral code by direct key
-    const existingByUid = await rtdbGet<any>(`referral_codes/${userId}`);
+    // 1. Check if user already has a referral code by direct key (fast 1200ms limit)
+    const existingByUid = await rtdbGet<any>(`referral_codes/${userId}`, 1200);
     if (existingByUid && existingByUid.code) {
       const code = String(existingByUid.code).toUpperCase();
-      // Ensure cross-index is also set
-      await rtdbSet(`referral_codes/${code}`, {
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('rj_ref_code_' + userId, code); } catch (_) {}
+      }
+
+      // Non-blocking cross-index update in background
+      rtdbSet(`referral_codes/${code}`, {
         code,
         userId,
         resellerId: role === 'Reseller' ? userId : (existingByUid.resellerId || undefined),
@@ -121,6 +137,10 @@ export async function getOrCreateReferralCode(
     const cleanName = userName || (role === 'Vendor' ? 'Vendor Partner' : 'Reseller Partner');
     const now = Date.now();
 
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('rj_ref_code_' + userId, newCode); } catch (_) {}
+    }
+
     const record: ReferralCodeInfo = {
       code: newCode,
       userId,
@@ -133,20 +153,15 @@ export async function getOrCreateReferralCode(
       createdAt: now
     };
 
-    // Store in both paths for O(1) direct key lookup
-    const updates: Promise<any>[] = [
+    // Store in both paths asynchronously in background
+    Promise.allSettled([
       rtdbSet(`referral_codes/${newCode}`, record),
       rtdbSet(`referral_codes/${userId}`, record),
-      rtdbUpdate(`users/${userId}`, { referralCode: newCode })
-    ];
-
-    if (role === 'Vendor') {
-      updates.push(rtdbUpdate(`vendors/${userId}`, { referralCode: newCode }));
-    } else {
-      updates.push(rtdbUpdate(`resellers/${userId}`, { referralCode: newCode }));
-    }
-
-    await Promise.allSettled(updates);
+      rtdbUpdate(`users/${userId}`, { referralCode: newCode }),
+      role === 'Vendor' 
+        ? rtdbUpdate(`vendors/${userId}`, { referralCode: newCode })
+        : rtdbUpdate(`resellers/${userId}`, { referralCode: newCode })
+    ]).catch(() => {});
 
     return {
       code: newCode,
@@ -879,8 +894,8 @@ export async function getReferralStatsAndHistory(userId: string): Promise<{
 
   try {
     const [statsData, historyData] = await Promise.all([
-      rtdbGet<any>(`referral_stats/${userId}`),
-      rtdbGet<Record<string, any>>(`referrals/${userId}`)
+      rtdbGet<any>(`referral_stats/${userId}`, 1500),
+      rtdbGet<Record<string, any>>(`referrals/${userId}`, 1500)
     ]);
 
     const history: ReferralItem[] = [];

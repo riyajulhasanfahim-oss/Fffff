@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Copy, Check, Share2, MessageCircle, MessageSquare, Send, Mail } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { rtdbGet, rtdbSet } from '../../lib/rtdb';
+import { auth } from '../../lib/firebase';
 import toast from 'react-hot-toast';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -11,48 +12,84 @@ interface UserReferralModalProps {
 
 export default function UserReferralModal({ onClose }: UserReferralModalProps) {
   const { user, userData } = useAuth();
-  const [actualRefCode, setActualRefCode] = useState('');
-  const [walletBalance, setWalletBalance] = useState(0);
+
+  const getEffectiveUid = () => {
+    return user?.uid || auth?.currentUser?.uid || (typeof window !== 'undefined' ? (localStorage.getItem('rj_last_uid') || '') : '');
+  };
+
+  const resolveCode = () => {
+    if ((userData as any)?.referralCode) return String((userData as any).referralCode).toUpperCase();
+    const uid = getEffectiveUid();
+    if (uid) {
+      try {
+        const cached = localStorage.getItem('rj_ref_code_' + uid);
+        if (cached) return cached.toUpperCase();
+      } catch (_) {}
+      return uid.substring(0, 8).toUpperCase();
+    }
+    return '';
+  };
+
+  const initialCode = resolveCode();
+  const [actualRefCode, setActualRefCode] = useState<string>(initialCode);
+  const [walletBalance, setWalletBalance] = useState<number>((userData as any)?.walletBalance || (userData as any)?.wallet || 0);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
-    const initReferral = async () => {
-      if (user && userData) {
-        try {
-          const userCodeData = await rtdbGet<any>(`referral_codes/${user.uid}`);
-          if (userCodeData && userCodeData.code) {
-            setActualRefCode(userCodeData.code);
-          } else {
-            const newCode = user.uid.substring(0, 8).toUpperCase();
-            await rtdbSet(`referral_codes/${user.uid}`, {
-              code: newCode,
-              userId: user.uid,
-              createdAt: Date.now()
-            });
-            await rtdbSet(`referral_codes/${newCode}`, {
-              code: newCode,
-              userId: user.uid,
-              createdAt: Date.now()
-            });
-            setActualRefCode(newCode);
-          }
+    const uid = user?.uid || auth?.currentUser?.uid || getEffectiveUid();
+    if (!uid) return;
 
-          const wallet = await rtdbGet<any>(`user_wallet/${user.uid}`);
-          if (wallet && typeof wallet.walletBalance === 'number') {
-            setWalletBalance(wallet.walletBalance);
-          }
-        } catch (err) {
-          console.warn("Could not load referral data from RTDB:", err);
-          const fallbackCode = user.uid.substring(0, 8).toUpperCase();
-          setActualRefCode(fallbackCode);
+    try { localStorage.setItem('rj_last_uid', uid); } catch (_) {}
+
+    const curCode = (userData as any)?.referralCode || (typeof window !== 'undefined' ? (localStorage.getItem('rj_ref_code_' + uid) || uid.substring(0, 8).toUpperCase()) : uid.substring(0, 8).toUpperCase());
+    if (curCode && curCode !== actualRefCode) {
+      setActualRefCode(curCode);
+    }
+
+    let isMounted = true;
+    const syncReferral = async () => {
+      try {
+        // Fast parallel fetch with 1200ms timeout max
+        const [userCodeData, wallet] = await Promise.all([
+          rtdbGet<any>(`referral_codes/${uid}`, 1200).catch(() => null),
+          rtdbGet<any>(`user_wallet/${uid}`, 1200).catch(() => null)
+        ]);
+
+        if (!isMounted) return;
+
+        if (userCodeData && userCodeData.code) {
+          setActualRefCode(userCodeData.code);
+          try { localStorage.setItem('rj_ref_code_' + uid, userCodeData.code); } catch (_) {}
+        } else {
+          const newCode = uid.substring(0, 8).toUpperCase();
+          rtdbSet(`referral_codes/${uid}`, {
+            code: newCode,
+            userId: uid,
+            createdAt: Date.now()
+          }).catch(() => {});
+          rtdbSet(`referral_codes/${newCode}`, {
+            code: newCode,
+            userId: uid,
+            createdAt: Date.now()
+          }).catch(() => {});
+          try { localStorage.setItem('rj_ref_code_' + uid, newCode); } catch (_) {}
         }
+
+        if (wallet && typeof wallet.walletBalance === 'number') {
+          setWalletBalance(wallet.walletBalance);
+        }
+      } catch (err) {
+        console.warn("Referral sync completed with fallback:", err);
       }
     };
-    initReferral();
-  }, [user, userData]);
 
-  const referralLink = actualRefCode ? `${window.location.origin}/register?ref=${actualRefCode}` : '';
+    syncReferral();
+    return () => { isMounted = false; };
+  }, [user?.uid, (userData as any)?.referralCode]);
+
+  const effectiveCode = actualRefCode || resolveCode() || (getEffectiveUid() ? getEffectiveUid().substring(0, 8).toUpperCase() : '');
+  const referralLink = effectiveCode ? `${window.location.origin}/register?ref=${effectiveCode}` : '';
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(referralLink);
@@ -127,7 +164,7 @@ export default function UserReferralModal({ onClose }: UserReferralModalProps) {
 
         <div className="flex justify-center mb-6">
           <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
-            {actualRefCode ? (
+            {referralLink ? (
                <QRCodeSVG value={referralLink} size={150} level="H" includeMargin={true} />
             ) : (
                <div className="w-[150px] h-[150px] flex items-center justify-center text-slate-400">Loading...</div>
@@ -142,7 +179,7 @@ export default function UserReferralModal({ onClose }: UserReferralModalProps) {
               <input 
                 type="text" 
                 readOnly 
-                value={actualRefCode || 'Loading...'} 
+                value={effectiveCode || '...'} 
                 className="flex-grow bg-slate-50 border border-slate-200 rounded-l-xl px-4 py-3 text-primary-main font-black focus:outline-none tracking-widest text-center"
               />
               <button 
@@ -160,7 +197,7 @@ export default function UserReferralModal({ onClose }: UserReferralModalProps) {
               <input 
                 type="text" 
                 readOnly 
-                value={referralLink || 'Loading...'} 
+                value={referralLink || '...'} 
                 className="flex-grow bg-slate-50 border border-slate-200 rounded-l-xl px-4 py-3 text-sm text-slate-500 font-medium focus:outline-none truncate"
               />
               <button 

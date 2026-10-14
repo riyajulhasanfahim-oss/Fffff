@@ -61,7 +61,8 @@ export default function ResellerProducts() {
 
   const generateReferralLink = (productSlug: string) => {
     const baseUrl = window.location.origin;
-    return `${baseUrl}/product/${productSlug}?ref=${userData?.uid || 'UNKNOWN'}`;
+    const ref = (userData as any)?.referralCode || userData?.uid || (typeof window !== 'undefined' ? (localStorage.getItem('rj_last_uid') || '') : '');
+    return `${baseUrl}/product/${productSlug}?ref=${ref || 'partner'}`;
   };
 
   const handleCopyLink = (link: string) => {

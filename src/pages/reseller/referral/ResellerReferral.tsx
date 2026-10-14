@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
+import { auth } from '../../../lib/firebase';
 import Header from '../../../components/layout/Header';
 import Footer from '../../../components/layout/Footer';
 import { 
@@ -35,36 +36,97 @@ export default function ResellerReferral() {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   
-  const [actualRefCode, setActualRefCode] = useState('');
-  const [referralLink, setReferralLink] = useState('');
-  const [loading, setLoading] = useState(true);
+  const getEffectiveUid = () => {
+    return user?.uid || auth?.currentUser?.uid || (typeof window !== 'undefined' ? (localStorage.getItem('rj_last_uid') || '') : '');
+  };
+
+  // Instant resolution of referral code and link (0ms)
+  const resolveInitialCode = () => {
+    if ((userData as any)?.referralCode) return String((userData as any).referralCode).toUpperCase();
+    const uid = getEffectiveUid();
+    if (uid) {
+      try {
+        const cached = localStorage.getItem('rj_ref_code_' + uid);
+        if (cached) return cached.toUpperCase();
+      } catch (_) {}
+      return uid.substring(0, 8).toUpperCase();
+    }
+    return '';
+  };
+
+  const resolveInitialLink = (code: string) => {
+    if (!code) return '';
+    return `${window.location.origin}/reseller/apply?ref=${code}`;
+  };
+
+  const initialCode = resolveInitialCode();
+  const [actualRefCode, setActualRefCode] = useState<string>(initialCode);
+  const [referralLink, setReferralLink] = useState<string>(resolveInitialLink(initialCode));
+  const [loading, setLoading] = useState<boolean>(false);
   
-  const [stats, setStats] = useState<ReferralStats>({
-    totalReferrals: 0,
-    totalEarnings: 0,
-    activeResellers: 0
+  const [stats, setStats] = useState<ReferralStats>(() => {
+    const uid = getEffectiveUid();
+    if (typeof window !== 'undefined' && uid) {
+      try {
+        const cached = localStorage.getItem('rj_ref_stats_' + uid);
+        if (cached) return JSON.parse(cached);
+      } catch (_) {}
+    }
+    return {
+      totalReferrals: 0,
+      totalEarnings: 0,
+      activeResellers: 0
+    };
   });
-  const [history, setHistory] = useState<ReferralItem[]>([]);
+
+  const [history, setHistory] = useState<ReferralItem[]>(() => {
+    const uid = getEffectiveUid();
+    if (typeof window !== 'undefined' && uid) {
+      try {
+        const cached = localStorage.getItem('rj_ref_history_' + uid);
+        if (cached) return JSON.parse(cached);
+      } catch (_) {}
+    }
+    return [];
+  });
 
   useEffect(() => {
     let isMounted = true;
+    const uid = user?.uid || auth?.currentUser?.uid || getEffectiveUid();
+    if (!uid) return;
+
+    try { localStorage.setItem('rj_last_uid', uid); } catch (_) {}
+
+    // Fast synchronous fallback check
+    const curCode = (userData as any)?.referralCode || (typeof window !== 'undefined' ? (localStorage.getItem('rj_ref_code_' + uid) || uid.substring(0, 8).toUpperCase()) : uid.substring(0, 8).toUpperCase());
+    if (curCode) {
+      setActualRefCode(curCode);
+      setReferralLink(`${window.location.origin}/reseller/apply?ref=${curCode}`);
+    }
 
     const loadReferralData = async () => {
-      if (!user) return;
       try {
-        setLoading(true);
-        // 1. Get or create referral code
-        const refInfo = await getOrCreateReferralCode(user.uid, userData?.name);
-        if (isMounted) {
-          setActualRefCode(refInfo.code);
-          setReferralLink(refInfo.referralLink);
-        }
+        // Parallel non-blocking fast fetch (1-2s)
+        const [refInfo, statsRes] = await Promise.all([
+          getOrCreateReferralCode(uid, userData?.name, 'Reseller'),
+          getReferralStatsAndHistory(uid)
+        ]);
 
-        // 2. Fetch stats and referral history
-        const { stats: fetchedStats, history: fetchedHistory } = await getReferralStatsAndHistory(user.uid);
         if (isMounted) {
-          setStats(fetchedStats);
-          setHistory(fetchedHistory);
+          if (refInfo?.code) {
+            setActualRefCode(refInfo.code);
+            setReferralLink(refInfo.referralLink);
+            try { localStorage.setItem('rj_ref_code_' + uid, refInfo.code); } catch (_) {}
+          }
+          if (statsRes?.stats) {
+            setStats(statsRes.stats);
+            try { localStorage.setItem('rj_ref_stats_' + uid, JSON.stringify(statsRes.stats)); } catch (_) {}
+          }
+          if (statsRes?.history) {
+            setHistory(statsRes.history);
+            try { localStorage.setItem('rj_ref_history_' + uid, JSON.stringify(statsRes.history)); } catch (_) {}
+          }
+          setLoading(false);
         }
       } catch (err) {
         console.error('Error loading referral info:', err);
@@ -78,7 +140,7 @@ export default function ResellerReferral() {
     return () => {
       isMounted = false;
     };
-  }, [user, userData]);
+  }, [user?.uid, (userData as any)?.referralCode, userData?.name]);
 
   const handleCopyLink = () => {
     if (!referralLink) return;
@@ -251,12 +313,12 @@ export default function ResellerReferral() {
               </div>
               <div className="flex items-center gap-2">
                 <div className="flex-1 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 sm:py-3 font-mono font-black text-base sm:text-xl text-primary-main tracking-widest truncate select-all">
-                  {loading ? 'লোড হচ্ছে...' : (actualRefCode || '...')}
+                  {actualRefCode || initialCode || '...'}
                 </div>
                 <button
                   type="button"
                   onClick={handleCopyCode}
-                  disabled={loading || !actualRefCode}
+                  disabled={!actualRefCode && !initialCode}
                   className={`h-10 sm:h-12 px-4 sm:px-5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all shadow-2xs active:scale-95 cursor-pointer shrink-0 ${
                     copiedCode
                       ? 'bg-emerald-600 text-white'
@@ -290,13 +352,13 @@ export default function ResellerReferral() {
                 <input
                   type="text"
                   readOnly
-                  value={loading ? 'লোড হচ্ছে...' : referralLink}
+                  value={referralLink || resolveInitialLink(actualRefCode || initialCode)}
                   className="flex-1 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 sm:py-3 text-xs sm:text-sm text-slate-600 font-medium truncate outline-none select-all"
                 />
                 <button
                   type="button"
                   onClick={handleCopyLink}
-                  disabled={loading || !referralLink}
+                  disabled={!referralLink}
                   className={`h-10 sm:h-12 px-4 sm:px-5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all shadow-2xs active:scale-95 cursor-pointer shrink-0 ${
                     copiedLink
                       ? 'bg-emerald-600 text-white'
@@ -359,9 +421,9 @@ export default function ResellerReferral() {
             </p>
 
             <div className="p-3 bg-white border border-slate-200 rounded-2xl shadow-inner mb-4 flex items-center justify-center">
-              {referralLink ? (
+              {(referralLink || resolveInitialLink(actualRefCode || initialCode)) ? (
                 <QRCodeSVG 
-                  value={referralLink} 
+                  value={referralLink || resolveInitialLink(actualRefCode || initialCode)} 
                   size={160} 
                   level="H" 
                   includeMargin={true}
@@ -376,7 +438,7 @@ export default function ResellerReferral() {
 
             <div className="bg-slate-50 px-3.5 py-2 rounded-xl border border-slate-200/70 text-center">
               <span className="text-[11px] text-slate-600 font-semibold">
-                কোড: <strong className="text-primary-main font-mono">{actualRefCode || '...'}</strong>
+                কোড: <strong className="text-primary-main font-mono">{actualRefCode || initialCode || '...'}</strong>
               </span>
             </div>
           </div>
@@ -444,7 +506,7 @@ export default function ResellerReferral() {
             </span>
           </div>
 
-          {loading ? (
+          {loading && history.length === 0 ? (
             <div className="py-8 text-center text-slate-400 text-xs">
               তথ্য লোড হচ্ছে...
             </div>

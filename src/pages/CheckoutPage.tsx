@@ -1194,13 +1194,6 @@ export default function CheckoutPage() {
         orderData.walletPaymentDetails = walletPaymentData;
       }
 
-      // Save order to Realtime Database, Cloud Firestore, and localStorage
-      try {
-        await saveOrderToDatabases(orderId, orderData);
-      } catch (fErr) {
-        console.warn('Orders write notice:', fErr);
-      }
-
       // Always save pending order and address locally for instant recovery
       try {
         safeStorage.setItem('pending_order_' + orderId, JSON.stringify(orderData));
@@ -1214,9 +1207,204 @@ export default function CheckoutPage() {
         clearCart();
       }
 
-      // Record payments in RTDB
-      try {
-        await rtdbSet(`payments/${orderId}`, {
+      // Prepare order items batch writes
+      const orderItemsPromises = cleanItems.map(item => {
+        const varSuffix = item.variantId 
+          ? `_${item.variantId}` 
+          : (item.color || item.size ? `_${encodeURIComponent(item.color || '')}_${encodeURIComponent(item.size || '')}` : '');
+        const itemId = `${orderId}_${item.id || item.productId}${varSuffix}`;
+        return rtdbSet(`orderItems/${itemId}`, {
+          id: itemId,
+          orderId,
+          productId: item.id || item.productId,
+          name: item.name,
+          productName: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          vendorId: item.vendorId || item.storeId || 'admin',
+          storeId: item.storeId || item.vendorId || 'admin',
+          image: item.image || item.featuredImage || '',
+          selectedColor: item.selectedColor || item.color || null,
+          selectedSize: item.selectedSize || item.size || null,
+          color: item.selectedColor || item.color || null,
+          size: item.selectedSize || item.size || null,
+          variantId: item.variantId || null,
+          variantSku: item.variantSku || item.sku || null,
+          sku: item.variantSku || item.sku || null,
+          total: (item.price || 0) * (item.quantity || 1),
+          vendorPrice: item.vendorPrice ?? null,
+          resellerSellingPrice: item.resellerSellingPrice ?? null,
+          unitProfit: item.unitProfit ?? null,
+          resellerProfit: item.resellerProfit ?? null,
+          priceSnapshot: item.priceSnapshot ?? null,
+          createdAt: Date.now()
+        }).catch(err => console.warn('orderItem write notice:', err));
+      });
+
+      // Prepare vendor orders batch writes
+      const vendorOrdersPromises = Object.entries(vendorItemsMap).map(async ([vId, vData]) => {
+        if (!vId || vId === 'admin') return;
+        const vOrderDocId = `${orderId}_${vId}`;
+        const vPkg = multiVendorShipping.vendorPackages.find(p => p.vendorId === vId);
+        const vPkgShippingFee = vPkg ? vPkg.shippingFee : shippingCharge;
+        const vPkgWeightKg = vPkg ? vPkg.packageWeightKg : totalWeightKg;
+        const vPkgCodCharge = vPkg ? vPkg.codCharge : codCharge;
+
+        const vDeliveryCharge = vPkgShippingFee || 0;
+        const vGrandTotal = vData.total + vDeliveryCharge;
+        const isFullAdvance = paymentMethod === 'product_full_payment' || paymentMethod === 'wallet' || (verifiedDetails?.receivedAmount && verifiedDetails.receivedAmount >= grandTotal);
+        const isDeliveryOnly = paymentMethod === 'only_delivery_charge';
+        const vAdvanceAmount = isFullAdvance ? vGrandTotal : (isDeliveryOnly ? vDeliveryCharge : 0);
+        const vCodAmount = isFullAdvance ? 0 : Math.max(0, vGrandTotal - vAdvanceAmount);
+
+        const vItems = vData.items;
+        let vResellerProfit = 0;
+        let vPriceSnapshot: any = null;
+
+        if (isResellerOrder && effectiveResellerId) {
+          const vSnapshots = vItems.map((it: any) => {
+            const vp = Number(it.vendorPrice ?? it.adminPrice ?? it.price ?? 0);
+            const sp = Number(it.resellerSellingPrice ?? it.price ?? vp);
+            const qty = Math.max(1, Number(it.quantity) || 1);
+            const prof = Math.max(0, (sp - vp) * qty);
+            vResellerProfit += prof;
+            return {
+              productId: it.productId || it.id || '',
+              productName: it.name || it.productName || 'Product',
+              quantity: qty,
+              vendorPrice: vp,
+              resellerSellingPrice: sp,
+              customerPaidAmount: sp * qty,
+              resellerProfit: prof
+            };
+          });
+
+          vPriceSnapshot = {
+            orderId,
+            resellerId: effectiveResellerId,
+            vendorId: vId,
+            productId: vItems[0]?.productId || '',
+            productName: vItems[0]?.name || vItems[0]?.productName || 'Product',
+            quantity: vItems.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0),
+            vendorPrice: Number(vItems[0]?.vendorPrice ?? vItems[0]?.adminPrice ?? vItems[0]?.price ?? 0),
+            resellerSellingPrice: Number(vItems[0]?.resellerSellingPrice ?? vItems[0]?.price ?? 0),
+            customerPaidAmount: vItems.reduce((acc: number, it: any) => acc + ((Number(it.resellerSellingPrice ?? it.price ?? 0)) * (Number(it.quantity) || 1)), 0),
+            resellerProfit: vResellerProfit,
+            profitStatus: 'PENDING',
+            orderStatus: finalOrderStatus,
+            paymentMethod: paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : paymentMethod,
+            items: vSnapshots,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          };
+        }
+
+        await rtdbSet(`vendor_orders/${vOrderDocId}`, {
+          id: vOrderDocId,
+          orderId,
+          mainOrderId: orderId,
+          vendorId: vId,
+          customerId: user?.uid || 'guest',
+          customerName: shippingAddress.name,
+          customerPhone: shippingAddress.mobile,
+          customerAltPhone: shippingAddress.altPhone || '',
+          customerEmail: shippingAddress.email || '',
+          district: shippingAddress.district,
+          upazila: shippingAddress.upazila,
+          area: shippingAddress.area || '',
+          fullAddress: shippingAddress.fullAddress,
+          additionalNotes: shippingAddress.additionalNotes || '',
+          items: vData.items,
+          itemsCount: vData.items.length,
+          itemsPrice: vData.total,
+          subtotal: vData.total,
+          deliveryCharge: vDeliveryCharge,
+          shippingCharge: vDeliveryCharge,
+          grandTotal: vGrandTotal,
+          advancePaymentAmount: paymentMethod === 'cod' ? 0 : vAdvanceAmount,
+          paidAmount: paymentMethod === 'cod' ? 0 : vAdvanceAmount,
+          advanceAmount: paymentMethod === 'cod' ? 0 : vAdvanceAmount,
+          advancePaymentType:
+            paymentMethod === 'cod'
+              ? 'none'
+              : isFullAdvance
+              ? 'full'
+              : isDeliveryOnly
+              ? 'delivery_charge'
+              : 'none',
+          codAmount: paymentMethod === 'cod' ? vGrandTotal : vCodAmount,
+          vendorPayoutAmount: paymentMethod === 'cod' ? 0 : (finalPaymentStatus === 'Paid' ? vAdvanceAmount : 0),
+          vendorPayoutStatus: paymentMethod === 'cod' ? 'None' : (finalPaymentStatus === 'Paid' ? 'Held' : 'Pending Payment'),
+          autoReleaseAt: paymentMethod !== 'cod' && finalPaymentStatus === 'Paid' 
+            ? (paidAtTimestamp || Date.now()) + (96 * 60 * 60 * 1000) 
+            : null,
+          status: finalOrderStatus,
+          orderStatus: finalOrderStatus,
+          paymentMethod: paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : paymentMethod,
+          paymentStatus: finalPaymentStatus,
+          transactionId: verifiedTransactionId || null,
+          isResellerOrder: Boolean(isResellerOrder && effectiveResellerId),
+          resellerId: (isResellerOrder && effectiveResellerId) ? effectiveResellerId : null,
+          productId: vItems[0]?.productId || vItems[0]?.id || '',
+          quantity: vItems.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0),
+          vendorPrice: Number(vItems[0]?.vendorPrice ?? vItems[0]?.adminPrice ?? vItems[0]?.price ?? 0),
+          resellerSellingPrice: Number(vItems[0]?.resellerSellingPrice ?? vItems[0]?.price ?? 0),
+          customerPaidAmount: vItems.reduce((acc: number, it: any) => acc + ((Number(it.resellerSellingPrice ?? it.price ?? 0)) * (Number(it.quantity) || 1)), 0),
+          resellerProfit: (isResellerOrder && effectiveResellerId) ? vResellerProfit : 0,
+          profitStatus: (isResellerOrder && effectiveResellerId) ? 'PENDING' : null,
+          priceSnapshot: vPriceSnapshot,
+          shippingAddress: {
+            ...shippingAddress,
+            district: shippingAddress.district,
+            upazila: shippingAddress.upazila,
+            area: shippingAddress.area || '',
+            fullAddress: shippingAddress.fullAddress,
+            altPhone: shippingAddress.altPhone || '',
+            additionalNotes: shippingAddress.additionalNotes || ''
+          },
+          codCharge: vPkgCodCharge,
+          platformFee: 5,
+          totalWeightKg: vPkgWeightKg,
+          weightSlab: vPkg ? vPkg.weightSlab : deliveryCalc.weightSlab,
+          weightSlabLabelBn: vPkg ? vPkg.weightSlabLabelBn : deliveryCalc.weightSlabLabelBn,
+          extraWeightKg: vPkg ? vPkg.extraKgCount : deliveryCalc.extraWeightKg,
+          extraWeightCharge: vPkg ? vPkg.extraWeightCharge : deliveryCalc.extraWeightCharge,
+          deliveryZone: vPkg ? vPkg.routeType : deliveryCalc.zone,
+          vendorLocation: vPkg ? vPkg.vendorLocation : deliveryCalc.vendorLocation,
+          packageBreakdown: vPkg || null,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        }).catch(err => console.warn('vendor order write notice:', err));
+
+        // Update vendor wallet pendingBalance (Held) for verified online payments
+        if (paymentMethod !== 'cod' && finalPaymentStatus === 'Paid' && vAdvanceAmount > 0) {
+          try {
+            const curW = await rtdbGet<any>(`vendor_wallet/${vId}`);
+            if (curW) {
+              await rtdbUpdate(`vendor_wallet/${vId}`, {
+                pendingBalance: (curW.pendingBalance || 0) + vAdvanceAmount,
+                updatedAt: Date.now()
+              });
+            } else {
+              await rtdbSet(`vendor_wallet/${vId}`, {
+                vendorId: vId,
+                balance: 0,
+                pendingBalance: vAdvanceAmount,
+                lifetimeEarnings: 0,
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+              });
+            }
+          } catch (wErr) {
+            console.warn('Vendor wallet notice:', wErr);
+          }
+        }
+      });
+
+      // Execute all core order documents in parallel for instant sub-second persistence
+      await Promise.all([
+        saveOrderToDatabases(orderId, orderData).catch(fErr => console.warn('Order save notice:', fErr)),
+        rtdbSet(`payments/${orderId}`, {
           paymentId: `PAY-${orderId}`,
           orderId,
           invoiceId: orderId,
@@ -1231,455 +1419,192 @@ export default function CheckoutPage() {
           verifiedAt: finalPaymentStatus === 'Paid' ? Date.now() : null,
           createdAt: Date.now(),
           updatedAt: Date.now()
-        });
-      } catch (payErr) {
-        console.warn('Payments record write notice:', payErr);
-      }
+        }).catch(pErr => console.warn('Payments record notice:', pErr)),
+        ...orderItemsPromises,
+        ...vendorOrdersPromises,
+        resellerOrderRecord ? saveResellerOrderRecord(resellerOrderRecord).catch(rErr => console.warn('Reseller order save notice:', rErr)) : Promise.resolve()
+      ]);
 
-      // Record orderItems in RTDB with full variant details
-      try {
-        for (const item of cleanItems) {
-          const varSuffix = item.variantId 
-            ? `_${item.variantId}` 
-            : (item.color || item.size ? `_${encodeURIComponent(item.color || '')}_${encodeURIComponent(item.size || '')}` : '');
-          const itemId = `${orderId}_${item.id || item.productId}${varSuffix}`;
-          await rtdbSet(`orderItems/${itemId}`, {
-            id: itemId,
-            orderId,
-            productId: item.id || item.productId,
-            name: item.name,
-            productName: item.name,
-            price: item.price,
-            quantity: item.quantity,
-            vendorId: item.vendorId || item.storeId || 'admin',
-            storeId: item.storeId || item.vendorId || 'admin',
-            image: item.image || item.featuredImage || '',
-            selectedColor: item.selectedColor || item.color || null,
-            selectedSize: item.selectedSize || item.size || null,
-            color: item.selectedColor || item.color || null,
-            size: item.selectedSize || item.size || null,
-            variantId: item.variantId || null,
-            variantSku: item.variantSku || item.sku || null,
-            sku: item.variantSku || item.sku || null,
-            total: (item.price || 0) * (item.quantity || 1),
-            vendorPrice: item.vendorPrice ?? null,
-            resellerSellingPrice: item.resellerSellingPrice ?? null,
-            unitProfit: item.unitProfit ?? null,
-            resellerProfit: item.resellerProfit ?? null,
-            priceSnapshot: item.priceSnapshot ?? null,
-            createdAt: Date.now()
-          });
-        }
-      } catch (oiErr) {
-        console.warn('orderItems record write notice:', oiErr);
-      }
+      // Execute secondary post-order tasks (stock deduction, notifications, MLM commissions) asynchronously in background
+      (async () => {
+        try {
+          // 1. Deduct stock in RTDB targeting specific variants
+          for (const item of cleanItems) {
+            const pId = item.id || item.productId;
+            if (!pId) continue;
+            const qty = Number(item.quantity) || 1;
+            const currentProd = await rtdbGet<any>(`products/${pId}`).catch(() => null);
+            if (!currentProd) continue;
 
-      // Deduct stock in RTDB targeting the specific variant
-      try {
-        for (const item of cleanItems) {
-          const pId = item.id || item.productId;
-          if (!pId) continue;
-          const qty = Number(item.quantity) || 1;
-          const currentProd = await rtdbGet<any>(`products/${pId}`);
-          if (!currentProd) continue;
+            let updatedVariants = currentProd.variants;
+            let variantFound = false;
 
-          let updatedVariants = currentProd.variants;
-          let variantFound = false;
-
-          if (item.variantId && updatedVariants) {
-            if (Array.isArray(updatedVariants)) {
-              updatedVariants = updatedVariants.map((v: any) => {
-                if (v.id === item.variantId) {
-                  variantFound = true;
-                  const curStock = Number(v.stock) || 0;
-                  return { ...v, stock: Math.max(0, curStock - qty) };
-                }
-                return v;
-              });
-            } else if (typeof updatedVariants === 'object') {
-              for (const [vKey, vVal] of Object.entries(updatedVariants as Record<string, any>)) {
-                if (vVal.id === item.variantId || vKey === item.variantId) {
-                  variantFound = true;
-                  const curStock = Number(vVal.stock) || 0;
-                  updatedVariants[vKey] = { ...vVal, stock: Math.max(0, curStock - qty) };
+            if (item.variantId && updatedVariants) {
+              if (Array.isArray(updatedVariants)) {
+                updatedVariants = updatedVariants.map((v: any) => {
+                  if (v.id === item.variantId) {
+                    variantFound = true;
+                    const curStock = Number(v.stock) || 0;
+                    return { ...v, stock: Math.max(0, curStock - qty) };
+                  }
+                  return v;
+                });
+              } else if (typeof updatedVariants === 'object') {
+                for (const [vKey, vVal] of Object.entries(updatedVariants as Record<string, any>)) {
+                  if (vVal.id === item.variantId || vKey === item.variantId) {
+                    variantFound = true;
+                    const curStock = Number(vVal.stock) || 0;
+                    updatedVariants[vKey] = { ...vVal, stock: Math.max(0, curStock - qty) };
+                  }
                 }
               }
+            } else if ((item.selectedColor || item.selectedSize || item.color || item.size) && updatedVariants) {
+              const itmColor = (item.selectedColor || item.color || '').toLowerCase();
+              const itmSize = (item.selectedSize || item.size || '').toLowerCase();
+              if (Array.isArray(updatedVariants)) {
+                updatedVariants = updatedVariants.map((v: any) => {
+                  const cMatch = !itmColor || (v.colorName && v.colorName.toLowerCase() === itmColor);
+                  const sMatch = !itmSize || (v.sizeName && v.sizeName.toLowerCase() === itmSize);
+                  if (cMatch && sMatch && !variantFound) {
+                    variantFound = true;
+                    const curStock = Number(v.stock) || 0;
+                    return { ...v, stock: Math.max(0, curStock - qty) };
+                  }
+                  return v;
+                });
+              }
             }
-          } else if ((item.selectedColor || item.selectedSize || item.color || item.size) && updatedVariants) {
-            const itmColor = (item.selectedColor || item.color || '').toLowerCase();
-            const itmSize = (item.selectedSize || item.size || '').toLowerCase();
-            if (Array.isArray(updatedVariants)) {
-              updatedVariants = updatedVariants.map((v: any) => {
-                const cMatch = !itmColor || (v.colorName && v.colorName.toLowerCase() === itmColor);
-                const sMatch = !itmSize || (v.sizeName && v.sizeName.toLowerCase() === itmSize);
-                if (cMatch && sMatch && !variantFound) {
-                  variantFound = true;
-                  const curStock = Number(v.stock) || 0;
-                  return { ...v, stock: Math.max(0, curStock - qty) };
-                }
-                return v;
-              });
+
+            let newProductStock: number | undefined = undefined;
+            if (variantFound && updatedVariants) {
+              const varList = Array.isArray(updatedVariants) ? updatedVariants : Object.values(updatedVariants);
+              newProductStock = varList.reduce((sum: number, v: any) => sum + (Number(v.stock) || 0), 0);
+            } else if (currentProd.stockCount !== undefined || currentProd.stock !== undefined) {
+              const curStock = Number(currentProd.stockCount ?? currentProd.stock ?? 0);
+              newProductStock = Math.max(0, curStock - qty);
+            }
+
+            const prodUpdates: any = {};
+            if (variantFound && updatedVariants) {
+              prodUpdates.variants = updatedVariants;
+            }
+            if (newProductStock !== undefined) {
+              prodUpdates.stock = newProductStock;
+              prodUpdates.stockCount = newProductStock;
+              prodUpdates.inStock = newProductStock > 0;
+            }
+
+            if (Object.keys(prodUpdates).length > 0) {
+              await rtdbUpdate(`products/${pId}`, prodUpdates).catch(() => {});
             }
           }
 
-          // Calculate new overall product stock
-          let newProductStock: number | undefined = undefined;
-          if (variantFound && updatedVariants) {
-            const varList = Array.isArray(updatedVariants) ? updatedVariants : Object.values(updatedVariants);
-            newProductStock = varList.reduce((sum: number, v: any) => sum + (Number(v.stock) || 0), 0);
-          } else if (currentProd.stockCount !== undefined || currentProd.stock !== undefined) {
-            const curStock = Number(currentProd.stockCount ?? currentProd.stock ?? 0);
-            newProductStock = Math.max(0, curStock - qty);
-          }
-
-          const prodUpdates: any = {};
-          if (variantFound && updatedVariants) {
-            prodUpdates.variants = updatedVariants;
-          }
-          if (newProductStock !== undefined) {
-            prodUpdates.stock = newProductStock;
-            prodUpdates.stockCount = newProductStock;
-            prodUpdates.inStock = newProductStock > 0;
-          }
-
-          if (Object.keys(prodUpdates).length > 0) {
-            await rtdbUpdate(`products/${pId}`, prodUpdates);
-          }
-        }
-      } catch (stockErr) {
-        console.warn('Stock deduction notice:', stockErr);
-      }
-
-      // Always save pending order to local storage backup
-      safeStorage.setItem(`pending_order_${orderId}`, JSON.stringify(orderData));
-
-      // Create vendor_orders and track held balance in vendor_wallet (for COD / Wallet / Online confirmed orders)
-      try {
-        for (const [vId, vData] of Object.entries(vendorItemsMap)) {
-          if (vId && vId !== 'admin') {
-            const vOrderDocId = `${orderId}_${vId}`;
-            const vPkg = multiVendorShipping.vendorPackages.find(p => p.vendorId === vId);
-            const vPkgShippingFee = vPkg ? vPkg.shippingFee : shippingCharge;
-            const vPkgWeightKg = vPkg ? vPkg.packageWeightKg : totalWeightKg;
-            const vPkgCodCharge = vPkg ? vPkg.codCharge : codCharge;
-
-            const vDeliveryCharge = vPkgShippingFee || 0;
-            const vGrandTotal = vData.total + vDeliveryCharge;
-            const isFullAdvance = paymentMethod === 'product_full_payment' || paymentMethod === 'wallet' || (verifiedDetails?.receivedAmount && verifiedDetails.receivedAmount >= grandTotal);
-            const isDeliveryOnly = paymentMethod === 'only_delivery_charge';
-            const vAdvanceAmount = isFullAdvance ? vGrandTotal : (isDeliveryOnly ? vDeliveryCharge : 0);
-            const vCodAmount = isFullAdvance ? 0 : Math.max(0, vGrandTotal - vAdvanceAmount);
-
-            // Compute reseller metadata and line profit for this specific vendor's order package
-            const vItems = vData.items;
-            let vResellerProfit = 0;
-            let vPriceSnapshot: any = null;
-
-            if (isResellerOrder && effectiveResellerId) {
-              const vSnapshots = vItems.map((it: any) => {
-                const vp = Number(it.vendorPrice ?? it.adminPrice ?? it.price ?? 0);
-                const sp = Number(it.resellerSellingPrice ?? it.price ?? vp);
-                const qty = Math.max(1, Number(it.quantity) || 1);
-                const prof = Math.max(0, (sp - vp) * qty);
-                vResellerProfit += prof;
-                return {
-                  productId: it.productId || it.id || '',
-                  productName: it.name || it.productName || 'Product',
-                  quantity: qty,
-                  vendorPrice: vp,
-                  resellerSellingPrice: sp,
-                  customerPaidAmount: sp * qty,
-                  resellerProfit: prof
-                };
-              });
-
-              vPriceSnapshot = {
+          // 2. Notify vendors in real-time
+          for (const [vId, vData] of Object.entries(vendorItemsMap)) {
+            if (vId && vId !== 'admin') {
+              notifyVendorNewOrder(
+                vId,
                 orderId,
-                resellerId: effectiveResellerId,
-                vendorId: vId,
-                productId: vItems[0]?.productId || '',
-                productName: vItems[0]?.name || vItems[0]?.productName || 'Product',
-                quantity: vItems.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0),
-                vendorPrice: Number(vItems[0]?.vendorPrice ?? vItems[0]?.adminPrice ?? vItems[0]?.price ?? 0),
-                resellerSellingPrice: Number(vItems[0]?.resellerSellingPrice ?? vItems[0]?.price ?? 0),
-                customerPaidAmount: vItems.reduce((acc: number, it: any) => acc + ((Number(it.resellerSellingPrice ?? it.price ?? 0)) * (Number(it.quantity) || 1)), 0),
-                resellerProfit: vResellerProfit,
-                profitStatus: 'PENDING',
-                orderStatus: finalOrderStatus,
-                paymentMethod: paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : paymentMethod,
-                items: vSnapshots,
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-              };
+                shippingAddress.name || 'সম্মানিত গ্রাহক',
+                vData.total,
+                vData.items.length
+              ).catch(e => console.warn('Vendor notif notice:', e));
             }
-
-            await rtdbSet(`vendor_orders/${vOrderDocId}`, {
-              id: vOrderDocId,
-              orderId,
-              mainOrderId: orderId,
-              vendorId: vId,
-              customerId: user?.uid || 'guest',
-              customerName: shippingAddress.name,
-              customerPhone: shippingAddress.mobile,
-              customerAltPhone: shippingAddress.altPhone || '',
-              customerEmail: shippingAddress.email || '',
-              district: shippingAddress.district,
-              upazila: shippingAddress.upazila,
-              area: shippingAddress.area || '',
-              fullAddress: shippingAddress.fullAddress,
-              additionalNotes: shippingAddress.additionalNotes || '',
-              items: vData.items,
-              itemsCount: vData.items.length,
-              itemsPrice: vData.total,
-              subtotal: vData.total,
-              deliveryCharge: vDeliveryCharge,
-              shippingCharge: vDeliveryCharge,
-              grandTotal: vGrandTotal,
-              advancePaymentAmount: paymentMethod === 'cod' ? 0 : vAdvanceAmount,
-              paidAmount: paymentMethod === 'cod' ? 0 : vAdvanceAmount,
-              advanceAmount: paymentMethod === 'cod' ? 0 : vAdvanceAmount,
-              advancePaymentType:
-                paymentMethod === 'cod'
-                  ? 'none'
-                  : isFullAdvance
-                  ? 'full'
-                  : isDeliveryOnly
-                  ? 'delivery_charge'
-                  : 'none',
-              codAmount: paymentMethod === 'cod' ? vGrandTotal : vCodAmount,
-              vendorPayoutAmount: paymentMethod === 'cod' ? 0 : (finalPaymentStatus === 'Paid' ? vAdvanceAmount : 0),
-              vendorPayoutStatus: paymentMethod === 'cod' ? 'None' : (finalPaymentStatus === 'Paid' ? 'Held' : 'Pending Payment'),
-              autoReleaseAt: paymentMethod !== 'cod' && finalPaymentStatus === 'Paid' 
-                ? (paidAtTimestamp || Date.now()) + (96 * 60 * 60 * 1000) 
-                : null,
-              status: finalOrderStatus,
-              orderStatus: finalOrderStatus,
-              paymentMethod: paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : paymentMethod,
-              paymentStatus: finalPaymentStatus,
-              transactionId: verifiedTransactionId || null,
-              isResellerOrder: Boolean(isResellerOrder && effectiveResellerId),
-              resellerId: (isResellerOrder && effectiveResellerId) ? effectiveResellerId : null,
-              productId: vItems[0]?.productId || vItems[0]?.id || '',
-              quantity: vItems.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0),
-              vendorPrice: Number(vItems[0]?.vendorPrice ?? vItems[0]?.adminPrice ?? vItems[0]?.price ?? 0),
-              resellerSellingPrice: Number(vItems[0]?.resellerSellingPrice ?? vItems[0]?.price ?? 0),
-              customerPaidAmount: vItems.reduce((acc: number, it: any) => acc + ((Number(it.resellerSellingPrice ?? it.price ?? 0)) * (Number(it.quantity) || 1)), 0),
-              resellerProfit: (isResellerOrder && effectiveResellerId) ? vResellerProfit : 0,
-              profitStatus: (isResellerOrder && effectiveResellerId) ? 'PENDING' : null,
-              priceSnapshot: vPriceSnapshot,
-              shippingAddress: {
-                ...shippingAddress,
-                district: shippingAddress.district,
-                upazila: shippingAddress.upazila,
-                area: shippingAddress.area || '',
-                fullAddress: shippingAddress.fullAddress,
-                altPhone: shippingAddress.altPhone || '',
-                additionalNotes: shippingAddress.additionalNotes || ''
-              },
-              codCharge: vPkgCodCharge,
-              platformFee: 5,
-              totalWeightKg: vPkgWeightKg,
-              weightSlab: vPkg ? vPkg.weightSlab : deliveryCalc.weightSlab,
-              weightSlabLabelBn: vPkg ? vPkg.weightSlabLabelBn : deliveryCalc.weightSlabLabelBn,
-              extraWeightKg: vPkg ? vPkg.extraKgCount : deliveryCalc.extraWeightKg,
-              extraWeightCharge: vPkg ? vPkg.extraWeightCharge : deliveryCalc.extraWeightCharge,
-              deliveryZone: vPkg ? vPkg.routeType : deliveryCalc.zone,
-              vendorLocation: vPkg ? vPkg.vendorLocation : deliveryCalc.vendorLocation,
-              packageBreakdown: vPkg || null,
-              createdAt: Date.now(),
-              updatedAt: Date.now()
-            });
-
-            // Update vendor wallet pendingBalance (Held) ONLY for verified successful online payments!
-            if (paymentMethod !== 'cod' && finalPaymentStatus === 'Paid' && vAdvanceAmount > 0) {
-              const curW = await rtdbGet<any>(`vendor_wallet/${vId}`);
-              if (curW) {
-                await rtdbUpdate(`vendor_wallet/${vId}`, {
-                  pendingBalance: (curW.pendingBalance || 0) + vAdvanceAmount,
-                  updatedAt: Date.now()
-                });
-              } else {
-                await rtdbSet(`vendor_wallet/${vId}`, {
-                  vendorId: vId,
-                  balance: 0,
-                  pendingBalance: vAdvanceAmount,
-                  lifetimeEarnings: 0,
-                  createdAt: Date.now(),
-                  updatedAt: Date.now()
-                });
-              }
-            }
-
-            // Send real-time notification to the vendor
-            notifyVendorNewOrder(
-              vId,
-              orderId,
-              shippingAddress.name || 'সম্মানিত গ্রাহক',
-              vData.total,
-              vData.items.length
-            ).catch(e => console.warn('Vendor notif failed:', e));
           }
-        }
 
-        // Persist Reseller Order Pending Profit record (zero wallet balance deduction/locking)
-        if (resellerOrderRecord) {
+          // 3. Invalidate RTDB caches
           try {
-            await saveResellerOrderRecord(resellerOrderRecord);
-          } catch (rErr) {
-            console.warn('[CheckoutPage] Reseller pending profit persistence warning:', rErr);
+            invalidateRtdbCache('orders');
+            invalidateRtdbCache('vendor_orders');
+            invalidateRtdbCache('reseller_orders');
+            invalidateRtdbCache('orderItems');
+            window.dispatchEvent(new CustomEvent('vendor_order_updated'));
+          } catch (_) {}
+
+          // 4. MLM Product Sales Commission Logic
+          let directSellerId = null;
+          if (isReseller && user) {
+            directSellerId = user.uid;
+          } else if (referralId) {
+            directSellerId = referralId;
           }
-        }
 
-        // Invalidate RTDB caches so Vendor Panel & Admin see the order immediately
-        try {
-          invalidateRtdbCache('orders');
-          invalidateRtdbCache('vendor_orders');
-          invalidateRtdbCache('reseller_orders');
-          invalidateRtdbCache('orderItems');
-          window.dispatchEvent(new CustomEvent('vendor_order_updated'));
-        } catch (_) {}
-      } catch (err) {
-        console.warn('Error recording vendor order hold', err);
-      }
+          if (directSellerId) {
+            try {
+              const distributeSaleCommission = async (beneficiaryId: string, amount: number, levelDesc: string) => {
+                if (amount <= 0) return;
+                const isResellerUser = await checkIsResellerAccount(beneficiaryId);
+                if (!isResellerUser) return;
 
-      // If SofolX online payment redirect
-      if (redirectGatewayUrl) {
-        if (!buyNowItem) {
-          clearCart();
-        }
-        toast.success('Redirecting to SofolX Payment Gateway...');
-        setRedirectingPaymentUrl(redirectGatewayUrl);
-        setLoading(false);
-        isSubmittingRef.current = false;
+                await rtdbPush('reseller_transactions', {
+                  resellerId: beneficiaryId,
+                  orderId: orderId,
+                  customerName: shippingAddress.name,
+                  productName: items.length > 0 ? items[0].name : 'Unknown Product',
+                  amount: amount,
+                  status: 'Pending',
+                  createdAt: Date.now(),
+                  isReferral: levelDesc !== 'Direct'
+                }).catch(() => {});
 
-        try {
-          if (window.top && window.top !== window) {
-            window.top.location.href = redirectGatewayUrl;
-            return;
-          }
-        } catch (frameErr) {
-          console.warn('Top navigation fallback:', frameErr);
-        }
+                await executeResellerWalletTransaction({
+                  resellerId: beneficiaryId,
+                  userId: beneficiaryId,
+                  orderId: orderId,
+                  amount: amount,
+                  type: ResellerTransactionType.PROFIT_PENDING,
+                  status: 'PENDING',
+                  description: `${levelDesc} commission for Order #${orderId}`,
+                  metadata: {
+                    customerName: shippingAddress.name,
+                    productName: items.length > 0 ? items[0].name : 'Unknown Product',
+                    grandTotal,
+                    levelDesc
+                  }
+                }).catch(() => {});
 
-        window.location.assign(redirectGatewayUrl);
-        return;
-      }
+                await rtdbTransaction(`reseller_wallet/${beneficiaryId}`, (curr) => {
+                  if (!curr) return curr;
+                  return {
+                    ...curr,
+                    totalSales: Number(curr.totalSales || 0) + grandTotal,
+                    totalOrders: Number(curr.totalOrders || 0) + 1,
+                    updatedAt: Date.now()
+                  };
+                }).catch(() => {});
+              };
 
-      // Track eligible sales for bonus unlocking
-      if (user && user.uid !== 'guest') {
-        try {
-          const wData = await rtdbGet<any>(`user_wallet/${user.uid}`);
-          if (wData) {
-            if (wData.lockedBonus === 50 && !wData.bonusClaimed) {
-              const currentSales = (wData.bonusEligibleSales || 0) + 1;
-              if (currentSales >= 10) {
-                await rtdbUpdate(`user_wallet/${user.uid}`, {
-                  bonusEligibleSales: currentSales,
-                  lockedBonus: 0,
-                  bonusClaimed: true,
-                  walletBalance: (wData.walletBalance || 0) + 50,
-                  approvedCommission: (wData.approvedCommission || 0) + 50
-                });
-              } else {
-                await rtdbUpdate(`user_wallet/${user.uid}`, {
-                  bonusEligibleSales: currentSales
-                });
+              const directAmount = (grandTotal / 1000) * 15;
+              await distributeSaleCommission(directSellerId, directAmount, 'Direct');
+
+              if (!isReseller && referralId) {
+                await rtdbPush('referral_tracking', {
+                  referrerId: referralId,
+                  orderId: orderId,
+                  type: 'order',
+                  amount: grandTotal,
+                  timestamp: Date.now()
+                }).catch(() => {});
               }
-            }
-          }
-        } catch(e) {
-          console.error("Failed to update eligible sales tracking", e);
-        }
-      }
-      
-      // MLM Product Sales Commission Logic (Calculated per 1000 BDT)
-      let directSellerId = null;
-      if (isReseller && user) {
-        directSellerId = user.uid;
-      } else if (referralId) {
-        directSellerId = referralId;
-      }
 
-      if (directSellerId) {
-        try {
-          const distributeSaleCommission = async (beneficiaryId: string, amount: number, levelDesc: string) => {
-             if (amount <= 0) return;
-             
-             // Check if beneficiary is a reseller
-             const isResellerUser = await checkIsResellerAccount(beneficiaryId);
-             if (!isResellerUser) return;
-
-             await rtdbPush('reseller_transactions', {
-               resellerId: beneficiaryId,
-               orderId: orderId,
-               customerName: shippingAddress.name,
-               productName: items.length > 0 ? items[0].name : 'Unknown Product',
-               amount: amount,
-               status: 'Pending',
-               createdAt: Date.now(),
-               isReferral: levelDesc !== 'Direct'
-             });
-             
-             // Atomic wallet balance update using RTDB transaction
-             await executeResellerWalletTransaction({
-               resellerId: beneficiaryId,
-               userId: beneficiaryId,
-               orderId: orderId,
-               amount: amount,
-               type: ResellerTransactionType.PROFIT_PENDING,
-               status: 'PENDING',
-               description: `${levelDesc} commission for Order #${orderId}`,
-               metadata: {
-                 customerName: shippingAddress.name,
-                 productName: items.length > 0 ? items[0].name : 'Unknown Product',
-                 grandTotal,
-                 levelDesc
-               }
-             });
-
-             await rtdbTransaction(`reseller_wallet/${beneficiaryId}`, (curr) => {
-               if (!curr) return curr;
-               return {
-                 ...curr,
-                 totalSales: Number(curr.totalSales || 0) + grandTotal,
-                 totalOrders: Number(curr.totalOrders || 0) + 1,
-                 updatedAt: Date.now()
-               };
-             });
-          };
-
-          const directAmount = (grandTotal / 1000) * 15;
-          await distributeSaleCommission(directSellerId, directAmount, 'Direct');
-          
-          if (!isReseller && referralId) {
-             await rtdbPush('referral_tracking', {
-                referrerId: referralId,
-                orderId: orderId,
-                type: 'order',
-                amount: grandTotal,
-                timestamp: Date.now()
-             });
-          }
-
-          const dData = await rtdbGet<any>(`mlm_members/${directSellerId}`);
-          if (dData) {
-             if (dData.sponsorId) {
+              const dData = await rtdbGet<any>(`mlm_members/${directSellerId}`).catch(() => null);
+              if (dData?.sponsorId) {
                 const l2Amount = (grandTotal / 1000) * 20;
                 await distributeSaleCommission(dData.sponsorId, l2Amount, 'Level 2 Upline');
-                
-                const l2Data = await rtdbGet<any>(`mlm_members/${dData.sponsorId}`);
-                if (l2Data) {
-                   if (l2Data.sponsorId) {
-                      const l3Amount = (grandTotal / 1000) * 10;
-                      await distributeSaleCommission(l2Data.sponsorId, l3Amount, 'Level 1 Upline');
-                   }
+                const l2Data = await rtdbGet<any>(`mlm_members/${dData.sponsorId}`).catch(() => null);
+                if (l2Data?.sponsorId) {
+                  const l3Amount = (grandTotal / 1000) * 10;
+                  await distributeSaleCommission(l2Data.sponsorId, l3Amount, 'Level 1 Upline');
                 }
-             }
+              }
+            } catch (mlmErr) {
+              console.warn('MLM commission notice:', mlmErr);
+            }
           }
-        } catch (error) {
-           console.error('Failed to distribute commissions', error);
+        } catch (bgErr) {
+          console.warn('Background order tasks notice:', bgErr);
         }
-      }
+      })();
             
       if (verifiedDetails?.isVerified) {
         setSuccessTargetOrderId(orderId);
@@ -1705,7 +1630,7 @@ export default function CheckoutPage() {
       const timeoutPromise = new Promise<any>((_, reject) => {
         setTimeout(() => {
           reject(new Error('Payment verification timed out. Please try again.'));
-        }, 8000);
+        }, 3500);
       });
 
       const result = await Promise.race([
@@ -1731,8 +1656,7 @@ export default function CheckoutPage() {
         else if (channel === 'rocket') setShowRocketModal(false);
         else if (channel === 'upay') setShowUpayModal(false);
         setShowOnlinePaymentModal(false);
-        setLoading(false);
-        isSubmittingRef.current = false;
+        
         await handlePlaceOrder(undefined, channel, trxId, {
           isVerified: true,
           receivedAmount: result.receivedAmount || expectedAmount,

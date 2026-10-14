@@ -392,7 +392,7 @@ async function executeBusinessActionSafely(
   })();
 
   // Safe timeout guard on business action writes
-  const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 3000));
+  const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 1200));
   return Promise.race([businessPromise, timeoutPromise]);
 }
 
@@ -506,41 +506,39 @@ export async function verifyPaymentAutomatic(
 
   // Polling loop against Firestore payments collection (Single Source of Truth)
   const startTime = Date.now();
-  const MAX_WAIT_MS = 6000;
+  const MAX_WAIT_MS = 3200;
 
   while (Date.now() - startTime < MAX_WAIT_MS) {
     console.log('[VERIFY] Querying Firestore payments collection');
 
-    // Run Server API and Direct Firestore Query in Parallel for maximum speed
-    const [serverResData, firestoreRecord] = await Promise.all([
-      (async () => {
-        try {
-          if (typeof window !== 'undefined') {
-            const serverRes = await fetch('/api/payment/verify-automatic', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              signal: AbortSignal.timeout(2500),
-              body: JSON.stringify({
-                transactionId: cleanTrxId,
-                paymentMethod: reqMethod,
-                expectedAmount,
-                invoiceId: req.invoiceId,
-                userId: req.userId,
-                userType: req.userType,
-                contextData: req.contextData
-              })
-            });
-            if (serverRes.ok) {
-              return await serverRes.json();
-            }
-          }
-        } catch (netErr) {
-          console.warn('[VERIFY] Backend verify-automatic fetch notice:', netErr);
+    // 1. Check direct Firestore first (ultra fast < 200ms)
+    let firestoreRecord = await queryFirestorePaymentsNode(cleanTrxId);
+    let serverResData: any = null;
+
+    // 2. If not found in direct Firestore on this check, query server API in background/parallel
+    if (!firestoreRecord && typeof window !== 'undefined') {
+      try {
+        const serverRes = await fetch('/api/payment/verify-automatic', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(1500),
+          body: JSON.stringify({
+            transactionId: cleanTrxId,
+            paymentMethod: reqMethod,
+            expectedAmount,
+            invoiceId: req.invoiceId,
+            userId: req.userId,
+            userType: req.userType,
+            contextData: req.contextData
+          })
+        });
+        if (serverRes.ok) {
+          serverResData = await serverRes.json();
         }
-        return null;
-      })(),
-      queryFirestorePaymentsNode(cleanTrxId)
-    ]);
+      } catch (netErr) {
+        console.warn('[VERIFY] Backend verify-automatic fetch notice:', netErr);
+      }
+    }
 
     console.log('[VERIFY] Payment query completed');
 
@@ -679,9 +677,9 @@ export async function verifyPaymentAutomatic(
       };
     }
 
-    // If not found yet and still within timeout window, short 800ms sleep before re-polling
-    if (Date.now() - startTime < MAX_WAIT_MS - 1000) {
-      await new Promise(resolve => setTimeout(resolve, 800));
+    // If not found yet and still within timeout window, short 250ms sleep before re-polling
+    if (Date.now() - startTime < MAX_WAIT_MS - 300) {
+      await new Promise(resolve => setTimeout(resolve, 250));
     } else {
       break;
     }
