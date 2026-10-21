@@ -855,6 +855,41 @@ export default function OrderDetailsPage() {
                         <button
                           type="button"
                           onClick={async () => {
+                            const oId = String(order.orderId || order.id || orderId || '').replace(/^#/, '').trim();
+                            const pureId = oId.includes('_') ? oId.split('_')[0] : oId;
+                            const now = Date.now();
+
+                            // Mark order as received by customer and Delivered in RTDB immediately
+                            const deliveryUpdates: any = {
+                              customerReceived: true,
+                              customerConfirmedDelivery: true,
+                              status: 'Delivered',
+                              orderStatus: 'Delivered',
+                              vendorStatus: 'Delivered',
+                              deliveredAt: order.deliveredAt || now,
+                              receivedAt: now,
+                              updatedAt: now
+                            };
+
+                            if (isCodOrder) {
+                              deliveryUpdates.paymentStatus = 'Paid';
+                              deliveryUpdates.vendorPayoutStatus = 'None';
+                            }
+
+                            try {
+                              await Promise.allSettled([
+                                rtdbUpdate(`orders/${oId}`, deliveryUpdates),
+                                rtdbUpdate(`orders/${pureId}`, deliveryUpdates),
+                                rtdbUpdate(`vendor_orders/${oId}`, deliveryUpdates),
+                                rtdbUpdate(`vendor_orders/${pureId}`, deliveryUpdates)
+                              ]);
+                            } catch (_) {}
+
+                            setOrder((prev: any) => prev ? {
+                              ...prev,
+                              ...deliveryUpdates
+                            } : prev);
+
                             const unreviewedItem = items.find((it: any) => !reviewedProductMap[String(it.productId || it.id || '')]) || items[0];
                             if (unreviewedItem && !order.reviewCompleted && !order.reviewSubmitted) {
                               setReviewProduct({
@@ -1370,12 +1405,21 @@ export default function OrderDetailsPage() {
             const pureId = oId.replace(/^#/, '');
             const now = Date.now();
             const updates: any = {
+              status: 'Delivered',
+              orderStatus: 'Delivered',
+              vendorStatus: 'Delivered',
+              customerReceived: true,
+              customerConfirmedDelivery: true,
+              deliveredAt: order.deliveredAt || now,
+              receivedAt: now,
               reviewSubmitted: true,
               reviewCompleted: true,
               reviewedAt: now,
               reviewStatus: 'completed'
             };
             if (isCodOrder) {
+              updates.paymentStatus = 'Paid';
+              updates.vendorPayoutStatus = 'None';
               await markCodOrderDelivered(pureId, {
                 ...order,
                 ...updates,
@@ -1387,13 +1431,16 @@ export default function OrderDetailsPage() {
                 rtdbUpdate(`orders/${oId}`, updates).catch(() => null);
               }
               rtdbUpdate(`vendor_orders/${pureId}`, updates).catch(() => null);
+              if (pureId !== oId) {
+                rtdbUpdate(`vendor_orders/${oId}`, updates).catch(() => null);
+              }
             }
             setOrder((prev: any) => prev ? {
               ...prev,
               ...updates,
-              status: isCodOrder ? 'Delivered' : prev.status,
-              orderStatus: isCodOrder ? 'Delivered' : prev.orderStatus,
-              vendorStatus: isCodOrder ? 'Delivered' : prev.vendorStatus,
+              status: 'Delivered',
+              orderStatus: 'Delivered',
+              vendorStatus: 'Delivered',
               reviewedItems: {
                 ...(prev.reviewedItems || {}),
                 [pId]: { reviewId: revId, reviewedAt: now }

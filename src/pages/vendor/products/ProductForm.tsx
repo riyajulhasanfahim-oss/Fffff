@@ -7,7 +7,7 @@ import { rtdb } from '../../../lib/firebase';
 import VendorLayout from '../../../components/layout/VendorLayout';
 import { ArrowLeft, Save, UploadCloud, Copy, Loader2, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { StorageManager } from '../../../services/storage/StorageManager';
+import { StorageManager, uploadImageToHosting } from '../../../services/storage/StorageManager';
 import { notifyMarketplaceProductChange } from '../../../services/productService';
 import ProductVariantManager from '../../../components/vendor/ProductVariantManager';
 import { ProductColor, ProductSize, ProductVariant } from '../../../types/variant';
@@ -274,15 +274,22 @@ export default function ProductForm({ productId }: ProductFormProps) {
     setUploadingImages(prev => ({ ...prev, [field]: true }));
 
     try {
-      const storedRecord = await StorageManager.uploadProductImage(file, {
-        vendorId: user?.uid,
-        productId: isEditMode ? productId : undefined,
-      });
+      let hostedUrl = '';
+      try {
+        hostedUrl = await uploadImageToHosting(file);
+      } catch (hErr) {
+        console.warn('Direct image hosting attempt fallback in ProductForm:', hErr);
+        const storedRecord = await StorageManager.uploadProductImage(file, {
+          vendorId: user?.uid,
+          productId: isEditMode ? productId : undefined,
+        });
+        hostedUrl = storedRecord?.fileUrl || '';
+      }
 
-      if (storedRecord?.fileUrl) {
-        const safeUrl = formatDirectImageUrl(storedRecord.fileUrl);
+      if (hostedUrl) {
+        const safeUrl = formatDirectImageUrl(hostedUrl);
         setFormData(prev => ({ ...prev, [field]: safeUrl }));
-        toast.success('Image uploaded successfully');
+        toast.success('ছবি সফলভাবে হোস্টিং ও আপলোড হয়েছে! (Image uploaded successfully)');
       } else {
         throw new Error('Failed to retrieve uploaded image URL');
       }

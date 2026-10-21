@@ -244,7 +244,36 @@ export default function OrderTrackingCard({
                   </p>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
+                      const oId = String(orderId || '').replace(/^#/, '').trim();
+                      const pureId = oId.includes('_') ? oId.split('_')[0] : oId;
+                      const now = Date.now();
+
+                      // Mark delivered immediately
+                      const deliveryUpdates: any = {
+                        customerReceived: true,
+                        customerConfirmedDelivery: true,
+                        status: 'Delivered',
+                        orderStatus: 'Delivered',
+                        vendorStatus: 'Delivered',
+                        deliveredAt: order.deliveredAt || now,
+                        receivedAt: now,
+                        updatedAt: now
+                      };
+                      if (isCod) {
+                        deliveryUpdates.paymentStatus = 'Paid';
+                        deliveryUpdates.vendorPayoutStatus = 'None';
+                      }
+
+                      try {
+                        await Promise.allSettled([
+                          rtdbUpdate(`orders/${oId}`, deliveryUpdates),
+                          rtdbUpdate(`orders/${pureId}`, deliveryUpdates),
+                          rtdbUpdate(`vendor_orders/${oId}`, deliveryUpdates),
+                          rtdbUpdate(`vendor_orders/${pureId}`, deliveryUpdates)
+                        ]);
+                      } catch (_) {}
+
                       const orderItems = Array.isArray(order.items) ? order.items : [];
                       const reviewedItemsObj = order.reviewedItems || {};
                       const unreviewedItem = orderItems.find(
@@ -389,12 +418,21 @@ export default function OrderTrackingCard({
             const isCod = isCodOrder(order);
             const now = Date.now();
             const updates: any = {
+              status: 'Delivered',
+              orderStatus: 'Delivered',
+              vendorStatus: 'Delivered',
+              customerReceived: true,
+              customerConfirmedDelivery: true,
+              deliveredAt: order.deliveredAt || now,
+              receivedAt: now,
               reviewSubmitted: true,
               reviewCompleted: true,
               reviewedAt: now,
               reviewStatus: 'completed'
             };
             if (isCod) {
+              updates.paymentStatus = 'Paid';
+              updates.vendorPayoutStatus = 'None';
               await markCodOrderDelivered(pureId, {
                 ...order,
                 ...updates
@@ -405,6 +443,9 @@ export default function OrderTrackingCard({
                 rtdbUpdate(`orders/${oId}`, updates).catch(() => null);
               }
               rtdbUpdate(`vendor_orders/${pureId}`, updates).catch(() => null);
+              if (pureId !== oId) {
+                rtdbUpdate(`vendor_orders/${oId}`, updates).catch(() => null);
+              }
             }
             setReviewModalProduct(null);
             if (onRefresh) onRefresh();

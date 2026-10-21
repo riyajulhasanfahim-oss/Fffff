@@ -19,7 +19,7 @@ import {
   submitProductReview, 
   UnreviewedDeliveredItem 
 } from '../../services/reviewService';
-import { StorageManager } from '../../services/storage/StorageManager';
+import { StorageManager, uploadImageToHosting } from '../../services/storage/StorageManager';
 import toast from 'react-hot-toast';
 
 interface StoreReviewModalProps {
@@ -123,24 +123,23 @@ export default function StoreReviewModal({
         }
 
         try {
-          const storedRecord = await StorageManager.uploadProductImage(file);
-          if (storedRecord?.fileUrl) {
-            newUrls.push(storedRecord.fileUrl);
-          } else {
-            throw new Error('No URL returned');
+          const hostedUrl = await uploadImageToHosting(file);
+          if (hostedUrl) {
+            newUrls.push(hostedUrl);
           }
-        } catch {
-          // Fallback to base64 data URI
-          const base64: string = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.readAsDataURL(file);
-          });
-          newUrls.push(base64);
+        } catch (uploadErr) {
+          try {
+            const storedRecord = await StorageManager.uploadProductImage(file);
+            if (storedRecord?.fileUrl) {
+              newUrls.push(storedRecord.fileUrl);
+            }
+          } catch (smErr) {
+            console.error('Image upload failed:', smErr);
+          }
         }
       }
 
-      setImages(prev => [...prev, ...newUrls]);
+      setImages(prev => [...prev, ...newUrls].slice(0, 4));
     } catch (err) {
       console.error('Image upload failed:', err);
       toast.error('ছবি আপলোড করতে সমস্যা হয়েছে');

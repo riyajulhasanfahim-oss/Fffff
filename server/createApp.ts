@@ -1359,10 +1359,10 @@ app.use((req, res, next) => {
     }
   });
 
-  // Bulletproof Image Upload: saves to local public/uploads and proxies to imgdb.io
+  // Robust Multi-Provider Image Hosting API (ImgBB, FreeImage, ImgDB with Local Fallback)
   app.post('/api/upload-image', async (req, res) => {
     try {
-      const { image } = req.body; // base64 string
+      const { image, apiKey: reqApiKey, provider: reqProvider } = req.body; // base64 string or url
       if (!image) {
         return res.status(400).json({ error: 'Image data is required' });
       }
@@ -1389,14 +1389,95 @@ app.use((req, res, next) => {
       if (!fs.existsSync(uploadsDir)) {
         fs.mkdirSync(uploadsDir, { recursive: true });
       }
-      const uniqueFileName = `vendor_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${extension}`;
+      const uniqueFileName = `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${extension}`;
       const localFilePath = path.join(uploadsDir, uniqueFileName);
       await fs.promises.writeFile(localFilePath, buffer);
 
-      // Build relative URL
+      // Build local relative URL
       const localUrl = `/uploads/${uniqueFileName}`;
 
-      // 2. Try external imgdb.io with quick timeout
+      // 2. Fetch configured Image Hosting API Key from RTDB or env
+      let imageHostingConfig: any = null;
+      try {
+        const configRes = await fetch(`${CURRENT_RTDB_BASE}/settings/imageHosting.json`);
+        if (configRes.ok) {
+          imageHostingConfig = await configRes.json();
+        }
+      } catch (_) {}
+
+      const effectiveApiKey = (reqApiKey || imageHostingConfig?.apiKey || process.env.IMGBB_API_KEY || process.env.IMAGE_HOSTING_API_KEY || '').trim();
+      const preferredProvider = (reqProvider || imageHostingConfig?.provider || 'imgbb').toLowerCase();
+
+      // 3. Attempt ImgBB upload (primary if key provided or preferred)
+      if (effectiveApiKey || preferredProvider === 'imgbb') {
+        const keysToTry = [effectiveApiKey, '02860d5926c45ea0f3689f928e4e9ff7'].filter(Boolean);
+        for (const key of keysToTry) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+            const formParams = new URLSearchParams();
+            formParams.append('key', key);
+            formParams.append('image', base64Data);
+
+            const imgbbRes = await fetch('https://api.imgbb.com/1/upload', {
+              method: 'POST',
+              body: formParams,
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            const imgbbData = await imgbbRes.json().catch(() => null);
+            if (imgbbRes.ok && imgbbData?.success && (imgbbData.data?.url || imgbbData.data?.display_url)) {
+              const hostedUrl = imgbbData.data.url || imgbbData.data.display_url;
+              return res.json({
+                success: true,
+                url: hostedUrl,
+                displayUrl: hostedUrl,
+                provider: 'imgbb',
+                localUrl
+              });
+            }
+          } catch (imgbbErr) {
+            console.warn(`ImgBB upload attempt with key ${key.slice(0, 5)}... failed:`, imgbbErr);
+          }
+        }
+      }
+
+      // 4. Attempt FreeImage.host upload (free high-availability fallback)
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+        const freeImgParams = new URLSearchParams();
+        freeImgParams.append('key', '6d207e02198a847aa98d0a2a901485a5');
+        freeImgParams.append('action', 'upload');
+        freeImgParams.append('source', base64Data);
+        freeImgParams.append('format', 'json');
+
+        const freeRes = await fetch('https://freeimage.host/api/1/upload', {
+          method: 'POST',
+          body: freeImgParams,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        const freeData = await freeRes.json().catch(() => null);
+        if (freeRes.ok && freeData?.status_code === 200 && freeData?.image?.url) {
+          return res.json({
+            success: true,
+            url: freeData.image.url,
+            provider: 'freeimage',
+            localUrl
+          });
+        }
+      } catch (freeErr) {
+        console.warn('FreeImage upload fallback error:', freeErr);
+      }
+
+      // 5. Try imgdb.io
       try {
         const blob = new Blob([buffer], { type: mimeType });
         const formData = new FormData();
@@ -1413,20 +1494,67 @@ app.use((req, res, next) => {
         clearTimeout(timeoutId);
 
         const data = await response.json().catch(() => null);
-        if (response.ok && data && data.url) {
-          return res.json({ success: true, url: data.url, localUrl });
-        } else if (data && data.data && data.data.url) {
-          return res.json({ success: true, url: data.data.url, localUrl });
+        if (response.ok && data && (data.url || data.data?.url)) {
+          const u = data.url || data.data?.url;
+          return res.json({ success: true, url: u, provider: 'imgdb', localUrl });
         }
       } catch (extErr) {
         console.warn('External image upload notice (using guaranteed local upload):', extErr);
       }
 
       // Return guaranteed local upload URL
-      return res.json({ success: true, url: localUrl });
+      return res.json({ success: true, url: localUrl, provider: 'local' });
     } catch (error: any) {
       console.error('Image upload failed:', error);
       res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+  });
+
+  // Admin Image Hosting Settings Endpoints
+  app.get('/api/admin/image-hosting-settings', async (req, res) => {
+    try {
+      const configRes = await fetch(`${CURRENT_RTDB_BASE}/settings/imageHosting.json`);
+      let config = configRes.ok ? await configRes.json() : null;
+      if (!config) {
+        config = {
+          provider: 'imgbb',
+          apiKey: process.env.IMGBB_API_KEY || '',
+          enabled: true
+        };
+      }
+      res.json({
+        success: true,
+        provider: config.provider || 'imgbb',
+        hasApiKey: Boolean(config.apiKey || process.env.IMGBB_API_KEY),
+        maskedApiKey: config.apiKey ? `••••••••${config.apiKey.slice(-4)}` : '',
+        enabled: config.enabled ?? true
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/image-hosting-settings', async (req, res) => {
+    try {
+      const { provider, apiKey, enabled } = req.body || {};
+      const payload: any = {
+        provider: provider || 'imgbb',
+        enabled: enabled ?? true,
+        updatedAt: Date.now()
+      };
+      if (apiKey && typeof apiKey === 'string') {
+        payload.apiKey = apiKey.trim();
+      }
+
+      await fetch(`${CURRENT_RTDB_BASE}/settings/imageHosting.json`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      res.json({ success: true, message: 'Image hosting settings saved successfully' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 

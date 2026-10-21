@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { rtdbGet, rtdbSet, rtdbPush, rtdbUpdate } from '../../lib/rtdb';
 import { useAuth } from '../../context/AuthContext';
 import { Link } from 'react-router-dom';
-import { Settings, Save, AlertCircle, Shield, CreditCard, ShoppingCart, Users, Briefcase, Bell, HardDrive, DollarSign, Activity, FileText, Wallet, Store, ArrowRight, ExternalLink, Database, Eye, EyeOff, CheckCircle2, Globe, Key, Smartphone } from 'lucide-react';
+import { Settings, Save, AlertCircle, Shield, CreditCard, ShoppingCart, Users, Briefcase, Bell, HardDrive, DollarSign, Activity, FileText, Wallet, Store, ArrowRight, ExternalLink, Database, Eye, EyeOff, CheckCircle2, Globe, Key, Smartphone, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AdminDomainSettings from './AdminDomainSettings';
 import AdminFirebaseSettings from './AdminFirebaseSettings';
@@ -114,6 +114,15 @@ export default function AdminSettings() {
     refundRequest: true
   });
 
+  const [imageHostingSettings, setImageHostingSettings] = useState({
+    provider: 'imgbb',
+    apiKey: '',
+    enabled: true
+  });
+  const [showImageHostingKey, setShowImageHostingKey] = useState(false);
+  const [testingImageHosting, setTestingImageHosting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success?: boolean; message?: string } | null>(null);
+
   // Track original values to save history
   const [originalValues, setOriginalValues] = useState<any>({});
 
@@ -134,6 +143,7 @@ export default function AdminSettings() {
         { id: 'order', setter: setOrderSettings },
         { id: 'vendor', setter: setVendorSettings },
         { id: 'googleDrive', setter: setGoogleDriveSettings },
+        { id: 'imageHosting', setter: setImageHostingSettings },
         { id: 'security', setter: setSecuritySettings },
         { id: 'notification', setter: setNotificationSettings }
       ];
@@ -215,6 +225,23 @@ export default function AdminSettings() {
           });
         } catch (apiErr) {
           console.warn('Backend payment settings update warning:', apiErr);
+        }
+      }
+
+      // If updating image hosting, also sync with backend server
+      if (sectionId === 'imageHosting') {
+        try {
+          await fetch('/api/admin/image-hosting-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: currentData.provider || 'imgbb',
+              apiKey: currentData.apiKey || '',
+              enabled: currentData.enabled ?? true
+            })
+          });
+        } catch (apiErr) {
+          console.warn('Backend image hosting settings update warning:', apiErr);
         }
       }
 
@@ -306,7 +333,8 @@ export default function AdminSettings() {
     { id: 'payment', label: 'Payments', icon: CreditCard },
     { id: 'order', label: 'Orders', icon: ShoppingCart },
     { id: 'vendor', label: 'Vendors', icon: Store },
-    { id: 'googleDrive', label: 'Google Drive', icon: HardDrive },
+    { id: 'imageHosting', label: 'Image Hosting API', icon: HardDrive },
+    { id: 'googleDrive', label: 'Google Drive', icon: Database },
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'notification', label: 'Notifications', icon: Bell }
   ];
@@ -1024,6 +1052,157 @@ export default function AdminSettings() {
                   <div className="flex justify-end pt-4">
                     <button onClick={() => handleSave('vendor', vendorSettings, originalValues.vendor)} disabled={saving} className="btn-primary flex items-center gap-2 px-6 py-2 bg-primary-main text-white rounded-lg hover:bg-primary-dark transition-colors">
                       {saving ? 'Saving...' : <><Save className="w-4 h-4"/> Save Settings</>}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Image Hosting API Settings */}
+            {activeTab === 'imageHosting' && (
+              <div>
+                <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="w-5 h-5 text-slate-700" />
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900">Image Hosting API Settings</h2>
+                      <p className="text-xs text-slate-500">প্রোডাক্ট ও রিভিউ ইমেজ হোস্টিং API Key কনফিগারেশন</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-6 space-y-5">
+                  <div className="bg-amber-50 p-4 rounded-xl flex items-start gap-3 border border-amber-200">
+                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="text-xs sm:text-sm text-amber-900 leading-relaxed">
+                      <p className="font-bold">ক্লাউড ইমেজ হোস্টিং সার্ভিস (ImgBB / FreeImage API)</p>
+                      <p className="mt-1 text-amber-800 text-xs">
+                        কাস্টমারদের পণ্যের রিভিউ এবং ভেন্ডরদের প্রোডাক্ট ছবি স্থায়ীভাবে সরাসরি ইমেজ হোস্টিং API Key-র মাধ্যমে ক্লাউড স্টোরেজে আপলোড হবে। এতে করে ডেটাবেজ দ্রুত লোড হবে এবং ছবি সুরক্ষিত থাকবে।
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        Image Hosting Provider
+                      </label>
+                      <select
+                        value={imageHostingSettings.provider}
+                        onChange={e => setImageHostingSettings({ ...imageHostingSettings, provider: e.target.value })}
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-main/20 focus:border-primary-main text-sm"
+                      >
+                        <option value="imgbb">ImgBB (api.imgbb.com) - রিকমেন্ডেড</option>
+                        <option value="freeimage">FreeImage.host (freeimage.host)</option>
+                        <option value="imgdb">ImgDB.io</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        Hosting API Key
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showImageHostingKey ? 'text' : 'password'}
+                          value={imageHostingSettings.apiKey}
+                          onChange={e => setImageHostingSettings({ ...imageHostingSettings, apiKey: e.target.value })}
+                          placeholder="e.g. 02860d5926c45ea0f3689f928e4e9ff7"
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-main/20 focus:border-primary-main text-sm pr-10 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowImageHostingKey(!showImageHostingKey)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                        >
+                          {showImageHostingKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+                        <span>বিনামূল্যে API Key পেতে ভিজিট করুন:</span>
+                        <a
+                          href="https://api.imgbb.com/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary-main underline inline-flex items-center gap-0.5"
+                        >
+                          api.imgbb.com <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-3 p-4 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={imageHostingSettings.enabled}
+                      onChange={e => setImageHostingSettings({ ...imageHostingSettings, enabled: e.target.checked })}
+                      className="w-5 h-5 rounded text-primary-main focus:ring-primary-main"
+                    />
+                    <div>
+                      <p className="font-semibold text-sm text-slate-900">Enable Cloud Image Hosting via API</p>
+                      <p className="text-xs text-slate-500">প্রোডাক্ট ফর্ম এবং রিভিউতে ছবি আপলোডের সময় সরাসরি ক্লাউড হোস্টিং ব্যবহার করবে</p>
+                    </div>
+                  </label>
+
+                  {/* Test API Key Card */}
+                  <div className="p-4 border border-slate-200 rounded-xl bg-slate-50 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">টেস্ট ইমেজ হোস্টিং API</p>
+                      <p className="text-[11px] text-slate-500">কনফিগার করা API Key দিয়ে একটি পরীক্ষামূলক আপলোড চালিয়ে যাচাই করুন</p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={testingImageHosting}
+                      onClick={async () => {
+                        setTestingImageHosting(true);
+                        setTestResult(null);
+                        try {
+                          const testPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+                          const res = await fetch('/api/upload-image', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              image: testPixel,
+                              apiKey: imageHostingSettings.apiKey,
+                              provider: imageHostingSettings.provider
+                            })
+                          });
+                          const data = await res.json();
+                          if (data?.success && data?.url) {
+                            toast.success(`সফল! ছবি হোস্ট হয়েছে: ${data.provider}`);
+                            setTestResult({ success: true, message: `সফলভাবে আপলোড সম্পন্ন: ${data.provider} (${data.url.substring(0, 35)}...)` });
+                          } else {
+                            toast.error(`পরীক্ষা ব্যর্থ: ${data?.error || 'No URL returned'}`);
+                            setTestResult({ success: false, message: `ব্যর্থ: ${data?.error || 'Failed'}` });
+                          }
+                        } catch (e: any) {
+                          toast.error(`পরীক্ষা ত্রুটি: ${e.message}`);
+                          setTestResult({ success: false, message: e.message });
+                        } finally {
+                          setTestingImageHosting(false);
+                        }
+                      }}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer shrink-0 flex items-center gap-1.5"
+                    >
+                      {testingImageHosting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <HardDrive className="w-3.5 h-3.5" />}
+                      <span>{testingImageHosting ? 'পরীক্ষা হচ্ছে...' : 'Test API Key Now'}</span>
+                    </button>
+                  </div>
+
+                  {testResult && (
+                    <div className={`p-3 rounded-xl text-xs font-medium border ${testResult.success ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200'}`}>
+                      {testResult.message}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end pt-4 border-t border-slate-100">
+                    <button
+                      onClick={() => handleSave('imageHosting', imageHostingSettings, originalValues.imageHosting)}
+                      disabled={saving}
+                      className="btn-primary flex items-center gap-2 px-6 py-2.5 bg-primary-main text-white text-sm font-bold rounded-xl hover:bg-primary-dark transition-colors shadow-xs"
+                    >
+                      {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Image Hosting Settings</>}
                     </button>
                   </div>
                 </div>

@@ -25,7 +25,7 @@ import {
   ReviewEligibility,
   ProductReview
 } from '../../services/reviewService';
-import { StorageManager } from '../../services/storage/StorageManager';
+import { StorageManager, uploadImageToHosting } from '../../services/storage/StorageManager';
 import ImageLightboxModal from '../common/ImageLightboxModal';
 
 // Robust helper to extract vendor reply information
@@ -201,22 +201,25 @@ export default function ProductReviews({ productId }: { productId: string }) {
           continue;
         }
         try {
-          const storedRecord = await StorageManager.uploadProductImage(file);
-          if (storedRecord?.fileUrl) {
-            newUrls.push(storedRecord.fileUrl);
-          } else {
-            throw new Error('No URL');
+          const hostedUrl = await uploadImageToHosting(file);
+          if (hostedUrl) {
+            newUrls.push(hostedUrl);
           }
-        } catch {
-          const base64: string = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.readAsDataURL(file);
-          });
-          newUrls.push(base64);
+        } catch (uploadErr) {
+          try {
+            const storedRecord = await StorageManager.uploadProductImage(file);
+            if (storedRecord?.fileUrl) {
+              newUrls.push(storedRecord.fileUrl);
+            }
+          } catch (smErr) {
+            console.error('Image upload failed:', smErr);
+          }
         }
       }
-      setReviewImages((prev) => [...prev, ...newUrls]);
+      if (newUrls.length > 0) {
+        setReviewImages((prev) => [...prev, ...newUrls].slice(0, 4));
+        toast.success(`${newUrls.length}টি ছবি যুক্ত হয়েছে`);
+      }
     } catch {
       toast.error('ছবি আপলোড ব্যর্থ হয়েছে');
     } finally {

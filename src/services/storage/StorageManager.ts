@@ -618,3 +618,46 @@ class StorageManagerService {
 }
 
 export const StorageManager = new StorageManagerService();
+
+/**
+ * Direct image hosting uploader utility that connects to ImgBB / FreeImage API
+ * Returns the hosted public image URL directly
+ */
+export async function uploadImageToHosting(file: File): Promise<string> {
+  // 1. Optimize image first
+  let processedFile = file;
+  try {
+    const options = {
+      maxSizeMB: 0.8,
+      maxWidthOrHeight: 1600,
+      useWebWorker: true,
+      fileType: file.type === 'image/png' ? 'image/png' : 'image/jpeg'
+    };
+    const compressedBlob = await imageCompression(file, options);
+    processedFile = new File([compressedBlob], file.name, {
+      type: compressedBlob.type || file.type
+    });
+  } catch (optErr) {
+    console.warn('Image compression fallback:', optErr);
+  }
+
+  // 2. Read as base64
+  const base64Data: string = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(processedFile);
+  });
+
+  // 3. Post to /api/upload-image
+  const res = await fetch('/api/upload-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64Data })
+  });
+  const data = await res.json();
+  if (data?.success && data?.url) {
+    return data.url;
+  }
+  throw new Error(data?.error || 'Failed to upload image to hosting');
+}

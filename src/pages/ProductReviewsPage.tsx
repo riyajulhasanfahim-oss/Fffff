@@ -6,7 +6,7 @@ import { db } from '../lib/firebase';
 import { rtdbGet, rtdbList } from '../lib/rtdb';
 import { fetchProductById } from '../services/productService';
 import { useAuth } from '../context/AuthContext';
-import { StorageManager } from '../services/storage/StorageManager';
+import { StorageManager, uploadImageToHosting } from '../services/storage/StorageManager';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import ImageLightboxModal from '../components/common/ImageLightboxModal';
@@ -258,28 +258,31 @@ export default function ProductReviewsPage() {
         }
 
         try {
-          const storedRecord = await StorageManager.uploadProductImage(file, {
-            productId,
-            userId: user?.uid
-          });
-          if (storedRecord?.fileUrl) {
-            newUrls.push(storedRecord.fileUrl);
-          } else {
-            throw new Error('No URL returned');
+          // Primary: Upload via Image Hosting API (ImgBB / FreeImage API key)
+          const hostedUrl = await uploadImageToHosting(file);
+          if (hostedUrl) {
+            newUrls.push(hostedUrl);
           }
         } catch (uploadErr) {
-          console.warn('StorageManager upload fallback to local preview:', uploadErr);
-          const base64: string = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.readAsDataURL(file);
-          });
-          newUrls.push(base64);
+          console.warn('Image hosting API upload fallback:', uploadErr);
+          try {
+            const storedRecord = await StorageManager.uploadProductImage(file, {
+              productId,
+              userId: user?.uid
+            });
+            if (storedRecord?.fileUrl) {
+              newUrls.push(storedRecord.fileUrl);
+            }
+          } catch (smErr) {
+            console.error('All image upload attempts failed:', smErr);
+          }
         }
       }
 
-      setReviewImages(prev => [...prev, ...newUrls]);
-      toast.success(`${newUrls.length}টি ছবি যুক্ত হয়েছে`);
+      if (newUrls.length > 0) {
+        setReviewImages(prev => [...prev, ...newUrls].slice(0, 4));
+        toast.success(`${newUrls.length}টি ছবি সফলভাবে হোস্টিং হয়েছে`);
+      }
     } catch (err) {
       console.error('Failed to attach image:', err);
       toast.error('ছবি আপলোড করা যায়নি');

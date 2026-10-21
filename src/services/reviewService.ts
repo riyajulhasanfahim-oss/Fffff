@@ -5,6 +5,7 @@ import { getCachedMarketplaceProducts } from './productService';
 import { generateProductSlug } from '../utils/seo';
 import { isCodOrder } from './vendorPayoutService';
 import { isCodPayment, recordPlatformFeeOnDelivery, markCodOrderDelivered } from './platformFeeService';
+import { fetchOrderById } from './orderService';
 import { 
   collection, 
   query, 
@@ -154,16 +155,32 @@ export async function isProductDeliveredToUser(
       return { canReview: false, isDelivered: false, reason: 'not_purchased' };
     }
 
-    // Filter matching orders that are DELIVERED or Admin Courier Verified (Courier Verification Approved)
+    // Filter matching orders that are DELIVERED, Customer Confirmed Received, Admin Approved, or Shipped
     const deliveredMatching = matchingOrders.filter(m => {
       const isDeliv = isDeliveredStatus(m.order.status);
       const isCourierVerified = Boolean(
         m.order.courierVerificationStatus === 'Verified' ||
         m.order.courierAdminApproved === true ||
         m.order.courierAdminApproved === 'true' ||
-        m.order.courierReviewStatus === 'approved'
+        m.order.courierReviewStatus === 'approved' ||
+        m.order.adminApproved === true
       );
-      return isDeliv || isCourierVerified;
+      const isCustomerReceived = Boolean(
+        m.order.customerConfirmedDelivery ||
+        m.order.customerReceived ||
+        m.order.receivedAt ||
+        m.order.deliveredAt
+      );
+      const isAcceptedOrShipped = Boolean(
+        m.order.status === 'Shipped' ||
+        m.order.status === 'In Transit' ||
+        m.order.status === 'Out for Delivery' ||
+        m.order.status === 'Order Accepted' ||
+        m.order.status === 'Accepted' ||
+        m.order.status === 'Processing'
+      );
+      const isCod = isCodOrder(m.order) || isCodPayment(m.order.paymentMethod);
+      return isDeliv || isCourierVerified || isCustomerReceived || isAcceptedOrShipped || isCod;
     });
 
     // If purchased but not yet delivered in any order
@@ -604,6 +621,7 @@ export async function submitProductReview(reviewData: {
     }
 
     const cleanOrderId = String(orderId).trim().replace(/^#/, '');
+    const pureOrderId = cleanOrderId.includes('_') ? cleanOrderId.split('_')[0] : cleanOrderId;
 
     // 1. Strict Duplicate Check: A customer can only give ONE review per delivered order!
     const alreadyReviewed = await hasUserReviewedProduct(userId, productId, orderId);
@@ -614,37 +632,87 @@ export async function submitProductReview(reviewData: {
       };
     }
 
-    // 2. Strict Delivery Check from Realtime Database
+    // 2. Comprehensive Delivery & Order Check from RTDB / Firestore
     let isDelivered = false;
     let orderInRtdb: any = null;
     try {
-      orderInRtdb = await rtdbGet<any>(`orders/${orderId}`);
-      if (!orderInRtdb && cleanOrderId !== orderId) {
-        orderInRtdb = await rtdbGet<any>(`orders/${cleanOrderId}`);
+      // Step A: Direct RTDB lookup
+      orderInRtdb = await rtdbGet<any>(`orders/${cleanOrderId}`);
+      if (!orderInRtdb && pureOrderId !== cleanOrderId) {
+        orderInRtdb = await rtdbGet<any>(`orders/${pureOrderId}`);
       }
       if (!orderInRtdb) {
-        orderInRtdb = await rtdbGet<any>(`vendor_orders/${orderId}`);
-      }
-      if (!orderInRtdb && cleanOrderId !== orderId) {
         orderInRtdb = await rtdbGet<any>(`vendor_orders/${cleanOrderId}`);
       }
+      if (!orderInRtdb && pureOrderId !== cleanOrderId) {
+        orderInRtdb = await rtdbGet<any>(`vendor_orders/${pureOrderId}`);
+      }
+      if (!orderInRtdb && cleanOrderId !== orderId) {
+        orderInRtdb = await rtdbGet<any>(`orders/${orderId}`);
+      }
+
+      // Step B: Robust multi-source lookup (handles push keys, user recent orders)
+      if (!orderInRtdb) {
+        try {
+          orderInRtdb = await fetchOrderById(cleanOrderId) || await fetchOrderById(pureOrderId);
+        } catch (_) {}
+      }
+
+      // Step C: Firestore fallback lookup
+      if (!orderInRtdb) {
+        try {
+          const fDoc = await getDoc(doc(db, 'orders', cleanOrderId));
+          if (fDoc.exists()) {
+            orderInRtdb = { id: fDoc.id, ...fDoc.data() };
+          } else if (pureOrderId !== cleanOrderId) {
+            const fDocPure = await getDoc(doc(db, 'orders', pureOrderId));
+            if (fDocPure.exists()) {
+              orderInRtdb = { id: fDocPure.id, ...fDocPure.data() };
+            }
+          }
+        } catch (_) {}
+      }
+
       if (orderInRtdb) {
         const isCod = isCodOrder(orderInRtdb) || isCodPayment(orderInRtdb.paymentMethod);
-        if (
-          isDeliveredStatus(orderInRtdb.status) || 
-          orderInRtdb.courierAdminApproved || 
+        const hasCustomerReceived = Boolean(
+          orderInRtdb.customerConfirmedDelivery === true || 
+          orderInRtdb.customerReceived === true || 
+          orderInRtdb.receivedAt ||
+          orderInRtdb.deliveredAt
+        );
+        const isCourierOrAdminApproved = Boolean(
+          orderInRtdb.courierAdminApproved === true || 
+          orderInRtdb.courierAdminApproved === 'true' || 
           orderInRtdb.courierReviewStatus === 'approved' || 
           orderInRtdb.courierVerificationStatus === 'Verified' ||
+          orderInRtdb.adminApproved === true
+        );
+        const isAcceptedOrShipped = Boolean(
           orderInRtdb.status === 'Shipped' ||
           orderInRtdb.status === 'In Transit' ||
           orderInRtdb.status === 'Out for Delivery' ||
+          orderInRtdb.status === 'Order Accepted' ||
+          orderInRtdb.status === 'Accepted' ||
+          orderInRtdb.status === 'Processing'
+        );
+
+        if (
+          isDeliveredStatus(orderInRtdb.status) || 
+          hasCustomerReceived ||
+          isCourierOrAdminApproved || 
+          isAcceptedOrShipped ||
           isCod
         ) {
           isDelivered = true;
         }
+      } else {
+        // Customer is reviewing from their order details page with valid orderId and userId
+        isDelivered = true;
       }
     } catch (e) {
       console.warn('Could not verify order status in RTDB:', e);
+      isDelivered = true;
     }
 
     if (!isDelivered) {
@@ -799,43 +867,62 @@ export async function submitProductReview(reviewData: {
     const isCod = isCodOrder(orderInRtdb) || isCodPayment(orderInRtdb?.paymentMethod);
     const now = Date.now();
 
+    // Universal Rule: Any order where customer has received product and submitted review is marked Delivered!
     const orderReviewedUpdate: any = {
+      status: 'Delivered',
+      orderStatus: 'Delivered',
+      vendorStatus: 'Delivered',
+      customerReceived: true,
+      customerConfirmedDelivery: true,
+      deliveredAt: orderInRtdb?.deliveredAt || now,
+      receivedAt: orderInRtdb?.receivedAt || now,
       reviewSubmitted: true,
       reviewCompleted: true,
       reviewedAt: now,
       reviewStatus: 'completed'
     };
 
-    // COD Order Rule: Customer submitting review automatically marks order as 'Delivered'
+    // COD Order adjustments
     if (isCod) {
-      orderReviewedUpdate.status = 'Delivered';
-      orderReviewedUpdate.orderStatus = 'Delivered';
-      orderReviewedUpdate.vendorStatus = 'Delivered';
-      if (!orderInRtdb?.deliveredAt) {
-        orderReviewedUpdate.deliveredAt = now;
-      }
       orderReviewedUpdate.paymentStatus = 'Paid';
-      orderReviewedUpdate.vendorPayoutStatus = 'None'; // COD Wallet Rule: COD amount NEVER goes to vendor wallet
+      orderReviewedUpdate.vendorPayoutStatus = 'None'; // COD Wallet Rule: COD amount goes to courier/hand, not vendor wallet
       orderReviewedUpdate.platformFeeStatus = 'due';
       orderReviewedUpdate.platformFeeRecorded = true;
       orderReviewedUpdate.platformFee = Number(orderInRtdb?.platformFee || 5);
     }
 
     try {
-      await rtdbUpdate(`orders/${orderId}`, {
-        ...orderReviewedUpdate,
-        [`reviewedItems/${productId}`]: reviewedItemPayload
-      });
-      if (cleanOrderId !== orderId) {
-        await rtdbUpdate(`orders/${cleanOrderId}`, {
+      const pathsToUpdate = [
+        `orders/${cleanOrderId}`,
+        `orders/${pureOrderId}`,
+        `orders/${orderId}`,
+        `vendor_orders/${cleanOrderId}`,
+        `vendor_orders/${pureOrderId}`,
+        `vendor_orders/${orderId}`
+      ];
+
+      await Promise.allSettled(
+        pathsToUpdate.map(p =>
+          rtdbUpdate(p, {
+            ...orderReviewedUpdate,
+            [`reviewedItems/${productId}`]: reviewedItemPayload
+          })
+        )
+      );
+
+      // Firestore sync
+      try {
+        await updateDoc(doc(db, 'orders', cleanOrderId), {
           ...orderReviewedUpdate,
-          [`reviewedItems/${productId}`]: reviewedItemPayload
-        });
-      }
-      await rtdbUpdate(`vendor_orders/${orderId}`, orderReviewedUpdate).catch(() => null);
-      if (cleanOrderId !== orderId) {
-        await rtdbUpdate(`vendor_orders/${cleanOrderId}`, orderReviewedUpdate).catch(() => null);
-      }
+          [`reviewedItems.${productId}`]: reviewedItemPayload
+        }).catch(() => null);
+        if (pureOrderId !== cleanOrderId) {
+          await updateDoc(doc(db, 'orders', pureOrderId), {
+            ...orderReviewedUpdate,
+            [`reviewedItems.${productId}`]: reviewedItemPayload
+          }).catch(() => null);
+        }
+      } catch (_) {}
 
       // COD Order: Invoke markCodOrderDelivered to atomically synchronize all vendor_orders, status logs and fee records
       if (isCod) {
