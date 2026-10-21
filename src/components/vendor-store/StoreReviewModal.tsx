@@ -10,7 +10,9 @@ import {
   Loader2, 
   Camera, 
   Trash2, 
-  ExternalLink 
+  ExternalLink,
+  Link2,
+  Plus
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -20,6 +22,7 @@ import {
   UnreviewedDeliveredItem 
 } from '../../services/reviewService';
 import { StorageManager, uploadImageToHosting } from '../../services/storage/StorageManager';
+import { formatDirectImageUrl } from '../../utils/imageUrl';
 import toast from 'react-hot-toast';
 
 interface StoreReviewModalProps {
@@ -54,8 +57,33 @@ export default function StoreReviewModal({
   const [hoverRating, setHoverRating] = useState(0);
   const [comment, setComment] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  const [directImageUrl, setDirectImageUrl] = useState<string>('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const handleAddDirectUrl = () => {
+    const url = directImageUrl.trim();
+    if (!url) {
+      toast.error('অনুগ্রহ করে ছবির ডাইরেক্ট লিংক পেস্ট করুন');
+      return;
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:image/')) {
+      toast.error('সঠিক ছবির লিংক দিন (https://...)');
+      return;
+    }
+    if (images.length >= 4) {
+      toast.error('সর্বোচ্চ ৪টি ছবি যুক্ত করতে পারবেন');
+      return;
+    }
+    const formatted = formatDirectImageUrl(url) || url;
+    if (images.includes(formatted)) {
+      toast.error('এই ছবিটি আগেই যোগ করা হয়েছে');
+      return;
+    }
+    setImages(prev => [...prev, formatted].slice(0, 4));
+    setDirectImageUrl('');
+    toast.success('ছবির লিংক রিভিউতে যুক্ত হয়েছে!');
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -499,20 +527,59 @@ export default function StoreReviewModal({
               </div>
 
               {/* Photo Upload (Optional) */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                     <Camera className="w-3.5 h-3.5 text-slate-500" />
                     <span>পণ্যের ছবি যুক্ত করুন (ঐচ্ছিক)</span>
                   </span>
-                  <span className="text-[10px] text-slate-400">সর্বোচ্চ ৪টি</span>
-                </label>
+                  <span className="text-[10px] text-slate-500 font-medium">{images.length}/৪টি ছবি</span>
+                </div>
+
+                {/* Direct image link input field (খালি ঘর) */}
+                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="url"
+                      value={directImageUrl}
+                      onChange={(e) => setDirectImageUrl(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddDirectUrl();
+                        }
+                      }}
+                      placeholder="ছবির ডাইরেক্ট লিংক পেস্ট করুন (যেমন: ImgBB, PostImage লিংক)..."
+                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-sky-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddDirectUrl}
+                      disabled={!directImageUrl.trim() || images.length >= 4}
+                      className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:bg-slate-200 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>যুক্ত</span>
+                    </button>
+                  </div>
+                  {directImageUrl.trim() && (
+                    <div className="flex items-center gap-2 p-1.5 bg-white rounded-lg border border-slate-200">
+                      <img
+                        src={formatDirectImageUrl(directImageUrl.trim()) || directImageUrl.trim()}
+                        referrerPolicy="no-referrer"
+                        alt="Preview"
+                        className="w-8 h-8 rounded object-cover"
+                      />
+                      <span className="text-[10px] text-emerald-600 font-medium">ছবির প্রিভিউ</span>
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   {images.map((imgUrl, idx) => (
                     <div key={idx} className="relative w-14 h-14 rounded-xl overflow-hidden border border-slate-200 group bg-slate-50">
                       <img 
-                        src={imgUrl} 
+                        src={formatDirectImageUrl(imgUrl) || imgUrl} 
                         alt={`Review preview ${idx + 1}`} 
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
@@ -537,7 +604,7 @@ export default function StoreReviewModal({
                       ) : (
                         <>
                           <Camera className="w-4 h-4 mb-0.5" />
-                          <span className="text-[9px] font-bold">+ছবি</span>
+                          <span className="text-[9px] font-bold">+ফাইল</span>
                         </>
                       )}
                       <input

@@ -9,7 +9,9 @@ import {
   CheckCircle2, 
   AlertCircle,
   PackageCheck,
-  Camera
+  Camera,
+  Link2,
+  Plus
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { submitProductReview } from '../../services/reviewService';
@@ -54,8 +56,35 @@ export default function ReviewModal({
   const [hoverRating, setHoverRating] = useState<number>(0);
   const [reviewText, setReviewText] = useState<string>('');
   const [images, setImages] = useState<string[]>([]);
+  const [directImageUrl, setDirectImageUrl] = useState<string>('');
+  const [previewError, setPreviewError] = useState<boolean>(false);
   const [uploadingImage, setUploadingImage] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
+
+  const handleAddDirectUrl = () => {
+    const url = directImageUrl.trim();
+    if (!url) {
+      toast.error('অনুগ্রহ করে ছবির ডাইরেক্ট লিংক পেস্ট করুন');
+      return;
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:image/')) {
+      toast.error('সঠিক ছবির লিংক দিন (https:// দিয়ে শুরু হতে হবে)');
+      return;
+    }
+    if (images.length >= 4) {
+      toast.error('সর্বোচ্চ ৪টি ছবি যুক্ত করতে পারবেন');
+      return;
+    }
+    const formatted = formatDirectImageUrl(url) || url;
+    if (images.includes(formatted)) {
+      toast.error('এই ছবির লিংকটি আগেই যোগ করা হয়েছে');
+      return;
+    }
+    setImages(prev => [...prev, formatted].slice(0, 4));
+    setDirectImageUrl('');
+    setPreviewError(false);
+    toast.success('ছবির লিংক সফলভাবে রিভিউতে যুক্ত হয়েছে!', { icon: '📸' });
+  };
 
   if (!isOpen) return null;
 
@@ -294,19 +323,111 @@ export default function ReviewModal({
             />
           </div>
 
-          {/* Photo Attachments with Image Hosting */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
+          {/* Photo Attachments with Direct Image Link (খালি ঘর) & Cloud Hosting */}
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center justify-between">
               <label className="block text-xs font-bold text-slate-800">
-                প্রোডাক্টের ছবি যুক্ত করুন (Add Photos - Optional)
+                প্রোডাক্টের ছবি যুক্ত করুন (Add Photos)
               </label>
-              <span className="text-[10px] text-emerald-600 font-medium">
-                Cloud Hosted
+              <span className="text-[11px] font-semibold text-slate-500">
+                {images.length}/৪ টি ছবি
               </span>
             </div>
 
+            {/* Direct Image Link Input Box (খালি ঘর যেখানে যেকোনো সাইট থেকে লিংক পেস্ট করা যাবে) */}
+            <div className="p-3 bg-slate-50/90 rounded-2xl border border-slate-200 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Link2 className="w-3.5 h-3.5 text-amber-600" />
+                  ইমেজ ডাইরেক্ট লিংক (Direct Image URL)
+                </span>
+                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold border border-emerald-200">
+                  সরাসরি লিংক
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="url"
+                    value={directImageUrl}
+                    onChange={(e) => {
+                      setDirectImageUrl(e.target.value);
+                      setPreviewError(false);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddDirectUrl();
+                      }
+                    }}
+                    placeholder="ছবির ডাইরেক্ট লিংক বসান (যেমন: ImgBB, PostImage, Drive লিংক)..."
+                    className="w-full pl-3 pr-8 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all"
+                  />
+                  {directImageUrl && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDirectImageUrl('');
+                        setPreviewError(false);
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleAddDirectUrl}
+                  disabled={!directImageUrl.trim() || images.length >= 4}
+                  className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold text-xs rounded-xl transition-all shadow-xs shrink-0 cursor-pointer flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>যুক্ত করুন</span>
+                </button>
+              </div>
+
+              {/* Instant Live Preview of typed/pasted link */}
+              {directImageUrl.trim() && (
+                <div className="flex items-center gap-2.5 p-2 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0 relative">
+                    <img
+                      src={formatDirectImageUrl(directImageUrl.trim()) || directImageUrl.trim()}
+                      referrerPolicy="no-referrer"
+                      alt="Direct preview"
+                      onError={() => setPreviewError(true)}
+                      onLoad={() => setPreviewError(false)}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    {previewError ? (
+                      <span className="text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" /> লিংকটি লোড হচ্ছে না, সঠিক ডাইরেক্ট ছবির লিংক দিন
+                      </span>
+                    ) : (
+                      <div className="flex flex-col">
+                        <span className="text-[11px] text-emerald-700 font-bold flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> ছবির প্রিভিউ প্রস্তুত!
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          রিভিউতে যুক্ত করতে 'যুক্ত করুন' বাটনে চাপুন
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                💡 যে কোনো হোস্টিং সাইটে (ImgBB, PostImages, Imgur ইত্যাদি) ছবি আপলোড করে ডাইরেক্ট ইমেজ লিংক এনে এখানে পেস্ট করতে পারেন।
+              </p>
+            </div>
+
+            {/* Uploaded / Added Images Thumbnails Gallery */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
-              {/* Image Previews */}
               {images.map((img, idx) => (
                 <div
                   key={idx}
@@ -315,7 +436,7 @@ export default function ReviewModal({
                   <img
                     src={formatDirectImageUrl(img) || img}
                     referrerPolicy="no-referrer"
-                    alt={`Preview ${idx + 1}`}
+                    alt={`Review attachment ${idx + 1}`}
                     className="w-full h-full object-cover"
                   />
                   {/* Prominent Remove Button for Mobile & Desktop */}
@@ -330,15 +451,15 @@ export default function ReviewModal({
                 </div>
               ))}
 
-              {/* Upload Button */}
+              {/* Upload Button from Device */}
               {images.length < 4 && (
-                <label className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl border-2 border-dashed border-slate-300 hover:border-amber-500 hover:bg-amber-50/50 flex flex-col items-center justify-center text-slate-400 hover:text-amber-600 transition-all cursor-pointer shrink-0">
+                <label className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl border-2 border-dashed border-slate-300 hover:border-amber-500 hover:bg-amber-50/50 flex flex-col items-center justify-center text-slate-500 hover:text-amber-600 transition-all cursor-pointer shrink-0">
                   {uploadingImage ? (
-                    <Loader2 className="w-6 h-6 animate-spin text-amber-500" />
+                    <Loader2 className="w-5 h-5 animate-spin text-amber-500" />
                   ) : (
                     <>
                       <Camera className="w-5 h-5 mb-0.5" />
-                      <span className="text-[9px] font-bold">+Photo</span>
+                      <span className="text-[9px] font-bold">ফাইল আপলোড</span>
                     </>
                   )}
                   <input
@@ -352,8 +473,8 @@ export default function ReviewModal({
                 </label>
               )}
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">
-              সর্বোচ্চ ৪টি ছবি যুক্ত করতে পারেন (Images hosted directly via API)
+            <p className="text-[10px] text-slate-400">
+              সর্বোচ্চ ৪টি ছবি যুক্ত করতে পারেন (ডাইরেক্ট লিংক বা ফাইল আপলোড উভয়ই সমর্থিত)
             </p>
           </div>
 

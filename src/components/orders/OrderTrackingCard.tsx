@@ -244,12 +244,34 @@ export default function OrderTrackingCard({
                   </p>
                   <button
                     type="button"
-                    onClick={async () => {
+                    onClick={() => {
                       const oId = String(orderId || '').replace(/^#/, '').trim();
                       const pureId = oId.includes('_') ? oId.split('_')[0] : oId;
                       const now = Date.now();
 
-                      // Mark delivered immediately
+                      // 1. INSTANT POPUP: Open review modal immediately without ANY network latency (0ms response)
+                      const orderItems = Array.isArray(order.items) ? order.items : [];
+                      const reviewedItemsObj = order.reviewedItems || {};
+                      const unreviewedItem = orderItems.find(
+                        (it: any) => !reviewedItemsObj[String(it.productId || it.id || '')]
+                      ) || orderItems[0];
+
+                      if (unreviewedItem) {
+                        setReviewModalProduct({
+                          productId: String(unreviewedItem.productId || unreviewedItem.id || ''),
+                          productName: unreviewedItem.name || unreviewedItem.title || 'Product',
+                          productImage: unreviewedItem.image || unreviewedItem.thumbnail || ''
+                        });
+                      } else {
+                        // If no specific item in items array, construct from order details
+                        setReviewModalProduct({
+                          productId: String(order.productId || orderId || 'product-1'),
+                          productName: order.productName || order.title || 'Product',
+                          productImage: order.productImage || order.thumbnail || ''
+                        });
+                      }
+
+                      // 2. Mark delivered updates
                       const deliveryUpdates: any = {
                         customerReceived: true,
                         customerConfirmedDelivery: true,
@@ -265,35 +287,18 @@ export default function OrderTrackingCard({
                         deliveryUpdates.vendorPayoutStatus = 'None';
                       }
 
-                      try {
-                        await Promise.allSettled([
-                          rtdbUpdate(`orders/${oId}`, deliveryUpdates),
-                          rtdbUpdate(`orders/${pureId}`, deliveryUpdates),
-                          rtdbUpdate(`vendor_orders/${oId}`, deliveryUpdates),
-                          rtdbUpdate(`vendor_orders/${pureId}`, deliveryUpdates)
-                        ]);
-                      } catch (_) {}
-
-                      const orderItems = Array.isArray(order.items) ? order.items : [];
-                      const reviewedItemsObj = order.reviewedItems || {};
-                      const unreviewedItem = orderItems.find(
-                        (it: any) => !reviewedItemsObj[String(it.productId || it.id || '')]
-                      ) || orderItems[0];
-                      if (unreviewedItem) {
-                        setReviewModalProduct({
-                          productId: String(unreviewedItem.productId || unreviewedItem.id || ''),
-                          productName: unreviewedItem.name || unreviewedItem.title || 'Product',
-                          productImage: unreviewedItem.image || unreviewedItem.thumbnail || ''
-                        });
-                      } else {
+                      // 3. Sync to RTDB in background non-blockingly
+                      Promise.allSettled([
+                        rtdbUpdate(`orders/${oId}`, deliveryUpdates),
+                        rtdbUpdate(`orders/${pureId}`, deliveryUpdates),
+                        rtdbUpdate(`vendor_orders/${oId}`, deliveryUpdates),
+                        rtdbUpdate(`vendor_orders/${pureId}`, deliveryUpdates)
+                      ]).then(() => {
                         if (isCod && !isEffectivelyDelivered) {
                           markCodOrderDelivered(orderId, order, order.vendorId);
-                          toast.success('COD অর্ডার ডেলিভার্ড করা হয়েছে!');
-                          if (onRefresh) onRefresh();
-                        } else {
-                          toast('আপনার এই অর্ডারের সব পণ্যের রিভিউ সম্পন্ন হয়েছে।', { icon: '✅' });
                         }
-                      }
+                        if (onRefresh) onRefresh();
+                      }).catch(() => null);
                     }}
                     className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold rounded-xl transition-all shadow-xs shrink-0 cursor-pointer"
                   >

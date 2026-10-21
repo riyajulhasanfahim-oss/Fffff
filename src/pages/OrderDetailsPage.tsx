@@ -854,12 +854,28 @@ export default function OrderDetailsPage() {
                         </p>
                         <button
                           type="button"
-                          onClick={async () => {
+                          onClick={() => {
                             const oId = String(order.orderId || order.id || orderId || '').replace(/^#/, '').trim();
                             const pureId = oId.includes('_') ? oId.split('_')[0] : oId;
                             const now = Date.now();
 
-                            // Mark order as received by customer and Delivered in RTDB immediately
+                            // 1. Instantly open review modal without waiting for network calls (0ms instant popup)
+                            const unreviewedItem = items.find((it: any) => !reviewedProductMap[String(it.productId || it.id || '')]) || items[0];
+                            if (unreviewedItem) {
+                              setReviewProduct({
+                                productId: String(unreviewedItem.productId || unreviewedItem.id || ''),
+                                productName: unreviewedItem.name || unreviewedItem.title || 'Product',
+                                productImage: unreviewedItem.image || unreviewedItem.thumbnail || ''
+                              });
+                            } else {
+                              setReviewProduct({
+                                productId: String(order.productId || order.id || orderId || 'product-1'),
+                                productName: order.productName || order.title || 'Product',
+                                productImage: order.productImage || order.thumbnail || ''
+                              });
+                            }
+
+                            // 2. Mark order as received by customer and Delivered in local state immediately
                             const deliveryUpdates: any = {
                               customerReceived: true,
                               customerConfirmedDelivery: true,
@@ -876,36 +892,18 @@ export default function OrderDetailsPage() {
                               deliveryUpdates.vendorPayoutStatus = 'None';
                             }
 
-                            try {
-                              await Promise.allSettled([
-                                rtdbUpdate(`orders/${oId}`, deliveryUpdates),
-                                rtdbUpdate(`orders/${pureId}`, deliveryUpdates),
-                                rtdbUpdate(`vendor_orders/${oId}`, deliveryUpdates),
-                                rtdbUpdate(`vendor_orders/${pureId}`, deliveryUpdates)
-                              ]);
-                            } catch (_) {}
-
                             setOrder((prev: any) => prev ? {
                               ...prev,
                               ...deliveryUpdates
                             } : prev);
 
-                            const unreviewedItem = items.find((it: any) => !reviewedProductMap[String(it.productId || it.id || '')]) || items[0];
-                            if (unreviewedItem && !order.reviewCompleted && !order.reviewSubmitted) {
-                              setReviewProduct({
-                                productId: String(unreviewedItem.productId || unreviewedItem.id || ''),
-                                productName: unreviewedItem.name || unreviewedItem.title || 'Product',
-                                productImage: unreviewedItem.image || unreviewedItem.thumbnail || ''
-                              });
-                            } else {
-                              if (isCodOrder && !isDeliveredStatus(order.status)) {
-                                await markCodOrderDelivered(order.orderId || order.id || orderId, order, order.vendorId);
-                                toast.success('COD অর্ডার সফলভাবে Delivered করা হয়েছে!');
-                                fetchOrder(true);
-                              } else {
-                                toast.success('এই অর্ডারের সব পণ্যের রিভিউ সম্পন্ন হয়েছে!');
-                              }
-                            }
+                            // 3. Sync to RTDB in background non-blockingly
+                            Promise.allSettled([
+                              rtdbUpdate(`orders/${oId}`, deliveryUpdates),
+                              rtdbUpdate(`orders/${pureId}`, deliveryUpdates),
+                              rtdbUpdate(`vendor_orders/${oId}`, deliveryUpdates),
+                              rtdbUpdate(`vendor_orders/${pureId}`, deliveryUpdates)
+                            ]).catch(() => null);
                           }}
                           className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all cursor-pointer shrink-0"
                         >

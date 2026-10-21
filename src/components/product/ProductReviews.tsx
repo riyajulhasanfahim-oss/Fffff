@@ -27,6 +27,7 @@ import {
 } from '../../services/reviewService';
 import { StorageManager, uploadImageToHosting } from '../../services/storage/StorageManager';
 import ImageLightboxModal from '../common/ImageLightboxModal';
+import { formatDirectImageUrl } from '../../utils/imageUrl';
 
 // Robust helper to extract vendor reply information
 function getVendorReplyInfo(review: any): { text: string; vendorName: string; repliedAt?: number } | null {
@@ -441,7 +442,7 @@ export default function ProductReviews({ productId }: { productId: string }) {
                   className="relative w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shadow-2xs"
                 >
                   <img
-                    src={img}
+                    src={formatDirectImageUrl(img) || img}
                     referrerPolicy="no-referrer"
                     alt={`Attachment ${i}`}
                     className="w-full h-full object-cover"
@@ -612,7 +613,7 @@ export default function ProductReviews({ productId }: { productId: string }) {
                             className="relative w-13 h-13 sm:w-14 sm:h-14 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0 cursor-pointer shadow-2xs hover:opacity-90"
                           >
                             <img
-                              src={mediaUrl}
+                              src={formatDirectImageUrl(mediaUrl) || mediaUrl}
                               referrerPolicy="no-referrer"
                               alt="Review attachment"
                               className="w-full h-full object-cover"
@@ -784,7 +785,7 @@ export default function ProductReviews({ productId }: { productId: string }) {
                           className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 hover:ring-2 hover:ring-primary-main transition-all cursor-pointer group"
                         >
                           <img
-                            src={imgUrl}
+                            src={formatDirectImageUrl(imgUrl) || imgUrl}
                             referrerPolicy="no-referrer"
                             alt="Review item"
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform"

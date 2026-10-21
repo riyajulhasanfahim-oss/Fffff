@@ -19,6 +19,7 @@ import {
   subscribeToProductReviews,
   ReviewEligibility 
 } from '../services/reviewService';
+import { formatDirectImageUrl } from '../utils/imageUrl';
 
 function getVendorReplyInfo(review: any): { text: string; vendorName: string; repliedAt?: number } | null {
   if (!review) return null;
@@ -627,7 +628,7 @@ export default function ProductReviewsPage() {
                             title="ছবিটি বড় করে দেখতে ক্লিক করুন"
                           >
                             <img
-                              src={img}
+                              src={formatDirectImageUrl(img) || img}
                               referrerPolicy="no-referrer"
                               alt="Review photo"
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
