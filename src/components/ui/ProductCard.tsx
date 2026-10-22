@@ -6,7 +6,7 @@ import { useCart } from '../../contexts/CartContext';
 import { useWishlist } from '../../contexts/WishlistContext';
 import { useAuth } from '../../context/AuthContext';
 import { getProductPath } from '../../utils/seo';
-import { getCachedProductMetrics, fetchProductMetricsFromRTDB } from '../../services/productMetricsService';
+import { getCachedProductMetrics, fetchProductMetricsFromRTDB, subscribeToProductMetrics, isMetricsLoaded } from '../../services/productMetricsService';
 import { formatDirectImageUrl, handleProductImageError, PLACEHOLDER_PRODUCT_IMAGE } from '../../utils/imageUrl';
 import { useLanguage } from '../common/LanguageProvider';
 import toast from 'react-hot-toast';
@@ -25,6 +25,7 @@ export interface Product {
   soldCount?: number;
   salesCount?: number;
   totalSold?: number;
+  originalProductId?: string;
   isNew?: boolean;
   discount?: number;
   vendorId?: string;
@@ -157,22 +158,45 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
   const regularPrice = product.originalPrice && product.originalPrice > shopPrice ? Number(product.originalPrice) : undefined;
   const discountPercent = product.discount || (regularPrice ? Math.round(((regularPrice - shopPrice) / regularPrice) * 100) : undefined);
 
-  // Real sales & review metrics from RTDB
-  const cachedMetrics = product.id ? getCachedProductMetrics(product.id) : null;
+  // Real sales & review metrics from Cloud Firestore
+  const cachedMetrics = product.id 
+    ? (getCachedProductMetrics(product.id) || (product.originalProductId ? getCachedProductMetrics(product.originalProductId) : null))
+    : null;
   const [metrics, setMetrics] = useState<{ soldCount: number; rating: number; reviewsCount: number } | null>(cachedMetrics);
 
   useEffect(() => {
-    if (product.id && !metrics) {
+    if (!product.id) return;
+
+    // 1. Subscribe to real-time metrics updates
+    const unsubscribe = subscribeToProductMetrics((metricsMap) => {
+      const m = metricsMap.get(product.id) || (product.originalProductId ? metricsMap.get(product.originalProductId) : null);
+      if (m) {
+        setMetrics(m);
+      }
+    });
+
+    // 2. Fetch if not already available in cache
+    if (!metrics) {
       let isMounted = true;
       fetchProductMetricsFromRTDB(product.id).then(m => {
-        if (isMounted) setMetrics(m);
+        if (isMounted && m) setMetrics(m);
       });
-      return () => { isMounted = false; };
+      return () => {
+        isMounted = false;
+        unsubscribe();
+      };
     }
-  }, [product.id, metrics]);
 
-  const soldCount = metrics?.soldCount 
-    ?? Number(product.soldCount ?? product.salesCount ?? product.totalSold ?? 0);
+    return () => {
+      unsubscribe();
+    };
+  }, [product.id, product.originalProductId]);
+
+  const productDirectSold = Number(
+    product.soldCount ?? product.salesCount ?? product.totalSold ?? (product as any).soldQuantity ?? (product as any).sales ?? 0
+  );
+
+  const soldCount = metrics?.soldCount ?? productDirectSold;
 
   const reviewsCount = metrics?.reviewsCount 
     ?? Number(product.reviewsCount ?? product.reviews ?? 0);
@@ -302,9 +326,13 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
           </div>
           
           <span className="text-[10px] text-slate-400 font-medium truncate">
-            {soldCount > 0 
-              ? `${soldCount} ${language === 'bn' ? 'বিক্রি' : 'sold'}` 
-              : `0 ${language === 'bn' ? 'বিক্রি' : 'sold'}`}
+            {!metrics && !isMetricsLoaded() && productDirectSold === 0 ? (
+              <span className="opacity-0 select-none">0 {language === 'bn' ? 'বিক্রি' : 'sold'}</span>
+            ) : (
+              soldCount > 0 
+                ? `${soldCount} ${language === 'bn' ? 'বিক্রি' : 'sold'}` 
+                : `0 ${language === 'bn' ? 'বিক্রি' : 'sold'}`
+            )}
           </span>
         </div>
 

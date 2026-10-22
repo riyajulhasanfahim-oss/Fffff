@@ -1,6 +1,6 @@
 import { rtdbList, rtdbSubscribe, rtdbGet } from '../lib/rtdb';
 import { Product } from '../components/ui/ProductCard';
-import { enrichProductsWithRealMetrics } from './productMetricsService';
+import { enrichProductsWithRealMetrics, getCachedProductMetrics } from './productMetricsService';
 import { isStoreDeletedFromCache } from './storeCache';
 import { formatDirectImageUrl } from '../utils/imageUrl';
 import { generateProductSlug } from '../utils/seo';
@@ -68,9 +68,21 @@ export function normalizeProduct(raw: any, id?: string): Product {
     rating: Number(raw.rating) || 0,
     reviews: Number(raw.reviewsCount || raw.reviews || 0),
     reviewsCount: Number(raw.reviewsCount || raw.reviews || 0),
-    soldCount: Number(raw.soldCount || raw.salesCount || raw.totalSold || 0),
-    salesCount: Number(raw.soldCount || raw.salesCount || raw.totalSold || 0),
-    totalSold: Number(raw.soldCount || raw.salesCount || raw.totalSold || 0),
+    soldCount: (() => {
+      const rawSold = Number(raw.soldCount || raw.salesCount || raw.totalSold || raw.soldQuantity || raw.sales || 0);
+      const cachedM = getCachedProductMetrics(prodId) || (raw.originalProductId ? getCachedProductMetrics(raw.originalProductId) : null);
+      return cachedM && cachedM.soldCount > 0 ? Math.max(rawSold, cachedM.soldCount) : rawSold;
+    })(),
+    salesCount: (() => {
+      const rawSold = Number(raw.soldCount || raw.salesCount || raw.totalSold || raw.soldQuantity || raw.sales || 0);
+      const cachedM = getCachedProductMetrics(prodId) || (raw.originalProductId ? getCachedProductMetrics(raw.originalProductId) : null);
+      return cachedM && cachedM.soldCount > 0 ? Math.max(rawSold, cachedM.soldCount) : rawSold;
+    })(),
+    totalSold: (() => {
+      const rawSold = Number(raw.soldCount || raw.salesCount || raw.totalSold || raw.soldQuantity || raw.sales || 0);
+      const cachedM = getCachedProductMetrics(prodId) || (raw.originalProductId ? getCachedProductMetrics(raw.originalProductId) : null);
+      return cachedM && cachedM.soldCount > 0 ? Math.max(rawSold, cachedM.soldCount) : rawSold;
+    })(),
     isNew: !!raw.isNew,
     vendorId: vendorId,
     vendor: {
@@ -315,8 +327,20 @@ function ensureGlobalRTDBListener(): void {
       }
     });
 
-    // Background metric enrichment
-    enrichProductsWithRealMetrics(parsed).catch(() => {});
+    // Metric enrichment: persist real sold counts and update subscribers
+    enrichProductsWithRealMetrics(parsed).then(enriched => {
+      if (enriched && enriched.length > 0) {
+        globalMarketplaceProducts = enriched;
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(CACHED_PRODUCTS_KEY, JSON.stringify(enriched));
+          }
+        } catch (_) {}
+        subscribers.forEach(cb => {
+          try { cb([...enriched]); } catch (_) {}
+        });
+      }
+    }).catch(() => {});
   });
 }
 
@@ -448,8 +472,20 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
         (window as any).markAppReady();
       }
 
-      // Background metric enrichment
-      enrichProductsWithRealMetrics(globalMarketplaceProducts || []).catch(() => {});
+      // Metric enrichment: persist real sold counts and update subscribers
+      enrichProductsWithRealMetrics(globalMarketplaceProducts || []).then(enriched => {
+        if (enriched && enriched.length > 0) {
+          globalMarketplaceProducts = enriched;
+          try {
+            if (typeof window !== 'undefined') {
+              localStorage.setItem(CACHED_PRODUCTS_KEY, JSON.stringify(enriched));
+            }
+          } catch (_) {}
+          subscribers.forEach(cb => {
+            try { cb([...enriched]); } catch (_) {}
+          });
+        }
+      }).catch(() => {});
 
       return globalMarketplaceProducts ? [...globalMarketplaceProducts] : [];
     } catch (err) {
