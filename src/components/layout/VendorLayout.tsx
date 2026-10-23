@@ -57,7 +57,7 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
     { name: 'Wallet', path: '/vendor/wallet', icon: Wallet },
     { name: 'Platform Fee', path: '/vendor/platform-fee', icon: Receipt },
     { name: 'Withdraw', path: '/vendor/withdraw', icon: Banknote },
-    { name: 'Refer & Earn', path: '/vendor/referrals', icon: Gift },
+    { name: 'Referral Earnings', path: '/vendor/referral-earnings', icon: Gift },
     { name: 'Shop Profile', path: '/vendor/profile', icon: Store },
     { name: 'Notifications', path: '/vendor/notifications', icon: Bell },
     { name: 'Settings', path: '/vendor/settings', icon: Settings },
@@ -132,7 +132,9 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
         <div className="flex-1 overflow-y-auto py-4 scrollbar-thin">
           <nav className="space-y-1 px-2">
             {navItems.map((item) => {
-              const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(`${item.path}`));
+              const isActive = location.pathname === item.path || 
+                (item.path !== '/' && location.pathname.startsWith(`${item.path}`)) ||
+                (item.path === '/vendor/referral-earnings' && location.pathname === '/vendor/referrals');
               const Icon = item.icon;
 
               let badgeCount = 0;

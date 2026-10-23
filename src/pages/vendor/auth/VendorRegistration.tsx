@@ -39,6 +39,9 @@ import {
   type CachedStore 
 } from '../../../services/storeCache';
 
+// Vendor Registration Fee Toggle: সাময়িকভাবে বন্ধ রাখা হয়েছে। ভবিষ্যতে প্রয়োজন অনুযায়ী false করা যাবে।
+export const IS_VENDOR_REGISTRATION_FEE_DISABLED = true;
+
 export default function VendorRegistration() {
   const { user, userData, logout, refreshUserData } = useAuth();
   const navigate = useNavigate();
@@ -127,7 +130,7 @@ export default function VendorRegistration() {
             code: result.code || code
           });
           setReferralValid(true);
-          setReferralFeedback(`সঠিক রেফারেল কোড (রেফারার: ${result.name || 'রেফারার পার্টনার'})! একাউন্ট সফলভাবে তৈরি হলে আপনার ওয়ালেটে ৫০ টাকা বোনাস যোগ হবে।`);
+          setReferralFeedback(`সঠিক রেফারেল কোড (রেফারার: ${result.name || 'রেফারার পার্টনার'})`);
         } else {
           setReferralSponsor(null);
           setReferralValid(false);
@@ -274,48 +277,390 @@ export default function VendorRegistration() {
     setTimeout(() => setCopiedNumber(''), 2500);
   };
 
-  const handleProceedToPayment = (e: React.FormEvent) => {
-    e.preventDefault();
+  const validateFormFields = (): boolean => {
     if (!formData.storeName.trim() || !formData.ownerName.trim() || !formData.mobileNumber.trim() || !formData.address.trim() || !formData.email.trim()) {
       toast.error('সকল প্রয়োজনীয় তথ্য পূরণ করুন');
-      return;
+      return false;
     }
 
     if (!formData.district.trim()) {
       toast.error('আপনার স্টোরের জেলা নির্বাচন করুন');
-      return;
+      return false;
     }
 
     if (!formData.upazila.trim()) {
       toast.error('আপনার স্টোরের থানা/উপজেলা নির্বাচন করুন');
-      return;
+      return false;
     }
 
     if (!user) {
       if (!formData.password) {
         toast.error('একটি পাসওয়ার্ড দিন');
-        return;
+        return false;
       }
       if (formData.password.length < 6) {
         toast.error('পাসওয়ার্ড ন্যূনতম ৬ অক্ষরের হতে হবে');
-        return;
+        return false;
       }
       if (formData.password !== formData.confirmPassword) {
         toast.error('উভয় পাসওয়ার্ড একই হতে হবে');
-        return;
+        return false;
       }
     } else {
       if (formData.password) {
         if (formData.password.length < 6) {
           toast.error('পাসওয়ার্ড ন্যূনতম ৬ অক্ষরের হতে হবে');
-          return;
+          return false;
         }
         if (formData.password !== formData.confirmPassword) {
           toast.error('উভয় পাসওয়ার্ড একই হতে হবে');
-          return;
+          return false;
         }
       }
     }
+    return true;
+  };
+
+  const handleCreateVendorAccountDirectly = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validateFormFields()) return;
+
+    setLoading(true);
+    try {
+      let currentUserId = user?.uid;
+
+      if (!currentUserId) {
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, formData.email.trim(), formData.password);
+          currentUserId = userCredential.user.uid;
+        } catch (authErr: any) {
+          if (authErr?.code === 'auth/email-already-in-use') {
+            try {
+              const signinCred = await signInWithEmailAndPassword(auth, formData.email.trim(), formData.password);
+              currentUserId = signinCred.user.uid;
+            } catch {
+              toast.error('এই ইমেইলটি আগে থেকেই খোলা আছে। দয়া করে সঠিক পাসওয়ার্ড দিন অথবা লগইন করুন।');
+              setLoading(false);
+              return;
+            }
+          } else {
+            throw authErr;
+          }
+        }
+      }
+
+      if (currentUserId && auth.currentUser && formData.password) {
+        try {
+          await updatePassword(auth.currentUser, formData.password);
+        } catch (pwErr) {
+          console.warn('Note: Could not update password for existing session directly:', pwErr);
+        }
+      }
+
+      const storeSlug = await generateUniqueVendorSlug(formData.storeName.trim(), currentUserId);
+      const finalDistrict = formData.district.trim();
+      const finalUpazila = formData.upazila.trim();
+      const finalDivision = formData.division.trim() || getDivisionByDistrict(finalDistrict);
+      const finalStreet = formData.address.trim();
+
+      const structuredAddress = {
+        street: finalStreet,
+        area: finalStreet,
+        city: finalUpazila,
+        state: finalDistrict,
+        district: finalDistrict,
+        upazila: finalUpazila,
+        division: finalDivision,
+        zip: '',
+        country: 'Bangladesh'
+      };
+
+      const structuredVendorLocation = {
+        district: finalDistrict,
+        upazila: finalUpazila,
+        division: finalDivision,
+        area: finalStreet
+      };
+
+      const activeVendorPayload = {
+        vendorId: currentUserId,
+        storeId: currentUserId,
+        storeName: formData.storeName.trim(),
+        shopName: formData.storeName.trim(),
+        storeSlug: storeSlug,
+        shopSlug: storeSlug,
+        freeShopDomain: `${storeSlug}.${PRIMARY_DOMAIN}`,
+        ownerName: formData.ownerName.trim(),
+        name: formData.ownerName.trim(),
+        mobileNumber: formData.mobileNumber.trim(),
+        phone: formData.mobileNumber.trim(),
+        email: formData.email.trim() || user?.email || '',
+        address: structuredAddress,
+        district: finalDistrict,
+        upazila: finalUpazila,
+        thana: finalUpazila,
+        division: finalDivision,
+        vendorDistrict: finalDistrict,
+        vendorUpazila: finalUpazila,
+        vendorDivision: finalDivision,
+        vendorLocation: structuredVendorLocation,
+        facebookPage: formData.facebookPage.trim(),
+        whatsappNumber: formData.whatsappNumber.trim() || formData.mobileNumber.trim(),
+        userId: currentUserId,
+        logo: '',
+        profileImage: '',
+        banner: '',
+        description: `Welcome to ${formData.storeName.trim()}`,
+        status: 'active',
+        referredBy: referralSponsor?.userId || null,
+        referralCodeUsed: referralSponsor?.code || (inviteCode.trim() ? inviteCode.trim().toUpperCase() : null),
+        registrationFee: 0,
+        registrationPayment: 'completed',
+        paymentMethod: 'free_promotional',
+        transactionId: 'FREE_ACTIVATION',
+        invoiceId: currentInvoiceId || 'FREE_PROMO',
+        verifiedAt: Date.now(),
+        updatedAt: Date.now(),
+        createdAt: Date.now()
+      };
+
+      try {
+        localStorage.setItem('rj_active_vendor_' + currentUserId, JSON.stringify(activeVendorPayload));
+        localStorage.setItem('rj_has_active_vendor_' + currentUserId, 'true');
+        localStorage.setItem('rj_user_role_' + currentUserId, 'Vendor');
+      } catch (_) {}
+
+      const storePayload = {
+        id: currentUserId,
+        storeId: currentUserId,
+        vendorId: currentUserId,
+        storeName: formData.storeName.trim(),
+        shopName: formData.storeName.trim(),
+        storeSlug: storeSlug,
+        ownerName: formData.ownerName.trim(),
+        phone: formData.mobileNumber.trim(),
+        email: formData.email.trim() || user?.email || '',
+        address: structuredAddress,
+        district: finalDistrict,
+        upazila: finalUpazila,
+        thana: finalUpazila,
+        division: finalDivision,
+        vendorDistrict: finalDistrict,
+        vendorUpazila: finalUpazila,
+        vendorDivision: finalDivision,
+        vendorLocation: structuredVendorLocation,
+        logo: '',
+        profileImage: '',
+        banner: '',
+        description: `Welcome to ${formData.storeName.trim()}`,
+        status: 'active',
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+
+      const initialProfilePayload = {
+        vendorId: currentUserId,
+        userId: currentUserId,
+        name: formData.ownerName.trim(),
+        ownerName: formData.ownerName.trim(),
+        email: formData.email.trim() || user?.email || '',
+        phone: formData.mobileNumber.trim(),
+        contactNumber: formData.mobileNumber.trim(),
+        whatsappNumber: formData.whatsappNumber.trim() || formData.mobileNumber.trim(),
+        profileImage: '',
+        logo: '',
+        storeId: currentUserId,
+        storeName: formData.storeName.trim(),
+        shopName: formData.storeName.trim(),
+        storeSlug: storeSlug,
+        shopSlug: storeSlug,
+        freeShopDomain: `${storeSlug}.${PRIMARY_DOMAIN}`,
+        description: `Welcome to ${formData.storeName.trim()}`,
+        category: 'Retail',
+        address: structuredAddress,
+        district: finalDistrict,
+        upazila: finalUpazila,
+        thana: finalUpazila,
+        division: finalDivision,
+        vendorDistrict: finalDistrict,
+        vendorUpazila: finalUpazila,
+        vendorDivision: finalDivision,
+        vendorLocation: structuredVendorLocation,
+        status: 'Active',
+        verificationBadge: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+
+      try {
+        localStorage.setItem('rj_vendor_profile_' + currentUserId, JSON.stringify(initialProfilePayload));
+      } catch (_) {}
+
+      // Save to Cloud Firestore
+      await Promise.allSettled([
+        setDoc(doc(db, 'vendors', currentUserId), {
+          id: currentUserId,
+          ...activeVendorPayload,
+          totalSales: 0,
+          totalOrders: 0,
+          totalProducts: 0
+        }, { merge: true }),
+        setDoc(doc(db, 'stores', currentUserId), {
+          id: currentUserId,
+          ...storePayload
+        }, { merge: true }),
+        setDoc(doc(db, 'users', currentUserId), {
+          uid: currentUserId,
+          id: currentUserId,
+          name: formData.ownerName.trim(),
+          displayName: formData.ownerName.trim(),
+          email: formData.email.trim() || user?.email || '',
+          phone: formData.mobileNumber.trim(),
+          role: 'Vendor',
+          hasActiveVendor: true,
+          storeName: formData.storeName.trim(),
+          shopName: formData.storeName.trim(),
+          vendorId: currentUserId,
+          status: 'active',
+          updatedAt: Date.now()
+        }, { merge: true })
+      ]);
+
+      // Save to RTDB
+      await Promise.allSettled([
+        rtdbUpdate(`vendors/${currentUserId}`, activeVendorPayload),
+        rtdbUpdate(`stores/${currentUserId}`, storePayload),
+        rtdbUpdate(`vendor_profiles/${currentUserId}`, initialProfilePayload),
+        rtdbUpdate(`store_slugs/${storeSlug}`, {
+          vendorId: currentUserId,
+          storeId: currentUserId,
+          shopName: formData.storeName.trim(),
+          slug: storeSlug,
+          updatedAt: Date.now()
+        }),
+        rtdbUpdate(`users/${currentUserId}`, {
+          name: formData.ownerName.trim(),
+          email: formData.email.trim() || user?.email || '',
+          phone: formData.mobileNumber.trim(),
+          role: 'Vendor',
+          referredBy: referralSponsor?.userId || null,
+          referralCodeUsed: referralSponsor?.code || (inviteCode.trim() ? inviteCode.trim().toUpperCase() : null),
+          updatedAt: Date.now()
+        })
+      ]);
+
+      if (storeSlug) {
+        try {
+          await setDoc(doc(db, 'store_slugs', storeSlug), {
+            vendorId: currentUserId,
+            storeId: currentUserId,
+            shopName: formData.storeName.trim(),
+            slug: storeSlug,
+            updatedAt: Date.now()
+          }, { merge: true });
+        } catch (_) {}
+      }
+
+      // Cache store & notify
+      const fullRegisteredStore: CachedStore = {
+        id: currentUserId,
+        vendorId: currentUserId,
+        storeId: currentUserId,
+        userId: currentUserId,
+        shopName: formData.storeName.trim(),
+        storeName: formData.storeName.trim(),
+        ownerName: formData.ownerName.trim(),
+        name: formData.ownerName.trim(),
+        phone: formData.mobileNumber.trim(),
+        mobileNumber: formData.mobileNumber.trim(),
+        email: formData.email.trim() || user?.email || '',
+        address: structuredAddress,
+        district: finalDistrict,
+        upazila: finalUpazila,
+        division: finalDivision,
+        storeSlug: storeSlug,
+        description: `Welcome to ${formData.storeName.trim()}`,
+        status: 'active',
+        isVerified: false,
+        verified: false,
+        logo: '',
+        shopLogo: '',
+        profileImage: '',
+        banner: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        ...activeVendorPayload,
+        ...storePayload
+      };
+      saveStoreToCache(currentUserId, fullRegisteredStore);
+      notifyStoreUpdated(fullRegisteredStore);
+      fetchOfficialStoresFromRTDB(true).catch(() => {});
+
+      // Server-side synchronization
+      try {
+        fetch('/api/vendor/save-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            vendorId: currentUserId,
+            profileData: initialProfilePayload,
+            vendorData: activeVendorPayload
+          })
+        }).catch(() => {});
+      } catch (_) {}
+
+      // Credit referral bonus: ৳50 to new vendor and ৳200 to referrer
+      let finalReferrerId = referralSponsor?.userId;
+      if (!finalReferrerId) {
+        const rawCandidate = inviteCode.trim() || localStorage.getItem('rj_referral_code') || '';
+        if (rawCandidate) {
+          try {
+            const lookup = await lookupReferralCode(rawCandidate.trim().toUpperCase());
+            if (lookup.valid && lookup.userId && lookup.userId !== currentUserId) {
+              finalReferrerId = lookup.userId;
+            }
+          } catch (lookupErr) {
+            console.warn('[VendorRegistration] Fallback referral lookup error:', lookupErr);
+          }
+        }
+      }
+
+      if (finalReferrerId && finalReferrerId !== currentUserId) {
+        try {
+          await processReferralRewards({
+            referrerId: finalReferrerId,
+            newUserId: currentUserId,
+            newUserName: formData.ownerName.trim(),
+            newUserEmail: formData.email.trim() || user?.email || '',
+            newUserRole: 'Vendor'
+          });
+          try { localStorage.removeItem('rj_referral_code'); } catch (_) {}
+        } catch (refErr) {
+          console.error('[VendorRegistration] Error crediting referral bonus:', refErr);
+        }
+      }
+
+      // Pre-create the newly registered vendor's own referral code
+      await getOrCreateVendorReferralCode(currentUserId, formData.ownerName.trim(), formData.storeName.trim()).catch(() => {});
+
+      if (refreshUserData) {
+        await refreshUserData().catch(() => {});
+      }
+
+      setLoading(false);
+      toast.success('ভেন্ডর একাউন্ট সফলভাবে তৈরি হয়েছে! ভেন্ডর ড্যাশবোর্ডে স্বাগতম।');
+      navigate('/vendor-dashboard', { replace: true });
+    } catch (error: any) {
+      console.error('Vendor Registration Error:', error);
+      toast.error('একাউন্ট তৈরি করতে সমস্যা হয়েছে: ' + (error?.message || 'পুনরায় চেষ্টা করুন'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleProceedToPayment = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validateFormFields()) return;
     
     // Generate new invoice ID if needed
     if (!currentInvoiceId) {
@@ -763,10 +1108,19 @@ export default function VendorRegistration() {
           
           <div className="flex items-center space-x-1.5 sm:space-x-2">
             <span className={`w-2 h-2 rounded-full ${step === 1 ? 'bg-primary-main ring-4 ring-primary-main/20' : 'bg-green-500'}`}></span>
-            <span className={`w-2 h-2 rounded-full ${step === 2 ? 'bg-primary-main ring-4 ring-primary-main/20' : 'bg-slate-200'}`}></span>
-            <span className="text-xs sm:text-sm font-bold text-slate-600 ml-1.5">
-              Step {step} of 2
-            </span>
+            {!IS_VENDOR_REGISTRATION_FEE_DISABLED && (
+              <>
+                <span className={`w-2 h-2 rounded-full ${step === 2 ? 'bg-primary-main ring-4 ring-primary-main/20' : 'bg-slate-200'}`}></span>
+                <span className="text-xs sm:text-sm font-bold text-slate-600 ml-1.5">
+                  Step {step} of 2
+                </span>
+              </>
+            )}
+            {IS_VENDOR_REGISTRATION_FEE_DISABLED && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 ml-1">
+                ফ্রি রেজিস্ট্রেশন
+              </span>
+            )}
           </div>
         </div>
 
@@ -779,7 +1133,11 @@ export default function VendorRegistration() {
             {step === 1 ? 'Vendor Registration' : 'Registration Fee Payment'}
           </h1>
           <p className="text-xs sm:text-sm md:text-base text-slate-500 mt-1 max-w-lg mx-auto">
-            {step === 1 ? 'Open your merchant store on RJ WORLD BD and start selling' : `Send ৳${registrationFeeAmount} registration fee to activate store`}
+            {step === 1 
+              ? (IS_VENDOR_REGISTRATION_FEE_DISABLED 
+                  ? 'Open your merchant store on RJ WORLD BD and start selling (কোনো রেজিস্ট্রেশন ফি প্রয়োজন নেই)' 
+                  : 'Open your merchant store on RJ WORLD BD and start selling')
+              : `Send ৳${registrationFeeAmount} registration fee to activate store`}
           </p>
         </div>
 
@@ -791,7 +1149,7 @@ export default function VendorRegistration() {
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
-              onSubmit={handleProceedToPayment}
+              onSubmit={IS_VENDOR_REGISTRATION_FEE_DISABLED ? handleCreateVendorAccountDirectly : handleProceedToPayment}
               className="space-y-3 sm:space-y-4 md:space-y-5"
             >
 
@@ -1002,58 +1360,30 @@ export default function VendorRegistration() {
                 </div>
               </div>
 
-              {/* Referral / Invite Code (Optional) */}
-              <div className="bg-slate-50/90 p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 space-y-2">
-                {/* Professional Notification Message */}
-                <div className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-2.5 sm:p-3 flex items-start gap-2 shadow-2xs">
-                  <span className="text-base sm:text-lg shrink-0 select-none">🎁</span>
-                  <p className="text-xs sm:text-[13px] font-semibold text-amber-950 leading-relaxed">
-                    Referral Code ব্যবহার করে Vendor Account খুলুন এবং সফলভাবে Account তৈরি হলে আপনার Wallet-এ ৫০ টাকা Bonus পান!
-                  </p>
-                </div>
-
-                <div className="flex items-center justify-between pt-1">
-                  <label className="block text-xs sm:text-xs md:text-sm font-bold text-slate-700 uppercase tracking-wider">
-                    রেফারেল / ইনভাইট কোড (ঐচ্ছিক)
-                  </label>
-                  <span className="text-[10px] sm:text-xs text-primary-main font-semibold">
-                    বন্ধু বা পার্টনারের কোড
-                  </span>
-                </div>
-                <div className="relative">
-                  <input 
-                    type="text" 
-                    name="inviteCode" 
-                    value={inviteCode} 
-                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())} 
-                    className={`w-full px-3 sm:px-4 py-2 sm:py-2.5 md:py-3 text-xs sm:text-sm font-mono uppercase bg-white border rounded-lg sm:rounded-xl focus:ring-2 outline-none transition-all placeholder:text-slate-400 ${
-                      referralValid === true ? 'border-emerald-500 focus:ring-emerald-500/20 bg-emerald-50/30' :
-                      referralValid === false ? 'border-rose-400 focus:ring-rose-400/20 bg-rose-50/30' :
-                      'border-slate-200 focus:border-primary-main focus:ring-primary-main/20'
-                    }`}
-                    placeholder="রেফারেল কোড দিন (যেমন: V8A9F1)" 
-                  />
-                  {referralValid === true && (
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-600 flex items-center gap-1 text-xs font-bold">
-                      <Check className="w-4 h-4" />
-                      <span>যাচাইকৃত</span>
-                    </div>
-                  )}
-                </div>
-                {referralFeedback && (
-                  <p className={`text-[11px] sm:text-xs mt-1.5 font-medium flex items-center gap-1 ${referralValid === true ? 'text-emerald-700' : 'text-rose-600'}`}>
-                    <span>{referralFeedback}</span>
-                  </p>
-                )}
-              </div>
+              {/* Referral / Invite Code is hidden from UI as requested (captured via URL/local storage if present) */}
 
               {/* Highly visible Proceed button */}
               <div className="pt-2 sm:pt-3">
                 <button 
                   type="submit" 
-                  className="w-full h-11 sm:h-12 md:h-13 bg-primary-main hover:bg-sky-600 active:bg-sky-700 text-white text-xs sm:text-sm md:text-base font-bold rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-primary-main/25 active:scale-[0.99] transition-all cursor-pointer"
+                  disabled={loading}
+                  className="w-full h-11 sm:h-12 md:h-13 bg-primary-main hover:bg-sky-600 active:bg-sky-700 text-white text-xs sm:text-sm md:text-base font-bold rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-primary-main/25 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-60"
                 >
-                  Continue to Payment <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                  {loading ? (
+                    <>
+                      <div className="w-4 h-4 sm:w-5 sm:h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>একাউন্ট তৈরি করা হচ্ছে...</span>
+                    </>
+                  ) : IS_VENDOR_REGISTRATION_FEE_DISABLED ? (
+                    <>
+                      <Store className="w-4 h-4 sm:w-5 sm:h-5" />
+                      <span>Create Vendor Account</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Continue to Payment</span> <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                    </>
+                  )}
                 </button>
               </div>
 

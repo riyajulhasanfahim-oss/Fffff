@@ -45,6 +45,9 @@ export interface ReferralItem {
   bonusAmount: number;
   status: string;
   createdAt: number;
+  userRole?: 'Reseller' | 'Vendor' | string;
+  referrerId?: string;
+  referrerName?: string;
 }
 
 export interface ReferralStats {
@@ -52,6 +55,8 @@ export interface ReferralStats {
   totalEarnings: number;
   activeResellers: number;
   activeVendors?: number;
+  resellerEarnings?: number;
+  vendorEarnings?: number;
 }
 
 export async function getResellerReferralCode(userId: string): Promise<string> {
@@ -879,7 +884,8 @@ export async function creditReferralBonus(
 }
 
 /**
- * Fetches referral statistics and history for a reseller or vendor from RTDB.
+ * Fetches referral statistics and history for a reseller or vendor from both RTDB and Cloud Firestore.
+ * Handles distinct calculation for Reseller Referral Bonus and Vendor Referral records.
  */
 export async function getReferralStatsAndHistory(userId: string): Promise<{
   stats: ReferralStats;
@@ -887,50 +893,121 @@ export async function getReferralStatsAndHistory(userId: string): Promise<{
 }> {
   if (!userId) {
     return {
-      stats: { totalReferrals: 0, totalEarnings: 0, activeResellers: 0, activeVendors: 0 },
+      stats: { totalReferrals: 0, totalEarnings: 0, activeResellers: 0, activeVendors: 0, resellerEarnings: 0, vendorEarnings: 0 },
       history: []
     };
   }
 
   try {
-    const [statsData, historyData] = await Promise.all([
-      rtdbGet<any>(`referral_stats/${userId}`, 1500),
-      rtdbGet<Record<string, any>>(`referrals/${userId}`, 1500)
+    const [statsData, historyData, fsReferralSnap, fsLogsSnap] = await Promise.all([
+      rtdbGet<any>(`referral_stats/${userId}`, 1500).catch(() => null),
+      rtdbGet<Record<string, any>>(`referrals/${userId}`, 1500).catch(() => null),
+      getDocs(collection(db, 'referrals', userId, 'items')).catch(() => null),
+      getDocs(query(collection(db, 'referral_rewards_log'), where('referrerId', '==', userId))).catch(() => null)
     ]);
 
+    const seenIds = new Set<string>();
     const history: ReferralItem[] = [];
+
+    // 1. Process RTDB referral records
     if (historyData && typeof historyData === 'object') {
-      for (const [id, item] of Object.entries(historyData)) {
+      for (const [id, rawItem] of Object.entries(historyData)) {
+        const item = rawItem as any;
         if (!item) continue;
+        const targetUserId = String(item.referredUserId || id);
+        seenIds.add(targetUserId);
+        const resolvedRole = (item.userRole || item.newUserRole || (item.role === 'Vendor' ? 'Vendor' : 'Reseller')) as ('Reseller' | 'Vendor');
         history.push({
           id,
-          referredUserId: item.referredUserId || id,
-          referredName: item.referredName || (item.userRole === 'Vendor' ? 'নতুন ভেন্ডর' : 'নতুন রিসেলার'),
+          referredUserId: targetUserId,
+          referredName: item.referredName || (resolvedRole === 'Vendor' ? 'নতুন ভেন্ডর' : 'নতুন রিসেলার'),
           referredEmail: item.referredEmail || '',
           bonusAmount: Number(item.bonusAmount || REFERRAL_BONUS_AMOUNT),
           status: item.status || 'Completed',
+          userRole: resolvedRole,
+          referrerId: item.referrerId || userId,
+          referrerName: item.referrerName || '',
           createdAt: Number(item.createdAt || Date.now())
         });
       }
-      // Sort newest first
-      history.sort((a, b) => b.createdAt - a.createdAt);
     }
 
-    const calculatedEarnings = history.reduce((sum, item) => sum + (item.bonusAmount || REFERRAL_BONUS_AMOUNT), 0);
-    const calculatedCount = history.length;
+    // 2. Process Firestore referrals subcollection
+    if (fsReferralSnap && !fsReferralSnap.empty) {
+      fsReferralSnap.docs.forEach((d) => {
+        const item = d.data();
+        const targetUserId = item.referredUserId || item.id || d.id;
+        if (!seenIds.has(targetUserId)) {
+          seenIds.add(targetUserId);
+          const resolvedRole = (item.userRole || item.newUserRole || 'Reseller') as ('Reseller' | 'Vendor');
+          history.push({
+            id: d.id,
+            referredUserId: targetUserId,
+            referredName: item.referredName || (resolvedRole === 'Vendor' ? 'নতুন ভেন্ডর' : 'নতুন রিসেলার'),
+            referredEmail: item.referredEmail || '',
+            bonusAmount: Number(item.bonusAmount || item.referrerBonus || REFERRAL_BONUS_AMOUNT),
+            status: item.status || 'Completed',
+            userRole: resolvedRole,
+            referrerId: item.referrerId || userId,
+            referrerName: item.referrerName || '',
+            createdAt: Number(item.createdAt || Date.now())
+          });
+        }
+      });
+    }
+
+    // 3. Process Firestore referral_rewards_log
+    if (fsLogsSnap && !fsLogsSnap.empty) {
+      fsLogsSnap.docs.forEach((d) => {
+        const item = d.data();
+        const targetUserId = item.newUserId || item.id || d.id;
+        if (!seenIds.has(targetUserId)) {
+          seenIds.add(targetUserId);
+          const resolvedRole = (item.newUserRole || item.userRole || 'Reseller') as ('Reseller' | 'Vendor');
+          history.push({
+            id: d.id,
+            referredUserId: targetUserId,
+            referredName: item.newUserName || item.referredName || (resolvedRole === 'Vendor' ? 'নতুন ভেন্ডর' : 'নতুন রিসেলার'),
+            referredEmail: item.newUserEmail || item.referredEmail || '',
+            bonusAmount: Number(item.referrerBonus || item.bonusAmount || REFERRAL_BONUS_AMOUNT),
+            status: item.status || 'Completed',
+            userRole: resolvedRole,
+            referrerId: item.referrerId || userId,
+            referrerName: item.referrerName || '',
+            createdAt: Number(item.createdAt || Date.now())
+          });
+        }
+      });
+    }
+
+    // Sort newest first
+    history.sort((a, b) => b.createdAt - a.createdAt);
+
+    // Compute distinct reseller vs vendor metrics
+    const resellerList = history.filter(item => (item.userRole || '').toLowerCase() === 'reseller');
+    const vendorList = history.filter(item => (item.userRole || '').toLowerCase() === 'vendor');
+
+    const calculatedResellerCount = resellerList.length;
+    const calculatedVendorCount = vendorList.length;
+    const calculatedResellerEarnings = resellerList.reduce((sum, item) => sum + (item.bonusAmount || REFERRAL_BONUS_AMOUNT), 0);
+    const calculatedVendorEarnings = vendorList.reduce((sum, item) => sum + (item.bonusAmount || REFERRAL_BONUS_AMOUNT), 0);
+    const calculatedTotalEarnings = calculatedResellerEarnings + calculatedVendorEarnings;
+    const calculatedTotalReferrals = history.length;
 
     const stats: ReferralStats = {
-      totalReferrals: Math.max(calculatedCount, Number(statsData?.totalReferrals || 0)),
-      totalEarnings: Math.max(calculatedEarnings, Number(statsData?.totalEarnings || 0)),
-      activeResellers: Number(statsData?.activeResellers || (statsData?.activeVendors ? 0 : calculatedCount)),
-      activeVendors: Number(statsData?.activeVendors || 0)
+      totalReferrals: Math.max(calculatedTotalReferrals, Number(statsData?.totalReferrals || 0)),
+      totalEarnings: Math.max(calculatedTotalEarnings, Number(statsData?.totalEarnings || 0)),
+      activeResellers: Math.max(calculatedResellerCount, Number(statsData?.activeResellers || 0)),
+      activeVendors: Math.max(calculatedVendorCount, Number(statsData?.activeVendors || 0)),
+      resellerEarnings: Math.max(calculatedResellerEarnings, Number(statsData?.activeResellers || 0) * REFERRAL_BONUS_AMOUNT),
+      vendorEarnings: Math.max(calculatedVendorEarnings, Number(statsData?.activeVendors || 0) * REFERRAL_BONUS_AMOUNT)
     };
 
     return { stats, history };
   } catch (error) {
     console.error('[ReferralService] Error fetching stats and history:', error);
     return {
-      stats: { totalReferrals: 0, totalEarnings: 0, activeResellers: 0, activeVendors: 0 },
+      stats: { totalReferrals: 0, totalEarnings: 0, activeResellers: 0, activeVendors: 0, resellerEarnings: 0, vendorEarnings: 0 },
       history: []
     };
   }

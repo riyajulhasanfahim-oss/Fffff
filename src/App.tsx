@@ -406,6 +406,7 @@ export default function App() {
             <Route path="/vendor/flash-sales" element={<VendorRoute><VendorFlashSale /></VendorRoute>} />
             <Route path="/vendor/platform-fee" element={<VendorRoute><VendorPlatformFee /></VendorRoute>} />
             <Route path="/vendor/referrals" element={<VendorRoute><VendorReferral /></VendorRoute>} />
+            <Route path="/vendor/referral-earnings" element={<VendorRoute><VendorReferral /></VendorRoute>} />
           
           <Route path="/admin" element={<AdminRoute><AdminLayout /></AdminRoute>}>
             <Route path="dashboard" element={<AdminDashboard />} />
