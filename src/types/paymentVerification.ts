@@ -1,4 +1,4 @@
-export type PaymentUserType = 'customer' | 'reseller' | 'vendor' | 'vendor_platform_fee';
+export type PaymentUserType = 'customer' | 'reseller' | 'vendor' | 'vendor_platform_fee' | 'shareholder';
 
 export type PaymentMethodType = 'bkash' | 'nagad' | 'rocket' | 'upay';
 

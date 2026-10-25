@@ -589,5 +589,37 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isSignedIn();
     }
+
+    // Shareholder Management & Financial Ledger Security (STEP 5 - Task 8)
+    match /share_payments/{paymentId} {
+      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid || isUserAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isUserAdmin();
+    }
+
+    match /shareholders/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
+      allow write: if isUserAdmin();
+
+      match /{document=**} {
+        allow read: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
+        allow write: if isUserAdmin();
+      }
+    }
+
+    match /shareholder_audit_logs/{logId} {
+      allow read: if isUserAdmin();
+      allow write: if isUserAdmin();
+    }
+
+    match /shareholder_ledger/{ledgerId} {
+      allow read: if isUserAdmin();
+      allow write: if isUserAdmin();
+    }
+
+    match /system_config/{configId} {
+      allow read: if true;
+      allow write: if isUserAdmin();
+    }
   }
 }

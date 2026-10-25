@@ -34,8 +34,8 @@
       "destination": "/api"
     },
     {
-      "source": "/__/auth/(.*)",
-      "destination": "/api"
+      "source": "/__/auth/:path*",
+      "destination": "https://gen-lang-client-0902472299.firebaseapp.com/__/auth/:path*"
     },
     {
       "source": "/(.*)",

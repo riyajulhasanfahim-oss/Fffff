@@ -46,10 +46,15 @@ export default async function handler(req: any, res: any) {
   }
 
   // Firebase Auth Custom Domain Handler Proxy for Vercel/Serverless
-  if (pathPart.startsWith('/__/auth')) {
+  const matchedPath = String(req.headers['x-matched-path'] || req.headers['x-invoke-path'] || rawUrl);
+  const isAuthHandler = pathPart.startsWith('/__/auth') || rawUrl.includes('/__/auth') || matchedPath.includes('/__/auth');
+  if (isAuthHandler) {
     try {
       const proj = (config as any).projectId || 'gen-lang-client-0902472299';
-      let targetUrl = `https://${proj}.firebaseapp.com${rawUrl}`;
+      const actualAuthPath = rawUrl.includes('/__/auth')
+        ? rawUrl
+        : (matchedPath.includes('/__/auth') ? matchedPath : `/__/auth${rawUrl.replace(/^\/api/, '')}`);
+      let targetUrl = `https://${proj}.firebaseapp.com${actualAuthPath}`;
       let proxyRes = await fetch(targetUrl, {
         method: req.method,
         headers: {
@@ -58,7 +63,7 @@ export default async function handler(req: any, res: any) {
         }
       });
       if (!proxyRes.ok) {
-        targetUrl = `https://${proj}.web.app${rawUrl}`;
+        targetUrl = `https://${proj}.web.app${actualAuthPath}`;
         proxyRes = await fetch(targetUrl, {
           method: req.method,
           headers: {
@@ -127,8 +132,12 @@ export default async function handler(req: any, res: any) {
 
   // Delegate other routes to full Express application if available
   try {
-    const { app } = await import('../server/createApp');
-    return app(req, res);
+    const createAppMod = await import('../server/createApp');
+    const appHandler = createAppMod.default || (createAppMod as any).app;
+    if (typeof appHandler === 'function') {
+      return appHandler(req, res);
+    }
+    return safeSend(200, { success: true, timestamp: Date.now() });
   } catch (err: any) {
     return safeSend(200, { success: true, timestamp: Date.now() });
   }

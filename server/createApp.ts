@@ -3949,6 +3949,27 @@ app.use((req, res, next) => {
         }).catch(err => console.warn('[CONFIRM-COMPLETION] RTDB patch error:', err));
       }
 
+      if (userType === 'shareholder' && userId) {
+        const appId = invoiceId || `RJ-SH-${userId.slice(0, 6).toUpperCase()}-${now}`;
+        const record = {
+          applicationId: appId,
+          userId,
+          paymentStatus: 'Approved',
+          status: 'approved',
+          transactionId: cleanTrx,
+          verifiedAt: now,
+          verifiedBy: 'automatic_verification',
+          isShareholderActive: true,
+          updatedAt: now
+        };
+        inMemorySharePayments.set(appId, record);
+        fetch(`${CURRENT_RTDB_BASE}/share_payments/${appId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(record)
+        }).catch(() => {});
+      }
+
       return res.json({
         success: true,
         status: 'verified',
@@ -4244,6 +4265,22 @@ app.use((req, res, next) => {
         }
       } catch (dupErr) {
         console.warn('[Shareholder Payment] Duplicate check notice:', dupErr);
+      }
+
+      // Also check in-memory cache for duplicate transaction ID or application
+      for (const [k, p] of inMemorySharePayments.entries()) {
+        if (p && String(p.transactionId || '').trim().toUpperCase() === cleanTrx) {
+          return res.status(400).json({
+            success: false,
+            error: `Transaction ID '${cleanTrx}' has already been submitted for payment verification. Duplicate transactions are not allowed.`
+          });
+        }
+        if (k === applicationId && (p.paymentStatus === 'Approved' || p.paymentStatus === 'Pending Verification')) {
+          return res.status(400).json({
+            success: false,
+            error: `Application '${applicationId}' has already been submitted for payment (Current Status: ${p.paymentStatus}).`
+          });
+        }
       }
 
       const paymentRecord = {
@@ -4792,13 +4829,21 @@ app.use((req, res, next) => {
       }).catch(() => null);
 
       let currentApprovedTotal = 0;
+      let rawPayments: any = null;
       if (paymentsSnap && paymentsSnap.ok) {
-        const rawPayments = await paymentsSnap.json();
+        rawPayments = await paymentsSnap.json().catch(() => null);
         if (rawPayments && typeof rawPayments === 'object') {
           for (const item of Object.values<any>(rawPayments)) {
             if (item && (item.paymentStatus === 'Approved' || item.status === 'approved')) {
               currentApprovedTotal += Number(item.sharePercent || 0);
             }
+          }
+        }
+      }
+      for (const item of inMemorySharePayments.values()) {
+        if (item && (item.paymentStatus === 'Approved' || item.status === 'approved')) {
+          if (!rawPayments || !rawPayments[item.applicationId || item.id]) {
+            currentApprovedTotal += Number(item.sharePercent || 0);
           }
         }
       }
@@ -4996,13 +5041,21 @@ app.use((req, res, next) => {
         // Sum current approved shares
         const allPaymentsSnap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, { signal: AbortSignal.timeout(3000) });
         let currentApprovedTotal = 0;
+        let allP: any = null;
         if (allPaymentsSnap.ok) {
-          const allP = await allPaymentsSnap.json();
+          allP = await allPaymentsSnap.json().catch(() => null);
           if (allP && typeof allP === 'object') {
             for (const [pId, pVal] of Object.entries<any>(allP)) {
               if (pId !== applicationId && (pVal?.paymentStatus === 'Approved' || pVal?.status === 'approved')) {
                 currentApprovedTotal += Number(pVal.sharePercent || 0);
               }
+            }
+          }
+        }
+        for (const [pId, pVal] of inMemorySharePayments.entries()) {
+          if (pId !== applicationId && (pVal?.paymentStatus === 'Approved' || pVal?.status === 'approved')) {
+            if (!allP || !allP[pId]) {
+              currentApprovedTotal += Number(pVal.sharePercent || 0);
             }
           }
         }
@@ -5013,6 +5066,23 @@ app.use((req, res, next) => {
             success: false,
             error: `Share pool allocation exceeded. Authorized: ${availableLimit}%, Already Allocated: ${currentApprovedTotal}%, Requested: ${requestedPercent}%. Only ${Math.max(0, availableLimit - currentApprovedTotal)}% remaining.`
           });
+        }
+
+        // Calculate applicant's cumulative approved share percentage
+        let userTotalPercent = requestedPercent;
+        if (allP && typeof allP === 'object') {
+          for (const [pId, pVal] of Object.entries<any>(allP)) {
+            if (pId !== applicationId && pVal?.userId === existing.userId && (pVal?.paymentStatus === 'Approved' || pVal?.status === 'approved')) {
+              userTotalPercent += Number(pVal.sharePercent || 0);
+            }
+          }
+        }
+        for (const [pId, pVal] of inMemorySharePayments.entries()) {
+          if (pId !== applicationId && pVal?.userId === existing.userId && (pVal?.paymentStatus === 'Approved' || pVal?.status === 'approved')) {
+            if (!allP || !allP[pId]) {
+              userTotalPercent += Number(pVal.sharePercent || 0);
+            }
+          }
         }
 
         const updatedData = {

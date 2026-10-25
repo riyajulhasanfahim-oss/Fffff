@@ -388,6 +388,106 @@ async function executeBusinessActionSafely(
         }
       }
     }
+
+    // 6. SHAREHOLDER REGISTRATION & ACTIVATION (STEP 5)
+    else if (req.userType === 'shareholder') {
+      const shareholderUserId = req.userId;
+      if (shareholderUserId && shareholderUserId !== 'guest') {
+        const sharePercent = Number(req.contextData?.sharePercent || 1);
+        const shareUnits = Number(req.contextData?.shareUnits || sharePercent);
+        const totalAmount = verifiedAmount || (sharePercent * 2000);
+        const applicationId = req.contextData?.applicationId || req.invoiceId || `RJ-SH-${shareholderUserId.slice(0, 6).toUpperCase()}-${now}`;
+        const applicantName = req.contextData?.applicantName || req.contextData?.fullName || 'Shareholder Investor';
+
+        const shareholderRecord = {
+          applicationId,
+          id: applicationId,
+          userId: shareholderUserId,
+          applicantName,
+          guardianName: req.contextData?.guardianName || '',
+          address: req.contextData?.address || '',
+          phone: req.contextData?.phone || senderNumber || '',
+          email: req.contextData?.email || '',
+          sharePercent,
+          sharePrice: 2000,
+          shareUnits,
+          totalAmount,
+          paymentMethod: normalizeMethod(req.paymentMethod),
+          transactionId: cleanTrxId,
+          payerMobile: senderNumber || req.contextData?.payerMobile || '',
+          invoiceId: req.invoiceId,
+          status: 'approved',
+          paymentStatus: 'Approved',
+          isShareholderActive: true,
+          verifiedAt: now,
+          verifiedBy: 'automatic_verification',
+          createdAt: req.contextData?.createdAt || now,
+          updatedAt: now
+        };
+
+        const portfolioPayload = {
+          userId: shareholderUserId,
+          shareholderName: applicantName,
+          activeSharesPercent: sharePercent,
+          portfolioValue: sharePercent * 2000,
+          status: 'active_shareholder',
+          lastVerifiedAt: now,
+          updatedAt: now
+        };
+
+        // Cache in localStorage for immediate client-side responsiveness
+        try {
+          localStorage.setItem('rj_active_shareholder_' + shareholderUserId, JSON.stringify(portfolioPayload));
+          localStorage.setItem('rj_has_active_shareholder_' + shareholderUserId, 'true');
+        } catch (_) {}
+
+        // 1. Cloud Firestore: Save to 'shareholders' and 'share_payments' collections
+        try {
+          const { db } = await import('../lib/firebase');
+          const { doc, setDoc } = await import('firebase/firestore');
+          await Promise.allSettled([
+            setDoc(doc(db, 'shareholders', shareholderUserId), portfolioPayload, { merge: true }),
+            setDoc(doc(db, 'share_payments', applicationId), shareholderRecord, { merge: true })
+          ]);
+        } catch (fsErr) {
+          console.warn('[VERIFY] Shareholder Firestore write notice:', fsErr);
+        }
+
+        // 2. Realtime Database: Save to shareholders and share_payments
+        try {
+          await Promise.allSettled([
+            rtdbUpdate(`shareholders/${shareholderUserId}/portfolio`, portfolioPayload),
+            rtdbUpdate(`shareholders/${shareholderUserId}/applications/${applicationId}`, shareholderRecord),
+            rtdbUpdate(`share_payments/${applicationId}`, shareholderRecord)
+          ]);
+        } catch (rtdbErr) {
+          console.warn('[VERIFY] Shareholder RTDB write notice:', rtdbErr);
+        }
+
+        // 3. Financial Ledger entry (Task 6)
+        try {
+          const ledgerRecord = {
+            id: `LEDGER-CAPITAL-${applicationId}`,
+            shareholderId: `RJ-SH-${shareholderUserId.slice(0, 8).toUpperCase()}`,
+            userId: shareholderUserId,
+            sourceTransactionId: cleanTrxId,
+            revenueCategory: 'Share Capital Investment',
+            eligibleRevenueAmount: totalAmount,
+            applicableApprovedRate: sharePercent,
+            calculatedAmount: totalAmount,
+            type: 'share_purchase_credit',
+            status: 'verified',
+            reference: applicationId,
+            notes: `Verified automatic share purchase of ${sharePercent}% at ৳2,000/1% rate via ${normalizeMethod(req.paymentMethod)}.`,
+            timestamp: now,
+            createdBy: 'automatic_verification'
+          };
+          await rtdbUpdate(`shareholder_ledger/${ledgerRecord.id}`, ledgerRecord);
+        } catch (ledgerErr) {
+          console.warn('[VERIFY] Shareholder ledger record notice:', ledgerErr);
+        }
+      }
+    }
     return true;
   })();
 

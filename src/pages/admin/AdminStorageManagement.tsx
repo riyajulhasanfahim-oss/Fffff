@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { auth } from '../../lib/firebase';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { GoogleAuthProvider, signInWithPopup, getAuth, signOut } from 'firebase/auth';
+import { auth, firebaseConfig } from '../../lib/firebase';
 import { rtdbSubscribe } from '../../lib/rtdb';
 import {
   HardDrive,
@@ -196,7 +197,13 @@ export default function AdminStorageManagement() {
         prompt: 'select_account',
       });
 
-      const result = await signInWithPopup(auth, provider);
+      // Use an isolated Firebase Auth instance so the Admin's login session is never affected
+      const storageApp = !getApps().some((a) => a.name === 'StoragePoolAuthApp')
+        ? initializeApp(firebaseConfig, 'StoragePoolAuthApp')
+        : getApp('StoragePoolAuthApp');
+      const storageAuth = getAuth(storageApp);
+
+      const result = await signInWithPopup(storageAuth, provider);
       toast.loading('Finalizing Google Drive connection...', { id: toastId });
 
       const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -290,6 +297,12 @@ export default function AdminStorageManagement() {
         id: toastId,
       });
       connectToastRef.current = null;
+      try {
+        const storageApp = getApps().find((a) => a.name === 'StoragePoolAuthApp');
+        if (storageApp) {
+          signOut(getAuth(storageApp)).catch(() => {});
+        }
+      } catch (_) {}
       await loadData();
     } catch (err: any) {
       if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
