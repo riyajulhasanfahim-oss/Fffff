@@ -39,21 +39,24 @@ export function isCodOrder(order: any): boolean {
     method === 'cash-on-delivery' ||
     method.includes('cash on delivery') ||
     method.includes('cash_on_delivery') ||
+    method.includes('cod') ||
+    method === 'only_delivery_charge' ||
+    method.includes('only delivery charge') ||
+    method.includes('delivery charge advance') ||
     gateway === 'cod' ||
     gateway === 'cash on delivery' ||
     gateway === 'cash on delivery (cod)' ||
     gateway === 'cash_on_delivery' ||
     gateway === 'cash-on-delivery' ||
     gateway.includes('cash on delivery') ||
-    gateway.includes('cash_on_delivery')
+    gateway.includes('cash_on_delivery') ||
+    gateway.includes('cod')
   ) {
     return true;
   }
 
   const codAmt = Number(order.codAmount || 0);
-  const paidAmt = Number(order.paidAmount || order.advancePaymentAmount || order.advanceAmount || order.receivedAmount || 0);
-  
-  if (codAmt > 0 && paidAmt === 0 && !method.includes('online') && !method.includes('wallet') && !gateway.includes('online')) {
+  if (codAmt > 0) {
     return true;
   }
 

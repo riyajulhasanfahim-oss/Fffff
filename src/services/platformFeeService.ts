@@ -113,21 +113,26 @@ export function extractVendorIdsFromOrder(order: any): string[] {
  * Checks if an order payment method is Cash on Delivery (COD)
  * Handles all formats: 'Cash on Delivery (COD)', 'cash on delivery', 'cod', 'cash', etc.
  */
-export function isCodPayment(paymentMethod?: string): boolean {
+export function isCodPayment(paymentMethod?: string, codAmount?: number | string): boolean {
+  if (codAmount !== undefined && Number(codAmount) > 0) return true;
   if (!paymentMethod) return false;
   const pm = String(paymentMethod).toLowerCase().trim();
   
   // Explicit online full payment methods without COD
   if (
-    pm === 'bkash' || 
-    pm === 'nagad' || 
-    pm === 'rocket' || 
-    pm === 'upay' || 
-    pm === 'wallet' || 
-    pm === 'online' || 
-    pm === 'card' ||
+    pm === 'product_full_payment' ||
+    pm === 'full_payment' ||
+    pm === 'full' ||
     pm === 'stripe' ||
     pm === 'sslcommerz'
+  ) {
+    return false;
+  }
+
+  // Pure online payment methods ONLY if not COD
+  if (
+    (pm === 'bkash' || pm === 'nagad' || pm === 'rocket' || pm === 'upay' || pm === 'wallet' || pm === 'online' || pm === 'card') &&
+    (codAmount === undefined || Number(codAmount) <= 0)
   ) {
     return false;
   }
@@ -140,6 +145,8 @@ export function isCodPayment(paymentMethod?: string): boolean {
     pm.includes('cash_on_delivery') ||
     pm.includes('cash') ||
     pm.includes('delivery charge advance') ||
+    pm.includes('only_delivery_charge') ||
+    pm.includes('only delivery charge') ||
     pm.includes('hand cash')
   ) {
     return true;
@@ -207,7 +214,8 @@ export async function recordPlatformFeeOnDelivery(
 
     // 1. Must be Cash on Delivery (COD)
     const paymentMethod = finalOrder.paymentMethod || finalOrder.payment_method;
-    if (!isCodPayment(paymentMethod)) {
+    const codAmt = Number(finalOrder.codAmount ?? 0);
+    if (!isCodPayment(paymentMethod, codAmt)) {
       return { success: false, reason: 'Not a COD order (Online/Wallet payment orders have no COD platform fee).' };
     }
 
@@ -569,9 +577,10 @@ export async function syncPlatformFeesForVendor(vendorId: string): Promise<Vendo
       if (!isMyOrder) continue;
 
       const pm = data.paymentMethod || data.payment_method;
+      const codAmt = Number(data.codAmount ?? 0);
       const st = data.status || data.orderStatus || data.vendorStatus;
 
-      if (isCodPayment(pm) && isDeliveredStatus(st)) {
+      if (isCodPayment(pm, codAmt) && isDeliveredStatus(st)) {
         let cleanId = String(data.mainOrderId || data.orderId || id || '').trim().replace(/^#/, '');
         if (cleanId.endsWith(`_${vendorId}`)) {
           cleanId = cleanId.slice(0, -(vendorId.length + 1));
@@ -596,9 +605,10 @@ export async function syncPlatformFeesForVendor(vendorId: string): Promise<Vendo
       if (!isMyOrder) continue;
 
       const pm = data.paymentMethod || data.payment_method;
+      const codAmt = Number(data.codAmount ?? 0);
       const st = data.status || data.orderStatus;
 
-      if (isCodPayment(pm) && isDeliveredStatus(st)) {
+      if (isCodPayment(pm, codAmt) && isDeliveredStatus(st)) {
         let cleanId = String(data.orderId || data.mainOrderId || id || '').trim().replace(/^#/, '');
         if (cleanId.endsWith(`_${vendorId}`)) {
           cleanId = cleanId.slice(0, -(vendorId.length + 1));
@@ -1003,9 +1013,10 @@ export async function reconcileAllDeliveredCodOrders(): Promise<{
     for (const { id, data } of allVendorOrders) {
       if (!data) continue;
       const paymentMethod = data.paymentMethod || data.payment_method;
+      const codAmt = Number(data.codAmount ?? 0);
       const status = data.status || data.orderStatus || data.vendorStatus;
 
-      if (isCodPayment(paymentMethod) && isDeliveredStatus(status)) {
+      if (isCodPayment(paymentMethod, codAmt) && isDeliveredStatus(status)) {
         const vendorIds = extractVendorIdsFromOrder(data);
         for (const vId of vendorIds) {
           if (vId && vId !== 'admin' && vId !== 'system') {
@@ -1024,9 +1035,10 @@ export async function reconcileAllDeliveredCodOrders(): Promise<{
     for (const { id, data } of allMainOrders) {
       if (!data) continue;
       const paymentMethod = data.paymentMethod || data.payment_method;
+      const codAmt = Number(data.codAmount ?? 0);
       const status = data.status || data.orderStatus || data.vendorStatus;
 
-      if (isCodPayment(paymentMethod) && isDeliveredStatus(status)) {
+      if (isCodPayment(paymentMethod, codAmt) && isDeliveredStatus(status)) {
         const vendorIds = extractVendorIdsFromOrder(data);
         for (const vId of vendorIds) {
           if (vId && vId !== 'admin' && vId !== 'system') {

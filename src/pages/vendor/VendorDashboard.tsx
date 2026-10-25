@@ -1123,6 +1123,7 @@ export default function VendorDashboard() {
             { name: 'Customers', path: '/vendor/customers', icon: Users, color: 'text-fuchsia-600', bg: 'bg-fuchsia-50' },
             { name: 'Messages', path: '/vendor/messages', icon: MessageSquare, color: 'text-rose-600', bg: 'bg-rose-50' },
             { name: 'Wallet', path: '/vendor/wallet', icon: Wallet, color: 'text-violet-600', bg: 'bg-violet-50' },
+            { name: 'Platform Fee', path: '/vendor/platform-fee', icon: Receipt, color: 'text-rose-600', bg: 'bg-rose-50' },
             { name: 'Withdraw', path: '/vendor/withdraw', icon: Banknote, color: 'text-teal-600', bg: 'bg-teal-50' },
             { name: 'Referral Earnings', path: '/vendor/referral-earnings', icon: Gift, color: 'text-amber-600', bg: 'bg-amber-50' },
             { name: 'Shop Profile', path: '/vendor/profile', icon: Store, color: 'text-orange-600', bg: 'bg-orange-50' },
@@ -1153,6 +1154,9 @@ export default function VendorDashboard() {
             } else if (service.name === 'Withdraw' && unreadWithdrawCount > 0) {
               badgeText = `${bengaliCounts.withdraw} টা`;
               badgeBg = 'bg-emerald-600';
+            } else if (service.name === 'Platform Fee' && duePlatformFee > 0) {
+              badgeText = `৳${duePlatformFee}`;
+              badgeBg = 'bg-rose-600';
             }
 
             return (

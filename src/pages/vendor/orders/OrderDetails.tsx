@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
 import { useVendorStore } from '../../../context/VendorStoreContext';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbList, rtdbSubscribe } from '../../../lib/rtdb';
@@ -9,7 +9,7 @@ import {
   XCircle, User, MapPin, CreditCard, Download, FileText, Printer,
   RefreshCcw, Check, X, ExternalLink, ShieldCheck, ShieldAlert, DollarSign, AlertCircle,
   Phone, Building2, Compass, Home, Info, AlertTriangle, Copy, Lock, Calendar, RotateCcw,
-  ChevronDown
+  ChevronDown, Coins, Receipt
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { 
@@ -21,7 +21,7 @@ import {
   isCodOrder,
   calculateOrderPaymentBreakdown 
 } from '../../../services/vendorPayoutService';
-import { recordPlatformFeeOnDelivery, reversePlatformFeeOnOrderCancellation } from '../../../services/platformFeeService';
+import { recordPlatformFeeOnDelivery, reversePlatformFeeOnOrderCancellation, isCodPayment } from '../../../services/platformFeeService';
 import CourierVerificationModal from '../../../components/vendor/CourierVerificationModal';
 import VendorCancelOrderModal from '../../../components/vendor/VendorCancelOrderModal';
 import PaymentMethodSelectionModal from '../../../components/checkout/PaymentMethodSelectionModal';
@@ -1627,8 +1627,59 @@ export default function OrderDetails() {
                 </span>
               </button>
             )}
+
+            {/* Pay Platform Fee Action Button on Delivered Orders */}
+            {(order.status === 'Delivered' || order.vendorStatus === 'Delivered') && 
+             (isCodOrder(order) || isCodPayment(order.paymentMethod, Number(order.codAmount || 0)) || Number(order.codAmount || 0) > 0) && (
+              order.platformFeeStatus === 'paid' ? (
+                <div className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs sm:text-sm font-bold rounded-xl flex items-center gap-1.5 shadow-2xs">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>প্ল্যাটফর্ম ফি পরিশোধিত</span>
+                </div>
+              ) : (
+                <Link
+                  to="/vendor/platform-fee"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer animate-pulse"
+                  title="প্ল্যাটফর্ম ফি পরিশোধ করুন"
+                >
+                  <Coins className="w-4 h-4" />
+                  <span>প্লাটফর্ম ফি পরিশোধ করুন (৳{order.platformFee || 5})</span>
+                </Link>
+              )
+            )}
           </div>
         </div>
+
+        {/* Delivered Order - Platform Fee Payment Notice Banner */}
+        {(order.status === 'Delivered' || order.vendorStatus === 'Delivered') && 
+         (isCodOrder(order) || isCodPayment(order.paymentMethod, Number(order.codAmount || 0)) || Number(order.codAmount || 0) > 0) && 
+         order.platformFeeStatus !== 'paid' && (
+          <div className="bg-gradient-to-r from-rose-50 to-amber-50 border-2 border-rose-200/90 rounded-2xl p-4 sm:p-5 mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3.5 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Coins className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
+                  ডেলিভারি সম্পন্ন — প্ল্যাটফর্ম ফি পরিশোধ
+                </div>
+                <h4 className="font-extrabold text-sm sm:text-base text-slate-900 mt-0.5">
+                  এই সফল COD অর্ডারের প্ল্যাটফর্ম ফি: <span className="text-rose-600 font-black">৳{order.platformFee || 5}</span> (বকেয়া)
+                </h4>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  কাস্টমার পণ্য গ্রহণ করেছেন। নির্ধারিত প্ল্যাটফর্ম ফি পরিশোধ করে অ্যাকাউন্ট সচল ও আপডেট রাখুন।
+                </p>
+              </div>
+            </div>
+            <Link
+              to="/vendor/platform-fee"
+              className="w-full sm:w-auto px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+            >
+              <CreditCard className="w-4 h-4" />
+              <span>প্লাটফর্ম ফি পরিশোধ করুন</span>
+            </Link>
+          </div>
+        )}
 
         {/* Reseller Order Breakdown & Vendor Wallet Reserve Status Panel */}
         {Boolean(order.isResellerOrder || order.resellerId || order.profitStatus) && (
@@ -2376,13 +2427,28 @@ export default function OrderDetails() {
               </div>
 
               {/* Vendor Payout / Payment Section */}
-              {isCodOrder(order) ? (
-                order.status === 'Delivered' ? (
-                  <div className="pt-2 border-t border-gray-100 flex justify-between items-center text-xs">
-                    <span className="text-slate-600 font-medium">ভেন্ডর প্ল্যাটফর্ম ফি:</span>
-                    <span className="font-bold text-amber-700 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-md">
-                      ৳{order.platformFee || 5}
-                    </span>
+              {(isCodOrder(order) || isCodPayment(order.paymentMethod, Number(order.codAmount || 0)) || Number(order.codAmount || 0) > 0) ? (
+                (order.status === 'Delivered' || order.vendorStatus === 'Delivered') ? (
+                  <div className="pt-2.5 border-t border-gray-100 space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-600 font-medium">ভেন্ডর প্ল্যাটফর্ম ফি:</span>
+                      <span className={`font-bold px-2 py-0.5 rounded-md border ${
+                        order.platformFeeStatus === 'paid'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}>
+                        ৳{order.platformFee || 5} {order.platformFeeStatus === 'paid' ? '(পরিশোধিত)' : '(বকেয়া)'}
+                      </span>
+                    </div>
+                    {order.platformFeeStatus !== 'paid' && (
+                      <Link
+                        to="/vendor/platform-fee"
+                        className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+                      >
+                        <Coins className="w-3.5 h-3.5" />
+                        <span>প্লাটফর্ম ফি পরিশোধ করুন (৳{order.platformFee || 5})</span>
+                      </Link>
+                    )}
                   </div>
                 ) : null
               ) : (

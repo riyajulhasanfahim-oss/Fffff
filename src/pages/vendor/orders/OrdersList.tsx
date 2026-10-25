@@ -6,11 +6,12 @@ import VendorLayout from '../../../components/layout/VendorLayout';
 import { 
   Search, Filter, Eye, Clock, CheckCircle, Package, Truck, 
   CheckCircle2, XCircle, RefreshCcw, Download, Calendar, Check, X,
-  ExternalLink, Link as LinkIcon, Copy, AlertTriangle
+  ExternalLink, Link as LinkIcon, Copy, AlertTriangle, Coins
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { getCourierTrackingUrl, calculateOrderPaymentBreakdown } from '../../../services/vendorPayoutService';
+import { getCourierTrackingUrl, calculateOrderPaymentBreakdown, isCodOrder } from '../../../services/vendorPayoutService';
+import { isCodPayment } from '../../../services/platformFeeService';
 import { 
   getVendorWalletBalances, 
   confirmVendorResellerOrder, 
@@ -661,7 +662,19 @@ export default function OrdersList() {
                           </button>
                         )
                       ) : (
-                        order.courierName ? (
+                        (order.status === 'Delivered' || order.vendorStatus === 'Delivered') && 
+                        (isCodOrder(order) || isCodPayment(order.paymentMethod, Number(order.codAmount || 0)) || Number(order.codAmount || 0) > 0) &&
+                        order.platformFeeStatus !== 'paid' ? (
+                          <Link
+                            to="/vendor/platform-fee"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                            title="প্ল্যাটফর্ম ফি পরিশোধ করুন"
+                          >
+                            <Coins className="w-3 h-3 text-rose-600" />
+                            <span>ফি পরিশোধ</span>
+                          </Link>
+                        ) : order.courierName ? (
                           <span className="text-[11px] font-semibold text-slate-500">
                             🚚 {order.courierName}
                           </span>
@@ -901,7 +914,19 @@ export default function OrdersList() {
                               </button>
                             )
                           ) : (
-                            order.courierName ? (
+                            (order.status === 'Delivered' || order.vendorStatus === 'Delivered') && 
+                            (isCodOrder(order) || isCodPayment(order.paymentMethod, Number(order.codAmount || 0)) || Number(order.codAmount || 0) > 0) &&
+                            order.platformFeeStatus !== 'paid' ? (
+                              <Link
+                                to="/vendor/platform-fee"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                                title="প্ল্যাটফর্ম ফি পরিশোধ করুন"
+                              >
+                                <Coins className="w-3.5 h-3.5 text-rose-600" />
+                                <span>ফি পরিশোধ</span>
+                              </Link>
+                            ) : order.courierName ? (
                               <span className="text-[11px] font-semibold text-slate-500">
                                 🚚 {order.courierName}
                               </span>
