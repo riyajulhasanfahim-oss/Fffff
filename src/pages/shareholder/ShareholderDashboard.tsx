@@ -250,14 +250,14 @@ export default function ShareholderDashboard() {
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       <Header />
 
-      <main className="flex-grow pt-4 sm:pt-6 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+      <main className="flex-grow pt-3 sm:pt-6 pb-20 px-3 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
         {/* Top Breadcrumb Navigation */}
-        <div className="flex items-center justify-between gap-3 text-xs sm:text-sm text-slate-500 mb-6">
-          <div className="flex items-center gap-2 overflow-x-auto py-1">
+        <div className="flex items-center justify-between gap-2 sm:gap-3 text-xs sm:text-sm text-slate-500 mb-4 sm:mb-6">
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-1 no-scrollbar">
             <button 
               type="button"
               onClick={() => navigate('/company-share')} 
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:text-slate-900 transition-colors shadow-2xs cursor-pointer font-medium shrink-0"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:text-slate-900 transition-colors shadow-2xs cursor-pointer font-medium shrink-0 text-xs"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>{language === 'bn' ? 'শেয়ার পোর্টাল' : 'Share Portal'}</span>
