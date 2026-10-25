@@ -270,6 +270,28 @@
       ".read": "auth != null",
       ".write": "auth != null",
       ".indexOn": ["vendorId", "createdAt", "type", "status"]
+    },
+    "share_payments": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "shareholders": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || auth.token.admin === true)",
+        ".write": "auth != null && (auth.uid === $userId || auth.token.admin === true)"
+      }
+    },
+    "shareholder_audit_logs": {
+      ".read": "auth != null && auth.token.admin === true",
+      ".write": "auth != null && auth.token.admin === true"
+    },
+    "shareholder_ledger": {
+      ".read": "auth != null && auth.token.admin === true",
+      ".write": "auth != null && auth.token.admin === true"
+    },
+    "system_config": {
+      ".read": true,
+      ".write": "auth != null && auth.token.admin === true"
     }
   }
 }

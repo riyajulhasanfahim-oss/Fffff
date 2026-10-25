@@ -71,6 +71,11 @@ import AllBrands from "./pages/AllBrands";
 import VendorApplication from "./pages/VendorApplication";
 import ResellerApplication from "./pages/ResellerApplication";
 import RjWorldBdSmsReaderApp from "./pages/sms-reader/RjWorldBdSmsReaderApp";
+import ShareholderLandingPage from "./pages/shareholder/ShareholderLandingPage";
+import ShareholderDashboard from "./pages/shareholder/ShareholderDashboard";
+import ShareholderPaymentPage from "./pages/shareholder/ShareholderPaymentPage";
+import AdminSharePayments from "./pages/admin/AdminSharePayments";
+import AdminShareholderManagement from "./pages/admin/AdminShareholderManagement";
 
 import ResellerDashboard from "./pages/reseller/ResellerDashboard";
 import ResellerProducts from "./pages/reseller/products/ResellerProducts";
@@ -317,6 +322,31 @@ export default function App() {
             <Route path="/blog" element={<BlogPage />} />
             <Route path="/shipping" element={<ShippingInfoPage />} />
             <Route path="/track-order" element={<TrackOrderPage />} />
+
+            {/* Shareholder Portal */}
+            <Route path="/company-share" element={<ShareholderLandingPage />} />
+            <Route path="/shareholders" element={<ShareholderLandingPage />} />
+            <Route path="/shareholder" element={<ShareholderLandingPage />} />
+            <Route path="/shareholder-dashboard" element={
+              <PrivateRoute>
+                <ShareholderDashboard />
+              </PrivateRoute>
+            } />
+            <Route path="/shareholder/dashboard" element={
+              <PrivateRoute>
+                <ShareholderDashboard />
+              </PrivateRoute>
+            } />
+            <Route path="/company-share/payment" element={
+              <PrivateRoute>
+                <ShareholderPaymentPage />
+              </PrivateRoute>
+            } />
+            <Route path="/shareholder-payment" element={
+              <PrivateRoute>
+                <ShareholderPaymentPage />
+              </PrivateRoute>
+            } />
   
             <Route path="/account" element={
               <PrivateRoute>
@@ -447,6 +477,9 @@ export default function App() {
             <Route path="support-inbox" element={<AdminSupportInbox />} />
             <Route path="physical-support" element={<AdminSupportInbox defaultTab="physical" />} />
             <Route path="domain-settings" element={<AdminDomainSettings />} />
+            <Route path="shareholders" element={<AdminShareholderManagement />} />
+            <Route path="shareholder-management" element={<AdminShareholderManagement />} />
+            <Route path="share-payments" element={<AdminShareholderManagement />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
         </Routes>

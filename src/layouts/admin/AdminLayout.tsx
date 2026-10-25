@@ -38,7 +38,8 @@ import {
   Receipt,
   Truck,
   ShieldCheck,
-  RotateCcw
+  RotateCcw,
+  PieChart
 } from 'lucide-react';
 
 export default function AdminLayout() {
@@ -162,6 +163,7 @@ export default function AdminLayout() {
     { icon: Network, label: 'Leadership Management', path: '/admin/mlm' },
     { icon: CreditCard, label: 'Commissions', path: '/admin/commissions' },
     { icon: Wallet, label: 'Withdrawals', path: '/admin/withdrawals' },
+    { icon: PieChart, label: 'Shareholder Management', path: '/admin/shareholders' },
     { icon: Image, label: 'Banners', path: '/admin/banners' },
     { icon: FileText, label: 'Website Content', path: '/admin/content' },
     { icon: BarChart2, label: 'Reports', path: '/admin/reports' },

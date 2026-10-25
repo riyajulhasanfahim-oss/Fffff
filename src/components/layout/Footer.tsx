@@ -56,6 +56,7 @@ export default function Footer() {
               <li><Link to="/returns" className="text-slate-400 hover:text-primary-main transition-colors">{t('Returns & Exchanges')}</Link></li>
               <li><Link to="/shipping" className="text-slate-400 hover:text-primary-main transition-colors">{t('Shipping Info')}</Link></li>
               <li><Link to="/privacy" className="text-slate-400 hover:text-primary-main transition-colors">{t('Privacy Policy')}</Link></li>
+              <li><Link to="/company-share" className="text-slate-400 hover:text-primary-main transition-colors">{t('Share / Company Share')}</Link></li>
             </ul>
           </div>
 

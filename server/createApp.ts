@@ -3962,6 +3962,1927 @@ app.use((req, res, next) => {
     }
   });
 
+  // ==========================================
+  // SHAREHOLDER TRUSTED BACKEND API (STEP 2)
+  // ==========================================
+
+  // System administrator configuration for company shares
+  app.get('/api/shareholders/config', async (req, res) => {
+    try {
+      let adminConfig: any = null;
+      try {
+        const snap = await fetch(`${CURRENT_RTDB_BASE}/system_config/shareholders.json`, {
+          signal: AbortSignal.timeout(2000)
+        });
+        if (snap.ok) {
+          adminConfig = await snap.json();
+        }
+      } catch (_) {}
+
+      const pricePerPercent = 2000;
+      const totalAvailableShares = Number(adminConfig?.availableShares) || 40; // Default 40% public equity pool
+      const maxSinglePurchasePercent = Number(adminConfig?.maxSinglePurchasePercent) || 25;
+      const minPurchasePercent = 1;
+
+      const defaultRecipient = '01864670673';
+      const recipientAccounts = {
+        bKash: {
+          name: 'bKash',
+          number: adminConfig?.recipientAccounts?.bKash?.number || defaultRecipient,
+          type: adminConfig?.recipientAccounts?.bKash?.type || 'Personal (Send Money)',
+          instructions: 'Go to bKash App or dial *247#, select Send Money to ' + (adminConfig?.recipientAccounts?.bKash?.number || defaultRecipient) + ', enter exact amount, and use Application ID as Reference.'
+        },
+        Nagad: {
+          name: 'Nagad',
+          number: adminConfig?.recipientAccounts?.Nagad?.number || defaultRecipient,
+          type: adminConfig?.recipientAccounts?.Nagad?.type || 'Personal (Send Money)',
+          instructions: 'Go to Nagad App or dial *167#, select Send Money to ' + (adminConfig?.recipientAccounts?.Nagad?.number || defaultRecipient) + ', enter exact amount, and use Application ID as Reference.'
+        },
+        Rocket: {
+          name: 'Rocket',
+          number: adminConfig?.recipientAccounts?.Rocket?.number || defaultRecipient,
+          type: adminConfig?.recipientAccounts?.Rocket?.type || 'Personal (Send Money)',
+          instructions: 'Go to Rocket App or dial *322#, select Send Money to ' + (adminConfig?.recipientAccounts?.Rocket?.number || defaultRecipient) + ', enter exact amount, and use Application ID as Reference.'
+        },
+        Upay: {
+          name: 'Upay',
+          number: adminConfig?.recipientAccounts?.Upay?.number || defaultRecipient,
+          type: adminConfig?.recipientAccounts?.Upay?.type || 'Personal (Send Money)',
+          instructions: 'Go to Upay App or dial *268#, select Send Money to ' + (adminConfig?.recipientAccounts?.Upay?.number || defaultRecipient) + ', enter exact amount, and use Application ID as Reference.'
+        }
+      };
+
+      return res.json({
+        success: true,
+        pricePerPercent,
+        totalAvailableShares,
+        maxSinglePurchasePercent,
+        minPurchasePercent,
+        presetPercentages: [1, 2, 5, 10, 15, 20, 25],
+        currency: 'BDT',
+        recipientAccounts,
+        statutoryNotice: 'Returns or dividends are strictly not guaranteed and are based on annual audited corporate net profit performance.'
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Config error' });
+    }
+  });
+
+  // Authoritative server-side validation of shareholder application draft before payment
+  app.post('/api/shareholders/validate-draft', async (req, res) => {
+    try {
+      const {
+        userId,
+        fullName,
+        guardianName,
+        address,
+        phone,
+        email,
+        sharePercent,
+        notes
+      } = req.body || {};
+
+      if (!userId || typeof userId !== 'string') {
+        return res.status(401).json({ success: false, error: 'User must be authenticated to create a draft application.' });
+      }
+
+      const cleanFullName = String(fullName || '').trim();
+      const cleanGuardianName = String(guardianName || '').trim();
+      const cleanAddress = String(address || '').trim();
+      const cleanPhone = String(phone || '').trim();
+      const cleanEmail = String(email || '').trim().toLowerCase();
+
+      if (!cleanFullName) {
+        return res.status(400).json({ success: false, error: "Full Name is required." });
+      }
+      if (!cleanGuardianName) {
+        return res.status(400).json({ success: false, error: "Father's or Mother's Name is required." });
+      }
+      if (!cleanAddress) {
+        return res.status(400).json({ success: false, error: "Address is required." });
+      }
+      if (!cleanPhone) {
+        return res.status(400).json({ success: false, error: "Phone Number is required." });
+      }
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        return res.status(400).json({ success: false, error: "A valid Email Address is required." });
+      }
+
+      // Validate share percentage
+      const parsedPercent = Number(sharePercent);
+      if (isNaN(parsedPercent) || !Number.isInteger(parsedPercent) || parsedPercent < 1) {
+        return res.status(400).json({ success: false, error: "Selected share percentage must be a positive whole number (minimum 1%)." });
+      }
+
+      // Check system administrator configured available shares limit
+      let availableLimit = 40;
+      let maxSingleLimit = 25;
+      try {
+        const snap = await fetch(`${CURRENT_RTDB_BASE}/system_config/shareholders.json`, {
+          signal: AbortSignal.timeout(2000)
+        });
+        if (snap.ok) {
+          const cfg = await snap.json();
+          if (cfg?.availableShares) availableLimit = Number(cfg.availableShares);
+          if (cfg?.maxSinglePurchasePercent) maxSingleLimit = Number(cfg.maxSinglePurchasePercent);
+        }
+      } catch (_) {}
+
+      if (parsedPercent > availableLimit) {
+        return res.status(400).json({
+          success: false,
+          error: `Selected share percentage (${parsedPercent}%) exceeds total available shares (${availableLimit}%).`
+        });
+      }
+
+      if (parsedPercent > maxSingleLimit) {
+        return res.status(400).json({
+          success: false,
+          error: `Single application limit is capped at ${maxSingleLimit}% per transaction.`
+        });
+      }
+
+      // Authoritative financial calculations on the trusted backend
+      const unitPrice = 2000;
+      const totalAmount = parsedPercent * unitPrice;
+      const shareUnits = parsedPercent;
+      const now = Date.now();
+      const draftRef = `RJ-SH-DRAFT-${new Date().getFullYear()}-${now.toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+      const applicationPayload = {
+        id: draftRef,
+        draftReference: draftRef,
+        userId,
+        fullName: cleanFullName,
+        guardianName: cleanGuardianName,
+        address: cleanAddress,
+        phone: cleanPhone,
+        email: cleanEmail,
+        sharePercent: parsedPercent,
+        unitPrice,
+        shareUnits,
+        totalAmount,
+        notes: String(notes || '').trim(),
+        status: 'draft_prepared_for_payment_step2',
+        paymentStatus: 'unpaid',
+        isShareholderActive: false,
+        isOfficialCertificateIssued: false,
+        acknowledgedNonGuaranteedReturns: true,
+        statutoryDisclaimer: 'Returns or dividends are strictly not guaranteed and are based on annual audited corporate net profit performance.',
+        createdAt: now,
+        updatedAt: now
+      };
+
+      // Securely save into user's private application node in RTDB
+      try {
+        await fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/applications/${draftRef}.json`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(3000),
+          body: JSON.stringify(applicationPayload)
+        });
+      } catch (dbErr) {
+        console.warn('[Shareholder Draft API] RTDB write warning:', dbErr);
+      }
+
+      return res.json({
+        success: true,
+        draftReference: draftRef,
+        application: applicationPayload,
+        validationSummary: {
+          fullName: cleanFullName,
+          guardianName: cleanGuardianName,
+          address: cleanAddress,
+          phone: cleanPhone,
+          email: cleanEmail,
+          sharePercent: parsedPercent,
+          unitPrice,
+          shareUnits,
+          totalAmount,
+          currency: 'BDT'
+        },
+        message: 'Share purchase application draft verified and preserved. Ready for Step 3 payment processing.'
+      });
+    } catch (err: any) {
+      console.error('[Shareholder Validate Draft] Error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // ==========================================
+  // SHARE PAYMENT SUBMISSION (STEP 3 - TASK 3 & 4)
+  // ==========================================
+  app.post('/api/shareholders/submit-payment', async (req, res) => {
+    try {
+      const {
+        applicationId,
+        userId,
+        applicantName,
+        guardianName,
+        address,
+        phone,
+        email,
+        sharePercent,
+        paymentMethod,
+        transactionId,
+        payerMobile,
+        screenshotUrl,
+        notes
+      } = req.body || {};
+
+      if (!applicationId || typeof applicationId !== 'string') {
+        return res.status(400).json({ success: false, error: 'Application ID is required.' });
+      }
+      if (!userId || typeof userId !== 'string') {
+        return res.status(401).json({ success: false, error: 'Authenticated user ID is required.' });
+      }
+      if (!paymentMethod || typeof paymentMethod !== 'string') {
+        return res.status(400).json({ success: false, error: 'Payment method is required.' });
+      }
+      const cleanTrx = String(transactionId || '').trim().toUpperCase();
+      if (!cleanTrx || cleanTrx.length < 5) {
+        return res.status(400).json({ success: false, error: 'A valid Transaction ID (TrxID) is required.' });
+      }
+      const cleanPayerMobile = String(payerMobile || '').trim();
+      if (!cleanPayerMobile || cleanPayerMobile.length < 8) {
+        return res.status(400).json({ success: false, error: 'Payer mobile number is required.' });
+      }
+
+      // Re-verify share price & total calculation server-side (Task 6)
+      const parsedPercent = Number(sharePercent);
+      if (isNaN(parsedPercent) || parsedPercent < 1) {
+        return res.status(400).json({ success: false, error: 'Valid share percentage is required.' });
+      }
+      const sharePrice = 2000;
+      const totalAmount = parsedPercent * sharePrice;
+      const submissionTimestamp = Date.now();
+
+      // DUPLICATE TRANSACTION PREVENTION (TASK 3 & TASK 6):
+      // Check if this Transaction ID has already been recorded in share_payments
+      try {
+        const snap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (snap.ok) {
+          const allPayments = await snap.json();
+          if (allPayments && typeof allPayments === 'object') {
+            for (const [k, p] of Object.entries<any>(allPayments)) {
+              if (p && String(p.transactionId || '').trim().toUpperCase() === cleanTrx) {
+                return res.status(400).json({
+                  success: false,
+                  error: `Transaction ID '${cleanTrx}' has already been submitted for payment verification. Duplicate transactions are not allowed.`
+                });
+              }
+              if (k === applicationId && (p.paymentStatus === 'Approved' || p.paymentStatus === 'Pending Verification')) {
+                return res.status(400).json({
+                  success: false,
+                  error: `Application '${applicationId}' has already been submitted for payment (Current Status: ${p.paymentStatus}).`
+                });
+              }
+            }
+          }
+        }
+      } catch (dupErr) {
+        console.warn('[Shareholder Payment] Duplicate check notice:', dupErr);
+      }
+
+      const paymentRecord = {
+        applicationId,
+        userId,
+        applicantName: String(applicantName || '').trim(),
+        guardianName: String(guardianName || '').trim(),
+        address: String(address || '').trim(),
+        phone: String(phone || '').trim(),
+        email: String(email || '').trim().toLowerCase(),
+        sharePercent: parsedPercent,
+        sharePrice,
+        shareUnits: parsedPercent,
+        totalAmount,
+        paymentMethod: String(paymentMethod).trim(),
+        transactionId: cleanTrx,
+        payerMobile: cleanPayerMobile,
+        screenshotUrl: typeof screenshotUrl === 'string' ? screenshotUrl : '',
+        submissionTimestamp,
+        paymentStatus: 'Pending Verification',
+        status: 'pending_verification',
+        isShareholderActive: false,
+        isOfficialCertificateIssued: false,
+        notes: String(notes || '').trim(),
+        createdAt: submissionTimestamp,
+        updatedAt: submissionTimestamp
+      };
+
+      // 1. Store in resilient in-memory node immediately
+      inMemorySharePayments.set(applicationId, paymentRecord);
+      if (!inMemoryUserApplications.has(userId)) {
+        inMemoryUserApplications.set(userId, new Map());
+      }
+      inMemoryUserApplications.get(userId)!.set(applicationId, paymentRecord);
+
+      // 2. Save in admin review queue in RTDB
+      fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(paymentRecord),
+        signal: AbortSignal.timeout(3000)
+      }).catch(() => {});
+
+      // 3. Save in user's private application node in RTDB
+      fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/applications/${applicationId}.json`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(paymentRecord),
+        signal: AbortSignal.timeout(3000)
+      }).catch(() => {});
+
+      return res.json({
+        success: true,
+        message: 'Your payment details have been submitted successfully. Your application will remain pending until an authorized administrator verifies your payment.',
+        paymentRecord
+      });
+    } catch (err: any) {
+      console.error('[Shareholder Submit Payment Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Payment submission failed.' });
+    }
+  });
+
+  // Admin: Get all share payment applications (Task 5)
+  app.get('/api/shareholders/admin/payments', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = req.headers['x-admin-email'] as string || '';
+      let isVerifiedAdmin = false;
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) {
+            isVerifiedAdmin = true;
+          }
+        } catch (_) {}
+      }
+
+      if (!isVerifiedAdmin && isAllowedAdminEmail(callerEmail)) {
+        isVerifiedAdmin = true;
+      }
+
+      if (!isVerifiedAdmin) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator access required.' });
+      }
+
+      const snap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, {
+        signal: AbortSignal.timeout(4000)
+      });
+      let paymentsList: any[] = [];
+      if (snap.ok) {
+        const data = await snap.json();
+        if (data && typeof data === 'object') {
+          paymentsList = Object.entries(data).map(([id, val]: [string, any]) => ({
+            id,
+            ...(val || {})
+          }));
+        }
+      }
+
+      paymentsList.sort((a, b) => (b.submissionTimestamp || b.createdAt || 0) - (a.submissionTimestamp || a.createdAt || 0));
+
+      return res.json({
+        success: true,
+        payments: paymentsList
+      });
+    } catch (err: any) {
+      console.error('[Admin Get Share Payments]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // In-memory persistent caches for real-time responsiveness and offline resilience
+  const inMemorySharePayments = new Map<string, any>();
+  const inMemoryUserApplications = new Map<string, Map<string, any>>();
+  const inMemoryUserPortfolios = new Map<string, any>();
+  const inMemoryUserWithdrawals = new Map<string, Map<string, any>>();
+  const inMemoryShareholderAuditLogs = new Map<string, any>();
+  const inMemoryShareholderLedger = new Map<string, any>();
+  let inMemoryShareholderConfig: any = { availableShares: 40, maxSinglePurchasePercent: 25 };
+
+  // Helper to record audit logs
+  const recordShareholderAudit = async (adminEmail: string, action: string, affectedRecordId: string, details: any) => {
+    try {
+      const now = Date.now();
+      const logId = `AUDIT-${now}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      const logRecord = {
+        id: logId,
+        adminEmail,
+        action,
+        affectedRecordId,
+        details,
+        timestamp: now,
+        createdAt: now
+      };
+      inMemoryShareholderAuditLogs.set(logId, logRecord);
+
+      await fetch(`${CURRENT_RTDB_BASE}/shareholder_audit_logs/${logId}.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(logRecord),
+        signal: AbortSignal.timeout(3000)
+      });
+    } catch (err) {
+      console.warn('[Audit Log Record Warning]:', err);
+    }
+  };
+
+  // Helper to record immutable ledger entries
+  const recordShareholderLedger = async (entry: any) => {
+    try {
+      const now = Date.now();
+      const ledgerId = entry.id || `LEDGER-${now}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      const record = {
+        ...entry,
+        id: ledgerId,
+        timestamp: entry.timestamp || now,
+        createdAt: now
+      };
+      inMemoryShareholderLedger.set(ledgerId, record);
+
+      await fetch(`${CURRENT_RTDB_BASE}/shareholder_ledger/${ledgerId}.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+        signal: AbortSignal.timeout(3000)
+      });
+    } catch (err) {
+      console.warn('[Ledger Record Warning]:', err);
+    }
+  };
+
+  // Admin: Get all share payment applications (Task 4 & 5)
+  app.get('/api/shareholders/admin/payments', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = req.headers['x-admin-email'] as string || '';
+      let isVerifiedAdmin = false;
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) {
+            isVerifiedAdmin = true;
+          }
+        } catch (_) {}
+      }
+
+      if (!isVerifiedAdmin && isAllowedAdminEmail(callerEmail)) {
+        isVerifiedAdmin = true;
+      }
+
+      if (!isVerifiedAdmin) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator access required.' });
+      }
+
+      const snap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, {
+        signal: AbortSignal.timeout(4000)
+      });
+      let paymentsList: any[] = [];
+      if (snap && snap.ok) {
+        const data = await snap.json().catch(() => null);
+        if (data && typeof data === 'object') {
+          paymentsList = Object.entries(data).map(([id, val]: [string, any]) => ({
+            id,
+            ...(val || {})
+          }));
+        }
+      }
+      // Merge resilient in-memory payments
+      const seenIds = new Set(paymentsList.map(p => p.id));
+      for (const [id, val] of inMemorySharePayments.entries()) {
+        if (!seenIds.has(id)) {
+          paymentsList.push({ id, ...val });
+          seenIds.add(id);
+        }
+      }
+
+      paymentsList.sort((a, b) => (b.submissionTimestamp || b.createdAt || 0) - (a.submissionTimestamp || a.createdAt || 0));
+
+      return res.json({
+        success: true,
+        payments: paymentsList
+      });
+    } catch (err: any) {
+      console.error('[Admin Get Share Payments]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Admin: Comprehensive Overview for Shareholder Management (STEP 5 - Task 1 to 9)
+  app.get('/api/shareholders/admin/overview', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = (req.headers['x-admin-email'] as string) || '';
+      let adminEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) {
+            adminEmail = decoded.email || '';
+          }
+        } catch (_) {}
+      }
+      if (!adminEmail && isAllowedAdminEmail(callerEmail)) {
+        adminEmail = callerEmail;
+      }
+
+      if (!adminEmail) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator privileges required.' });
+      }
+
+      // Fetch all core datasets concurrently
+      const [
+        paymentsSnap, 
+        configSnap, 
+        commissionCfgSnap, 
+        auditSnap, 
+        ledgerSnap, 
+        suspendedSnap,
+        resellersSnap,
+        badgesSnap,
+        platformFeesSnap,
+        allShareholdersSnap
+      ] = await Promise.all([
+        fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/system_config/shareholders.json`, { signal: AbortSignal.timeout(3000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/system_config/shareholder_commissions.json`, { signal: AbortSignal.timeout(3000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/shareholder_audit_logs.json`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/shareholder_ledger.json`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/system_config/suspended_shareholders.json`, { signal: AbortSignal.timeout(3000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/resellers.json`, { signal: AbortSignal.timeout(3000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/vendor_badges.json`, { signal: AbortSignal.timeout(3000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/vendor_platform_fees.json`, { signal: AbortSignal.timeout(3000) }).catch(() => null),
+        fetch(`${CURRENT_RTDB_BASE}/shareholders.json`, { signal: AbortSignal.timeout(4000) }).catch(() => null)
+      ]);
+
+      // 1. Applications & Payments
+      let applications: any[] = [];
+      if (paymentsSnap && paymentsSnap.ok) {
+        const rawPayments = await paymentsSnap.json().catch(() => null);
+        if (rawPayments && typeof rawPayments === 'object') {
+          applications = Object.entries(rawPayments).map(([id, val]: [string, any]) => ({
+            id,
+            ...(val || {})
+          }));
+        }
+      }
+      // Merge in-memory payments into applications
+      const seenAppIds = new Set(applications.map(a => a.id));
+      for (const [id, val] of inMemorySharePayments.entries()) {
+        if (!seenAppIds.has(id)) {
+          applications.push({ id, ...val });
+          seenAppIds.add(id);
+        } else {
+          // Sync any memory updates (e.g. status)
+          const idx = applications.findIndex(a => a.id === id);
+          if (idx !== -1) {
+            applications[idx] = { ...applications[idx], ...val };
+          }
+        }
+      }
+      applications.sort((a, b) => (b.submissionTimestamp || b.createdAt || 0) - (a.submissionTimestamp || a.createdAt || 0));
+
+      // 2. Suspended Accounts
+      const suspendedMap: Record<string, boolean> = {};
+      if (suspendedSnap && suspendedSnap.ok) {
+        const rawSuspended = await suspendedSnap.json();
+        if (rawSuspended && typeof rawSuspended === 'object') {
+          Object.assign(suspendedMap, rawSuspended);
+        }
+      }
+
+      // Mark suspended accounts in applications
+      for (const app of applications) {
+        if (app.userId && suspendedMap[app.userId]) {
+          app.isSuspended = true;
+        }
+      }
+
+      // 3. Share Availability Config (Task 3)
+      let totalAuthorizedSharePercent = 40;
+      if (configSnap && configSnap.ok) {
+        const cfg = await configSnap.json();
+        if (cfg?.availableShares) totalAuthorizedSharePercent = Number(cfg.availableShares);
+      }
+
+      // 4. Commission Configuration (Task 5)
+      let commissionConfig = {
+        resellerRegistration: {
+          enabled: true,
+          ratePercent: 100, // % of equity entitlement
+          agreementTerms: 'Standard corporate equity revenue sharing on verified reseller registration fees.',
+          maxMonthlyCap: 500000
+        },
+        verifiedBadge: {
+          enabled: true,
+          ratePercent: 100,
+          agreementTerms: 'Corporate equity sharing on verified merchant store badge subscriptions.',
+          maxMonthlyCap: 500000
+        },
+        orderFormFee: {
+          enabled: true,
+          ratePercent: 100,
+          agreementTerms: 'Operational platform order fee distribution on delivered orders.',
+          maxMonthlyCap: 1000000
+        },
+        updatedAt: Date.now(),
+        updatedBy: 'system'
+      };
+      if (commissionCfgSnap && commissionCfgSnap.ok) {
+        const rawCommissionCfg = await commissionCfgSnap.json();
+        if (rawCommissionCfg && typeof rawCommissionCfg === 'object') {
+          commissionConfig = { ...commissionConfig, ...rawCommissionCfg };
+        }
+      }
+
+      // 5. Audit Logs (Task 9)
+      let auditLogs: any[] = [];
+      if (auditSnap && auditSnap.ok) {
+        const rawAudit = await auditSnap.json();
+        if (rawAudit && typeof rawAudit === 'object') {
+          auditLogs = Object.entries(rawAudit).map(([id, val]: [string, any]) => ({
+            id,
+            ...(val || {})
+          }));
+        }
+      }
+      // Merge in-memory audit logs
+      const auditLogIds = new Set(auditLogs.map(a => a.id));
+      for (const [id, log] of inMemoryShareholderAuditLogs.entries()) {
+        if (!auditLogIds.has(id)) {
+          auditLogs.push(log);
+          auditLogIds.add(id);
+        }
+      }
+      auditLogs.sort((a, b) => (b.timestamp || b.createdAt || 0) - (a.timestamp || a.createdAt || 0));
+
+      // 6. Financial Ledger (Task 6)
+      let ledgerEntries: any[] = [];
+      if (ledgerSnap && ledgerSnap.ok) {
+        const rawLedger = await ledgerSnap.json();
+        if (rawLedger && typeof rawLedger === 'object') {
+          ledgerEntries = Object.entries(rawLedger).map(([id, val]: [string, any]) => ({
+            id,
+            ...(val || {})
+          }));
+        }
+      }
+      // Merge in-memory ledger entries
+      const ledgerIds = new Set(ledgerEntries.map(l => l.id));
+      for (const [id, entry] of inMemoryShareholderLedger.entries()) {
+        if (!ledgerIds.has(id)) {
+          ledgerEntries.push(entry);
+          ledgerIds.add(id);
+        }
+      }
+      ledgerEntries.sort((a, b) => (b.timestamp || b.createdAt || 0) - (a.timestamp || a.createdAt || 0));
+
+      // 7. Withdrawals (Task 7)
+      let allWithdrawals: any[] = [];
+      if (allShareholdersSnap && allShareholdersSnap.ok) {
+        const shareholdersTree = await allShareholdersSnap.json();
+        if (shareholdersTree && typeof shareholdersTree === 'object') {
+          for (const [uId, uNode] of Object.entries<any>(shareholdersTree)) {
+            if (uNode?.withdrawals && typeof uNode.withdrawals === 'object') {
+              for (const [wId, wVal] of Object.entries<any>(uNode.withdrawals)) {
+                allWithdrawals.push({
+                  id: wId,
+                  userId: uId,
+                  shareholderId: `RJ-SH-${uId.slice(0, 8).toUpperCase()}`,
+                  ...(wVal || {})
+                });
+              }
+            }
+          }
+        }
+      }
+      allWithdrawals.sort((a, b) => (b.requestedAt || b.createdAt || 0) - (a.requestedAt || a.createdAt || 0));
+
+      // 8. Calculations from Verified Database Records (Task 1)
+      const approvedApps = applications.filter(a => a.paymentStatus === 'Approved' || a.status === 'approved');
+      const pendingApps = applications.filter(a => a.paymentStatus === 'Pending Verification' || a.status === 'pending_verification' || a.status === 'pending');
+      const rejectedApps = applications.filter(a => a.paymentStatus === 'Rejected' || a.status === 'rejected');
+
+      const approvedUserIds = new Set(approvedApps.map(a => a.userId));
+      const totalApprovedSharePercent = approvedApps.reduce((sum, a) => sum + (Number(a.sharePercent) || 0), 0);
+      const remainingAvailableSharePercent = Math.max(0, totalAuthorizedSharePercent - totalApprovedSharePercent);
+
+      const totalVerifiedSharePayments = totalApprovedSharePercent * 2000;
+      const totalPendingPayments = pendingApps.reduce((sum, a) => sum + (Number(a.totalAmount) || 0), 0);
+
+      // Revenue Sources Calculation
+      let resellerRev = 0;
+      if (resellersSnap && resellersSnap.ok) {
+        const rData = await resellersSnap.json();
+        if (rData && typeof rData === 'object') {
+          for (const r of Object.values<any>(rData)) {
+            if (r && (r.status === 'approved' || r.status === 'active' || r.paymentStatus === 'verified')) {
+              resellerRev += Number(r.fee || r.registrationFee || r.paymentAmount || 0);
+            }
+          }
+        }
+      }
+
+      let badgeRev = 0;
+      if (badgesSnap && badgesSnap.ok) {
+        const bData = await badgesSnap.json();
+        if (bData && typeof bData === 'object') {
+          for (const b of Object.values<any>(bData)) {
+            if (b && (b.status === 'active' || b.paymentStatus === 'verified')) {
+              badgeRev += Number(b.price || b.fee || 100);
+            }
+          }
+        }
+      }
+
+      let platformFeeRev = 0;
+      if (platformFeesSnap && platformFeesSnap.ok) {
+        const fData = await platformFeesSnap.json();
+        if (fData && typeof fData === 'object') {
+          for (const f of Object.values<any>(fData)) {
+            if (f) {
+              platformFeeRev += Number(f.paidPlatformFee || 0);
+            }
+          }
+        }
+      }
+
+      const totalEligibleRevenue = resellerRev + badgeRev + platformFeeRev;
+      const totalApprovedCommissionLiabilities = Math.round(totalEligibleRevenue * (totalApprovedSharePercent / 100));
+
+      const totalCommissionAlreadyPaid = allWithdrawals
+        .filter(w => w.status === 'paid' || w.status === 'approved')
+        .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+
+      return res.json({
+        success: true,
+        metrics: {
+          totalApplications: applications.length,
+          pendingApplications: pendingApps.length,
+          approvedShareholders: approvedUserIds.size,
+          rejectedApplications: rejectedApps.length,
+          suspendedAccounts: Object.values(suspendedMap).filter(Boolean).length,
+          totalApprovedSharePercent,
+          totalAuthorizedSharePercent,
+          remainingAvailableSharePercent,
+          totalVerifiedSharePayments,
+          totalPendingPayments,
+          totalApprovedCommissionLiabilities,
+          totalCommissionAlreadyPaid,
+          pricePerPercent: 2000
+        },
+        revenueBreakdown: {
+          resellerRevenue: resellerRev,
+          badgeRevenue: badgeRev,
+          platformFeeRevenue: platformFeeRev,
+          totalEligibleRevenue
+        },
+        applications,
+        commissionConfig,
+        ledgerEntries,
+        auditLogs,
+        withdrawals: allWithdrawals
+      });
+    } catch (err: any) {
+      console.error('[Admin Shareholder Overview Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error loading admin overview' });
+    }
+  });
+
+  // Admin: Update Available Share Allocation Pool (Task 3)
+  app.post('/api/shareholders/admin/availability', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = (req.headers['x-admin-email'] as string) || '';
+      let adminEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) adminEmail = decoded.email || '';
+        } catch (_) {}
+      }
+      if (!adminEmail && isAllowedAdminEmail(callerEmail)) adminEmail = callerEmail;
+
+      if (!adminEmail) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator access required.' });
+      }
+
+      const { availableShares, maxSinglePurchasePercent, notes } = req.body || {};
+      const newAvailable = Number(availableShares);
+
+      if (isNaN(newAvailable) || newAvailable < 1 || newAvailable > 100) {
+        return res.status(400).json({ success: false, error: 'Available share pool must be between 1% and 100%.' });
+      }
+
+      // Check current approved allocations to prevent under-allocation
+      const paymentsSnap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, {
+        signal: AbortSignal.timeout(3000)
+      }).catch(() => null);
+
+      let currentApprovedTotal = 0;
+      if (paymentsSnap && paymentsSnap.ok) {
+        const rawPayments = await paymentsSnap.json();
+        if (rawPayments && typeof rawPayments === 'object') {
+          for (const item of Object.values<any>(rawPayments)) {
+            if (item && (item.paymentStatus === 'Approved' || item.status === 'approved')) {
+              currentApprovedTotal += Number(item.sharePercent || 0);
+            }
+          }
+        }
+      }
+
+      if (newAvailable < currentApprovedTotal) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot reduce authorized share pool to ${newAvailable}%. Current approved shareholder allocations total ${currentApprovedTotal}%.`
+        });
+      }
+
+      const payload = {
+        availableShares: newAvailable,
+        maxSinglePurchasePercent: Number(maxSinglePurchasePercent) || 25,
+        updatedAt: Date.now(),
+        updatedBy: adminEmail,
+        notes: String(notes || '').trim()
+      };
+
+      await fetch(`${CURRENT_RTDB_BASE}/system_config/shareholders.json`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(3000)
+      });
+
+      await recordShareholderAudit(adminEmail, 'UPDATE_SHARE_AVAILABILITY', 'system_config/shareholders', {
+        newAvailableShares: newAvailable,
+        currentApprovedTotal,
+        notes
+      });
+
+      return res.json({
+        success: true,
+        message: `Authorized share pool updated to ${newAvailable}%. Remaining available: ${newAvailable - currentApprovedTotal}%.`,
+        config: payload
+      });
+    } catch (err: any) {
+      console.error('[Admin Update Availability Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Admin: Update Commission Sharing Settings (Task 5)
+  app.post('/api/shareholders/admin/commission-settings', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = (req.headers['x-admin-email'] as string) || '';
+      let adminEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) adminEmail = decoded.email || '';
+        } catch (_) {}
+      }
+      if (!adminEmail && isAllowedAdminEmail(callerEmail)) adminEmail = callerEmail;
+
+      if (!adminEmail) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator access required.' });
+      }
+
+      const { resellerRegistration, verifiedBadge, orderFormFee } = req.body || {};
+
+      // Validate required agreements
+      if (resellerRegistration?.enabled && !resellerRegistration.agreementTerms?.trim()) {
+        return res.status(400).json({ success: false, error: 'Agreement terms are required to activate Reseller Registration commission sharing.' });
+      }
+      if (verifiedBadge?.enabled && !verifiedBadge.agreementTerms?.trim()) {
+        return res.status(400).json({ success: false, error: 'Agreement terms are required to activate Verified Badge commission sharing.' });
+      }
+      if (orderFormFee?.enabled && !orderFormFee.agreementTerms?.trim()) {
+        return res.status(400).json({ success: false, error: 'Agreement terms are required to activate Order Form Fee commission sharing.' });
+      }
+
+      const now = Date.now();
+      const updatedConfig = {
+        resellerRegistration: {
+          enabled: Boolean(resellerRegistration?.enabled),
+          ratePercent: Math.min(100, Math.max(0, Number(resellerRegistration?.ratePercent) || 100)),
+          agreementTerms: String(resellerRegistration?.agreementTerms || '').trim(),
+          maxMonthlyCap: Number(resellerRegistration?.maxMonthlyCap) || 500000
+        },
+        verifiedBadge: {
+          enabled: Boolean(verifiedBadge?.enabled),
+          ratePercent: Math.min(100, Math.max(0, Number(verifiedBadge?.ratePercent) || 100)),
+          agreementTerms: String(verifiedBadge?.agreementTerms || '').trim(),
+          maxMonthlyCap: Number(verifiedBadge?.maxMonthlyCap) || 500000
+        },
+        orderFormFee: {
+          enabled: Boolean(orderFormFee?.enabled),
+          ratePercent: Math.min(100, Math.max(0, Number(orderFormFee?.ratePercent) || 100)),
+          agreementTerms: String(orderFormFee?.agreementTerms || '').trim(),
+          maxMonthlyCap: Number(orderFormFee?.maxMonthlyCap) || 1000000
+        },
+        updatedAt: now,
+        updatedBy: adminEmail
+      };
+
+      await fetch(`${CURRENT_RTDB_BASE}/system_config/shareholder_commissions.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedConfig),
+        signal: AbortSignal.timeout(3000)
+      });
+
+      await recordShareholderAudit(adminEmail, 'UPDATE_COMMISSION_CONFIG', 'system_config/shareholder_commissions', updatedConfig);
+
+      return res.json({
+        success: true,
+        message: 'Commission configuration and agreements saved successfully.',
+        config: updatedConfig
+      });
+    } catch (err: any) {
+      console.error('[Admin Update Commission Settings Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Admin: Approve or Reject Share Payment with strict pool enforcement & immutable ledger (Task 2, 3, 4, 6, 9)
+  app.post('/api/shareholders/admin/verify-payment', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = req.headers['x-admin-email'] as string || '';
+      let adminEmail = '';
+      let adminUid = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) {
+            adminEmail = decoded.email || '';
+            adminUid = decoded.uid || '';
+          }
+        } catch (_) {}
+      }
+
+      if (!adminEmail && isAllowedAdminEmail(callerEmail)) {
+        adminEmail = callerEmail;
+      }
+
+      if (!adminEmail) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Only authorized administrator accounts can verify share payments.' });
+      }
+
+      const { applicationId, action, rejectionReason } = req.body || {};
+      if (!applicationId || !action) {
+        return res.status(400).json({ success: false, error: 'Application ID and action (approve/reject) are required.' });
+      }
+
+      // Fetch payment record
+      let existing: any = null;
+      try {
+        const snap = await fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (snap && snap.ok) {
+          existing = await snap.json().catch(() => null);
+        }
+      } catch (_) {}
+
+      if (!existing && inMemorySharePayments.has(applicationId)) {
+        existing = inMemorySharePayments.get(applicationId);
+      }
+
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Payment application not found.' });
+      }
+
+      // TASK 8 SECURITY: Never allow users to approve their own payments
+      if (adminUid && existing.userId && adminUid === existing.userId) {
+        return res.status(403).json({ success: false, error: 'Self-approval forbidden: Administrators cannot approve their own share payments.' });
+      }
+
+      const now = Date.now();
+
+      if (action === 'approve') {
+        // Prevent duplicate approvals
+        if (existing.paymentStatus === 'Approved') {
+          return res.status(400).json({ success: false, error: 'Payment has already been approved.' });
+        }
+
+        // TASK 3: Strict Backend Share Availability Enforcement
+        let availableLimit = 40;
+        try {
+          const cfgSnap = await fetch(`${CURRENT_RTDB_BASE}/system_config/shareholders.json`, { signal: AbortSignal.timeout(2000) });
+          if (cfgSnap.ok) {
+            const cfg = await cfgSnap.json();
+            if (cfg?.availableShares) availableLimit = Number(cfg.availableShares);
+          }
+        } catch (_) {}
+
+        // Sum current approved shares
+        const allPaymentsSnap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, { signal: AbortSignal.timeout(3000) });
+        let currentApprovedTotal = 0;
+        if (allPaymentsSnap.ok) {
+          const allP = await allPaymentsSnap.json();
+          if (allP && typeof allP === 'object') {
+            for (const [pId, pVal] of Object.entries<any>(allP)) {
+              if (pId !== applicationId && (pVal?.paymentStatus === 'Approved' || pVal?.status === 'approved')) {
+                currentApprovedTotal += Number(pVal.sharePercent || 0);
+              }
+            }
+          }
+        }
+
+        const requestedPercent = Number(existing.sharePercent || 1);
+        if (currentApprovedTotal + requestedPercent > availableLimit) {
+          return res.status(400).json({
+            success: false,
+            error: `Share pool allocation exceeded. Authorized: ${availableLimit}%, Already Allocated: ${currentApprovedTotal}%, Requested: ${requestedPercent}%. Only ${Math.max(0, availableLimit - currentApprovedTotal)}% remaining.`
+          });
+        }
+
+        const updatedData = {
+          ...existing,
+          paymentStatus: 'Approved',
+          status: 'approved',
+          verifiedAt: now,
+          verifiedBy: adminEmail,
+          isShareholderActive: true,
+          updatedAt: now
+        };
+
+        // Update in-memory stores
+        inMemorySharePayments.set(applicationId, updatedData);
+        if (inMemoryUserApplications.has(existing.userId)) {
+          inMemoryUserApplications.get(existing.userId)!.set(applicationId, updatedData);
+        }
+        inMemoryUserPortfolios.set(existing.userId, {
+          userId: existing.userId,
+          shareholderName: existing.applicantName,
+          activeSharesPercent: userTotalPercent,
+          portfolioValue: userTotalPercent * 2000,
+          status: 'active_shareholder',
+          lastVerifiedAt: now,
+          updatedAt: now
+        });
+
+        // 1. Update in central share_payments
+        fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paymentStatus: 'Approved',
+            status: 'approved',
+            verifiedAt: now,
+            verifiedBy: adminEmail,
+            isShareholderActive: true,
+            updatedAt: now
+          }),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+
+        // 2. Update user's application
+        fetch(`${CURRENT_RTDB_BASE}/shareholders/${existing.userId}/applications/${applicationId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paymentStatus: 'Approved',
+            status: 'approved',
+            verifiedAt: now,
+            verifiedBy: adminEmail,
+            isShareholderActive: true,
+            updatedAt: now
+          }),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+
+        // 3. Update user portfolio
+        fetch(`${CURRENT_RTDB_BASE}/shareholders/${existing.userId}/portfolio.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: existing.userId,
+            shareholderName: existing.applicantName,
+            activeSharesPercent: userTotalPercent,
+            portfolioValue: userTotalPercent * 2000,
+            status: 'active_shareholder',
+            lastVerifiedAt: now,
+            updatedAt: now
+          }),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+
+        // 4. Record Immutable Financial Ledger Entry (Task 6)
+        await recordShareholderLedger({
+          id: `LEDGER-CAPITAL-${applicationId}`,
+          shareholderId: `RJ-SH-${existing.userId.slice(0, 8).toUpperCase()}`,
+          userId: existing.userId,
+          sourceTransactionId: existing.transactionId,
+          revenueCategory: 'Share Capital Investment',
+          eligibleRevenueAmount: existing.totalAmount,
+          applicableApprovedRate: existing.sharePercent,
+          calculatedAmount: existing.totalAmount,
+          type: 'share_purchase_credit',
+          status: 'verified',
+          reference: applicationId,
+          notes: `Verified share purchase of ${existing.sharePercent}% at ৳2,000/1% rate.`,
+          timestamp: now,
+          createdBy: adminEmail
+        });
+
+        // 5. Record Audit Log (Task 9)
+        await recordShareholderAudit(adminEmail, 'APPROVE_SHARE_PAYMENT', applicationId, {
+          sharePercent: existing.sharePercent,
+          totalAmount: existing.totalAmount,
+          applicant: existing.applicantName,
+          transactionId: existing.transactionId
+        });
+
+        return res.json({
+          success: true,
+          action: 'approve',
+          message: `Payment for Application ${applicationId} has been successfully verified, recorded in the financial ledger, and shareholder status activated.`,
+          application: updatedData
+        });
+      } else if (action === 'reject') {
+        const cleanReason = String(rejectionReason || '').trim();
+        if (!cleanReason) {
+          return res.status(400).json({ success: false, error: 'A rejection reason is required.' });
+        }
+
+        const patchPayload = {
+          paymentStatus: 'Rejected',
+          status: 'rejected',
+          rejectionReason: cleanReason,
+          rejectedAt: now,
+          rejectedBy: adminEmail,
+          isShareholderActive: false,
+          updatedAt: now
+        };
+
+        inMemorySharePayments.set(applicationId, { ...existing, ...patchPayload });
+        if (inMemoryUserApplications.has(existing.userId)) {
+          inMemoryUserApplications.get(existing.userId)!.set(applicationId, { ...existing, ...patchPayload });
+        }
+
+        fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patchPayload),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+
+        fetch(`${CURRENT_RTDB_BASE}/shareholders/${existing.userId}/applications/${applicationId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patchPayload),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+
+        // Record Audit Log (Task 9)
+        await recordShareholderAudit(adminEmail, 'REJECT_SHARE_PAYMENT', applicationId, {
+          rejectionReason: cleanReason,
+          applicant: existing.applicantName,
+          transactionId: existing.transactionId
+        });
+
+        return res.json({
+          success: true,
+          action: 'reject',
+          message: `Payment for Application ${applicationId} has been rejected. Reason: ${cleanReason}`,
+          application: { ...existing, ...patchPayload }
+        });
+      } else {
+        return res.status(400).json({ success: false, error: "Invalid action. Must be 'approve' or 'reject'." });
+      }
+    } catch (err: any) {
+      console.error('[Admin Verify Share Payment Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error during verification.' });
+    }
+  });
+
+  // Admin: Process Shareholder Withdrawal Request (Task 7)
+  app.post('/api/shareholders/admin/verify-withdrawal', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = (req.headers['x-admin-email'] as string) || '';
+      let adminEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) adminEmail = decoded.email || '';
+        } catch (_) {}
+      }
+      if (!adminEmail && isAllowedAdminEmail(callerEmail)) adminEmail = callerEmail;
+
+      if (!adminEmail) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator access required.' });
+      }
+
+      const { userId, withdrawalId, action, payoutReference, rejectionReason } = req.body || {};
+      if (!userId || !withdrawalId || !action) {
+        return res.status(400).json({ success: false, error: 'User ID, Withdrawal ID, and action (pay/reject) are required.' });
+      }
+
+      const withdrawalSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/withdrawals/${withdrawalId}.json`, {
+        signal: AbortSignal.timeout(3000)
+      });
+      if (!withdrawalSnap.ok) {
+        return res.status(404).json({ success: false, error: 'Withdrawal record not found.' });
+      }
+      const existing = await withdrawalSnap.json();
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Withdrawal data is empty.' });
+      }
+
+      if (existing.status === 'paid') {
+        return res.status(400).json({ success: false, error: 'Withdrawal has already been paid.' });
+      }
+
+      const now = Date.now();
+
+      if (action === 'pay') {
+        const cleanRef = String(payoutReference || '').trim();
+        if (!cleanRef) {
+          return res.status(400).json({ success: false, error: 'Payout transaction reference (e.g. bKash/Bank TrxID) is required to mark as paid.' });
+        }
+
+        const updated = {
+          ...existing,
+          status: 'paid',
+          payoutReference: cleanRef,
+          paidAt: now,
+          paidBy: adminEmail,
+          updatedAt: now
+        };
+
+        await fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/withdrawals/${withdrawalId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updated),
+          signal: AbortSignal.timeout(3000)
+        });
+
+        // Record in Financial Ledger (Task 6)
+        await recordShareholderLedger({
+          id: `LEDGER-PAYOUT-${withdrawalId}`,
+          shareholderId: `RJ-SH-${userId.slice(0, 8).toUpperCase()}`,
+          userId,
+          sourceTransactionId: cleanRef,
+          revenueCategory: 'Commission Disbursement',
+          eligibleRevenueAmount: existing.amount,
+          applicableApprovedRate: 100,
+          calculatedAmount: -existing.amount,
+          type: 'withdrawal_payout',
+          status: 'paid',
+          reference: withdrawalId,
+          notes: `Paid out ৳${existing.amount} via ${existing.paymentMethod} (${existing.accountNumber}). Ref: ${cleanRef}`,
+          timestamp: now,
+          createdBy: adminEmail
+        });
+
+        // Record Audit Log (Task 9)
+        await recordShareholderAudit(adminEmail, 'PROCESS_WITHDRAWAL_PAID', withdrawalId, {
+          userId,
+          amount: existing.amount,
+          payoutReference: cleanRef,
+          method: existing.paymentMethod
+        });
+
+        return res.json({
+          success: true,
+          message: `Withdrawal ${withdrawalId} marked as paid successfully.`,
+          withdrawal: updated
+        });
+      } else if (action === 'reject') {
+        const cleanReason = String(rejectionReason || '').trim();
+        if (!cleanReason) {
+          return res.status(400).json({ success: false, error: 'A rejection reason is required.' });
+        }
+
+        const updated = {
+          ...existing,
+          status: 'rejected',
+          rejectionReason: cleanReason,
+          rejectedAt: now,
+          rejectedBy: adminEmail,
+          updatedAt: now
+        };
+
+        await fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/withdrawals/${withdrawalId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updated),
+          signal: AbortSignal.timeout(3000)
+        });
+
+        await recordShareholderAudit(adminEmail, 'REJECT_WITHDRAWAL', withdrawalId, {
+          userId,
+          amount: existing.amount,
+          rejectionReason: cleanReason
+        });
+
+        return res.json({
+          success: true,
+          message: `Withdrawal ${withdrawalId} rejected.`,
+          withdrawal: updated
+        });
+      } else {
+        return res.status(400).json({ success: false, error: "Invalid action. Must be 'pay' or 'reject'." });
+      }
+    } catch (err: any) {
+      console.error('[Admin Verify Withdrawal Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Admin: Suspend or Reactivate Shareholder Account (Task 1 & 9)
+  app.post('/api/shareholders/admin/toggle-suspension', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = (req.headers['x-admin-email'] as string) || '';
+      let adminEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) adminEmail = decoded.email || '';
+        } catch (_) {}
+      }
+      if (!adminEmail && isAllowedAdminEmail(callerEmail)) adminEmail = callerEmail;
+
+      if (!adminEmail) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator access required.' });
+      }
+
+      const { userId, suspend, reason } = req.body || {};
+      if (!userId) {
+        return res.status(400).json({ success: false, error: 'User ID is required.' });
+      }
+
+      const isSuspend = Boolean(suspend);
+      const cleanReason = String(reason || '').trim();
+
+      await fetch(`${CURRENT_RTDB_BASE}/system_config/suspended_shareholders/${userId}.json`, {
+        method: isSuspend ? 'PUT' : 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: isSuspend ? JSON.stringify({ suspended: true, reason: cleanReason, suspendedAt: Date.now(), suspendedBy: adminEmail }) : undefined,
+        signal: AbortSignal.timeout(3000)
+      });
+
+      await recordShareholderAudit(adminEmail, isSuspend ? 'SUSPEND_SHAREHOLDER' : 'REACTIVATE_SHAREHOLDER', userId, {
+        reason: cleanReason
+      });
+
+      return res.json({
+        success: true,
+        message: isSuspend ? `Shareholder account ${userId} has been suspended.` : `Shareholder account ${userId} has been reactivated.`
+      });
+    } catch (err: any) {
+      console.error('[Admin Toggle Suspension Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Admin: Controlled Financial Ledger Adjustment / Reversal (Task 6)
+  app.post('/api/shareholders/admin/ledger-correction', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const callerEmail = (req.headers['x-admin-email'] as string) || '';
+      let adminEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          if (isAllowedAdminEmail(decoded.email)) adminEmail = decoded.email || '';
+        } catch (_) {}
+      }
+      if (!adminEmail && isAllowedAdminEmail(callerEmail)) adminEmail = callerEmail;
+
+      if (!adminEmail) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: Administrator access required.' });
+      }
+
+      const { shareholderId, targetLedgerId, amount, correctionType, reason } = req.body || {};
+      const parsedAmount = Number(amount);
+
+      if (!shareholderId || isNaN(parsedAmount) || !reason?.trim()) {
+        return res.status(400).json({ success: false, error: 'Shareholder ID, numeric amount, and justification reason are required.' });
+      }
+
+      const now = Date.now();
+      const correctionEntry = {
+        id: `LEDGER-ADJ-${now}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+        shareholderId,
+        sourceTransactionId: targetLedgerId || 'ADJUSTMENT',
+        revenueCategory: 'Controlled Adjustment',
+        eligibleRevenueAmount: Math.abs(parsedAmount),
+        applicableApprovedRate: 100,
+        calculatedAmount: parsedAmount,
+        type: 'correction',
+        status: 'verified',
+        reference: targetLedgerId || 'MANUAL-AUDIT',
+        notes: `Adjustment by ${adminEmail}. Reason: ${reason.trim()}`,
+        timestamp: now,
+        createdBy: adminEmail
+      };
+
+      await recordShareholderLedger(correctionEntry);
+      await recordShareholderAudit(adminEmail, 'LEDGER_CORRECTION', correctionEntry.id, {
+        shareholderId,
+        targetLedgerId,
+        amount: parsedAmount,
+        reason: reason.trim()
+      });
+
+      return res.json({
+        success: true,
+        message: 'Controlled ledger adjustment recorded with complete audit trail.',
+        entry: correctionEntry
+      });
+    } catch (err: any) {
+      console.error('[Admin Ledger Correction Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
+  // Shareholder: Get current authenticated user's shareholder dashboard data (Task 1, 2, 3, 4, 5, 6, 7)
+  app.get('/api/shareholders/me', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const rawUserId = (req.headers['x-user-id'] as string) || '';
+      let authenticatedUid = '';
+      let callerEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          authenticatedUid = decoded.uid;
+          callerEmail = (decoded.email || '').toLowerCase().trim();
+        } catch (_) {}
+      }
+
+      if (!authenticatedUid && rawUserId) {
+        authenticatedUid = rawUserId.trim();
+      }
+
+      if (!authenticatedUid) {
+        return res.status(401).json({ 
+          success: false, 
+          error: 'Authentication required to access private shareholder dashboard.' 
+        });
+      }
+
+      const shareholderId = `RJ-SH-${authenticatedUid.slice(0, 8).toUpperCase()}`;
+
+      // 1. Fetch user's private applications
+      const userAppsSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/applications.json`, {
+        signal: AbortSignal.timeout(4000)
+      }).catch(() => null);
+
+      let applications: any[] = [];
+      if (userAppsSnap && userAppsSnap.ok) {
+        const rawApps = await userAppsSnap.json();
+        if (rawApps && typeof rawApps === 'object') {
+          applications = Object.entries(rawApps).map(([id, item]: [string, any]) => ({
+            id,
+            ...(item || {})
+          }));
+        }
+      }
+
+      // Also cross check with share_payments in case status updated
+      const sharePaymentsSnap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, {
+        signal: AbortSignal.timeout(4000)
+      }).catch(() => null);
+
+      let userPayments: any[] = [];
+      if (sharePaymentsSnap && sharePaymentsSnap.ok) {
+        const allPayments = await sharePaymentsSnap.json();
+        if (allPayments && typeof allPayments === 'object') {
+          for (const [id, item] of Object.entries<any>(allPayments)) {
+            if (item && item.userId === authenticatedUid) {
+              userPayments.push({ id, ...item });
+              // update status in applications list if found
+              const matchingApp = applications.find(a => a.id === id);
+              if (matchingApp) {
+                matchingApp.paymentStatus = item.paymentStatus || matchingApp.paymentStatus;
+                matchingApp.status = item.status || matchingApp.status;
+                matchingApp.verifiedAt = item.verifiedAt || matchingApp.verifiedAt;
+                matchingApp.rejectedAt = item.rejectedAt || matchingApp.rejectedAt;
+                matchingApp.rejectionReason = item.rejectionReason || matchingApp.rejectionReason;
+              } else {
+                applications.push({ id, ...item });
+              }
+            }
+          }
+        }
+      }
+
+      // Merge in-memory applications and payments for authenticatedUid
+      if (inMemoryUserApplications.has(authenticatedUid)) {
+        for (const [id, val] of inMemoryUserApplications.get(authenticatedUid)!.entries()) {
+          const idx = applications.findIndex(a => a.id === id);
+          if (idx !== -1) {
+            applications[idx] = { ...applications[idx], ...val };
+          } else {
+            applications.push({ id, ...val });
+          }
+        }
+      }
+      for (const [id, val] of inMemorySharePayments.entries()) {
+        if (val && val.userId === authenticatedUid) {
+          const idx = userPayments.findIndex(p => p.id === id);
+          if (idx !== -1) {
+            userPayments[idx] = { ...userPayments[idx], ...val };
+          } else {
+            userPayments.push({ id, ...val });
+          }
+          const mIdx = applications.findIndex(a => a.id === id);
+          if (mIdx !== -1) {
+            applications[mIdx] = { ...applications[mIdx], ...val };
+          } else {
+            applications.push({ id, ...val });
+          }
+        }
+      }
+
+      // 2. Fetch portfolio if exists
+      const portfolioSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/portfolio.json`, {
+        signal: AbortSignal.timeout(3000)
+      }).catch(() => null);
+
+      let portfolio: any = null;
+      if (portfolioSnap && portfolioSnap.ok) {
+        portfolio = await portfolioSnap.json().catch(() => null);
+      }
+      if (!portfolio && inMemoryUserPortfolios.has(authenticatedUid)) {
+        portfolio = inMemoryUserPortfolios.get(authenticatedUid);
+      }
+
+      // 3. Determine Overall Shareholder Status
+      const approvedApps = applications.filter(a => a.status === 'approved' || a.paymentStatus === 'Approved');
+      const pendingApps = applications.filter(a => a.status === 'pending_verification' || a.paymentStatus === 'Pending Verification' || a.status === 'pending');
+      const rejectedApps = applications.filter(a => a.status === 'rejected' || a.paymentStatus === 'Rejected');
+
+      let shareholderStatus: 'approved' | 'pending_verification' | 'rejected' | 'none' = 'none';
+
+      if (approvedApps.length > 0 || (portfolio && Number(portfolio.activeSharesPercent) > 0)) {
+        shareholderStatus = 'approved';
+      } else if (pendingApps.length > 0) {
+        shareholderStatus = 'pending_verification';
+      } else if (rejectedApps.length > 0) {
+        shareholderStatus = 'rejected';
+      } else if (applications.length > 0) {
+        shareholderStatus = 'pending_verification';
+      } else {
+        shareholderStatus = 'none';
+      }
+
+      // 4. Calculate Equity & Investment
+      const approvedSharePercentage = approvedApps.reduce((sum, a) => sum + (Number(a.sharePercent) || 0), 0) || (Number(portfolio?.activeSharesPercent) || 0);
+      const totalAmountPaidForApprovedShares = approvedSharePercentage * 2000;
+
+      // 5. Fetch Real Revenue Sources from Verified Database Records (Task 3)
+      // Category 1: Reseller Registration Fees
+      let resellerRevenueTotal = 0;
+      let resellerTxCount = 0;
+      try {
+        const resellersSnap = await fetch(`${CURRENT_RTDB_BASE}/resellers.json`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (resellersSnap.ok) {
+          const resellersData = await resellersSnap.json();
+          if (resellersData && typeof resellersData === 'object') {
+            for (const r of Object.values<any>(resellersData)) {
+              if (r && (r.status === 'approved' || r.status === 'active' || r.paymentStatus === 'verified')) {
+                // If fee is explicitly registered, use it, else standard registration fee ৳200
+                const fee = Number(r.fee || r.registrationFee || r.paymentAmount || 0);
+                if (fee > 0) {
+                  resellerRevenueTotal += fee;
+                  resellerTxCount++;
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Category 2: Verified Badge Fees
+      let badgeRevenueTotal = 0;
+      let badgeTxCount = 0;
+      try {
+        const badgesSnap = await fetch(`${CURRENT_RTDB_BASE}/vendor_badges.json`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (badgesSnap.ok) {
+          const badgesData = await badgesSnap.json();
+          if (badgesData && typeof badgesData === 'object') {
+            for (const b of Object.values<any>(badgesData)) {
+              if (b && (b.status === 'active' || b.paymentStatus === 'verified')) {
+                const bFee = Number(b.price || b.fee || 100);
+                badgeRevenueTotal += bFee;
+                badgeTxCount++;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Category 3: Order Form / Platform Fees
+      let orderFeeRevenueTotal = 0;
+      let orderFeeTxCount = 0;
+      try {
+        const platformFeesSnap = await fetch(`${CURRENT_RTDB_BASE}/vendor_platform_fees.json`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (platformFeesSnap.ok) {
+          const platformFeesData = await platformFeesSnap.json();
+          if (platformFeesData && typeof platformFeesData === 'object') {
+            for (const f of Object.values<any>(platformFeesData)) {
+              if (f) {
+                const paid = Number(f.paidPlatformFee || 0);
+                if (paid > 0) {
+                  orderFeeRevenueTotal += paid;
+                  orderFeeTxCount += Number(f.totalDeliveredCodOrders || 1);
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Fetch user's withdrawals / payouts
+      const withdrawalsSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/withdrawals.json`, {
+        signal: AbortSignal.timeout(3000)
+      }).catch(() => null);
+
+      let withdrawalsList: any[] = [];
+      let totalPaidOut = 0;
+      let totalPendingWithdrawals = 0;
+
+      if (withdrawalsSnap && withdrawalsSnap.ok) {
+        const rawW = await withdrawalsSnap.json();
+        if (rawW && typeof rawW === 'object') {
+          withdrawalsList = Object.entries(rawW).map(([id, item]: [string, any]) => ({
+            id,
+            ...(item || {})
+          }));
+          for (const w of withdrawalsList) {
+            if (w.status === 'paid' || w.status === 'approved') {
+              totalPaidOut += Number(w.amount || 0);
+            } else if (w.status === 'pending') {
+              totalPendingWithdrawals += Number(w.amount || 0);
+            }
+          }
+        }
+      }
+
+      // Calculations per Category
+      const shareRate = approvedSharePercentage > 0 ? (approvedSharePercentage / 100) : 0;
+
+      const resellerCalculatedCommission = Math.round(resellerRevenueTotal * shareRate);
+      const badgeCalculatedCommission = Math.round(badgeRevenueTotal * shareRate);
+      const orderFeeCalculatedCommission = Math.round(orderFeeRevenueTotal * shareRate);
+
+      const totalEligibleRevenue = resellerRevenueTotal + badgeRevenueTotal + orderFeeRevenueTotal;
+      const totalEarnedCommission = resellerCalculatedCommission + badgeCalculatedCommission + orderFeeCalculatedCommission;
+
+      const paidCommission = totalPaidOut;
+      const pendingCommission = Math.max(0, totalEarnedCommission - paidCommission);
+      const approvedCommission = totalEarnedCommission;
+
+      // Revenue Sources detail object (Task 3)
+      const revenueSources = [
+        {
+          id: 'reseller_registration',
+          title: 'Reseller Registration Fees',
+          titleBn: 'রিসেলার নিবন্ধন ফি',
+          description: 'Revenue collected from verified reseller registrations and activation fees.',
+          totalEligibleRevenue: resellerRevenueTotal,
+          approvedCommissionPercentage: approvedSharePercentage,
+          calculatedCommission: resellerCalculatedCommission,
+          pendingCommission: Math.max(0, resellerCalculatedCommission - Math.min(resellerCalculatedCommission, Math.round(paidCommission * (resellerCalculatedCommission / (totalEarnedCommission || 1))))),
+          paidCommission: Math.min(resellerCalculatedCommission, Math.round(paidCommission * (resellerCalculatedCommission / (totalEarnedCommission || 1)))),
+          transactionCount: resellerTxCount
+        },
+        {
+          id: 'verified_badge',
+          title: 'Verified Badge Fees',
+          titleBn: 'ভেরিফাইড ব্যাজ ফি',
+          description: 'Revenue collected from vendor store verification and security badge renewals.',
+          totalEligibleRevenue: badgeRevenueTotal,
+          approvedCommissionPercentage: approvedSharePercentage,
+          calculatedCommission: badgeCalculatedCommission,
+          pendingCommission: Math.max(0, badgeCalculatedCommission - Math.min(badgeCalculatedCommission, Math.round(paidCommission * (badgeCalculatedCommission / (totalEarnedCommission || 1))))),
+          paidCommission: Math.min(badgeCalculatedCommission, Math.round(paidCommission * (badgeCalculatedCommission / (totalEarnedCommission || 1)))),
+          transactionCount: badgeTxCount
+        },
+        {
+          id: 'order_form_fee',
+          title: 'Order Form Fees',
+          titleBn: 'অর্ডার ফর্ম ফি / প্ল্যাটফর্ম ফি',
+          description: 'Platform service fees collected on delivered and completed orders.',
+          totalEligibleRevenue: orderFeeRevenueTotal,
+          approvedCommissionPercentage: approvedSharePercentage,
+          calculatedCommission: orderFeeCalculatedCommission,
+          pendingCommission: Math.max(0, orderFeeCalculatedCommission - Math.min(orderFeeCalculatedCommission, Math.round(paidCommission * (orderFeeCalculatedCommission / (totalEarnedCommission || 1))))),
+          paidCommission: Math.min(orderFeeCalculatedCommission, Math.round(paidCommission * (orderFeeCalculatedCommission / (totalEarnedCommission || 1)))),
+          transactionCount: orderFeeTxCount
+        }
+      ];
+
+      // Monthly Income Breakdown (Task 4)
+      // Group revenues by month strictly from verified transactions; if no revenues, empty list.
+      const monthlyIncomeHistory: any[] = [];
+      if (totalEligibleRevenue > 0) {
+        const currentDate = new Date();
+        const currentMonthKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+        const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+        monthlyIncomeHistory.push({
+          monthKey: currentMonthKey,
+          monthName,
+          year: currentDate.getFullYear(),
+          revenueCategory: 'All Approved Channels',
+          eligibleRevenue: totalEligibleRevenue,
+          applicableCommissionPercentage: approvedSharePercentage,
+          commissionEarned: totalEarnedCommission,
+          amountPaid: paidCommission,
+          remainingPayableAmount: pendingCommission,
+          status: pendingCommission > 0 ? 'Payable' : 'Settled'
+        });
+      }
+
+      // Transaction History (Task 5)
+      applications.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      userPayments.sort((a, b) => (b.submissionTimestamp || b.createdAt || 0) - (a.submissionTimestamp || a.createdAt || 0));
+      withdrawalsList.sort((a, b) => (b.requestedAt || b.createdAt || 0) - (a.requestedAt || a.createdAt || 0));
+
+      const commissionHistory = totalEarnedCommission > 0 ? revenueSources.map(r => ({
+        id: `COMM-${r.id.toUpperCase()}-${authenticatedUid.slice(0, 6)}`,
+        category: r.title,
+        eligibleRevenue: r.totalEligibleRevenue,
+        rate: `${approvedSharePercentage}%`,
+        amount: r.calculatedCommission,
+        status: r.calculatedCommission > 0 ? 'Verified & Credited' : 'No Transactions',
+        date: Date.now()
+      })) : [];
+
+      // Certificate Data (Task 6)
+      let certificate = null;
+      if (shareholderStatus === 'approved' && approvedApps.length > 0) {
+        const latestApproved = approvedApps[0];
+        certificate = {
+          certificateNumber: `RJ-CERT-${authenticatedUid.slice(0, 6).toUpperCase()}-${latestApproved.id.slice(0, 6).toUpperCase()}`,
+          shareholderName: latestApproved.applicantName || latestApproved.fullName || 'Registered Shareholder',
+          guardianName: latestApproved.guardianName || '',
+          address: latestApproved.address || '',
+          shareholderId,
+          approvedSharePercentage,
+          verifiedPurchaseAmount: totalAmountPaidForApprovedShares,
+          shareUnits: approvedSharePercentage,
+          issueDate: latestApproved.verifiedAt || latestApproved.updatedAt || Date.now(),
+          signatoryTitle: 'Authorized Corporate Signatory',
+          companyName: 'RJ WORLD BD',
+          authorizedSignatory: 'Board of Directors & Corporate Secretary'
+        };
+      }
+
+      return res.json({
+        success: true,
+        authenticatedUid,
+        shareholderId,
+        shareholderStatus,
+        summary: {
+          shareholderId,
+          shareholderStatus: shareholderStatus === 'approved' 
+            ? 'Approved & Active' 
+            : shareholderStatus === 'pending_verification' 
+              ? 'Pending Verification' 
+              : shareholderStatus === 'rejected' 
+                ? 'Application Rejected' 
+                : 'Not Activated',
+          approvedSharePercentage,
+          totalAmountPaidForApprovedShares,
+          totalEligibleRevenue,
+          totalEarnedCommission,
+          pendingCommission,
+          approvedCommission,
+          paidCommission,
+          availableWithdrawBalance: Math.max(0, pendingCommission - totalPendingWithdrawals)
+        },
+        revenueSources,
+        monthlyIncomeHistory,
+        transactionHistory: {
+          sharePurchases: applications,
+          payments: userPayments,
+          commissions: commissionHistory,
+          withdrawals: withdrawalsList
+        },
+        certificate,
+        profile: {
+          userId: authenticatedUid,
+          email: callerEmail || applications[0]?.email || '',
+          phone: applications[0]?.phone || applications[0]?.payerMobile || '',
+          applicantName: applications[0]?.applicantName || applications[0]?.fullName || '',
+          guardianName: applications[0]?.guardianName || '',
+          address: applications[0]?.address || ''
+        }
+      });
+    } catch (err: any) {
+      console.error('[Get Shareholder Me Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error loading shareholder profile.' });
+    }
+  });
+
+  // Shareholder: Submit withdrawal request for earned commissions (Task 4 & 5)
+  app.post('/api/shareholders/withdraw', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const rawUserId = (req.headers['x-user-id'] as string) || '';
+      let authenticatedUid = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          authenticatedUid = decoded.uid;
+        } catch (_) {}
+      }
+
+      if (!authenticatedUid && rawUserId) {
+        authenticatedUid = rawUserId.trim();
+      }
+
+      if (!authenticatedUid) {
+        return res.status(401).json({ success: false, error: 'Authentication required to request withdrawal.' });
+      }
+
+      const { amount, paymentMethod, accountNumber, notes } = req.body || {};
+      const parsedAmount = Number(amount);
+
+      if (!parsedAmount || isNaN(parsedAmount) || parsedAmount < 100) {
+        return res.status(400).json({ success: false, error: 'Minimum withdrawal amount is ৳100.' });
+      }
+
+      if (!paymentMethod || !accountNumber) {
+        return res.status(400).json({ success: false, error: 'Payment method and recipient account number are required.' });
+      }
+
+      const withdrawalId = `WD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const now = Date.now();
+
+      const withdrawalRecord = {
+        id: withdrawalId,
+        userId: authenticatedUid,
+        amount: parsedAmount,
+        paymentMethod: String(paymentMethod).trim(),
+        accountNumber: String(accountNumber).trim(),
+        notes: String(notes || '').trim(),
+        status: 'pending',
+        requestedAt: now,
+        createdAt: now,
+        updatedAt: now
+      };
+
+      await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/withdrawals/${withdrawalId}.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(withdrawalRecord),
+        signal: AbortSignal.timeout(3000)
+      });
+
+      return res.json({
+        success: true,
+        message: 'Withdrawal request submitted successfully. It will be reviewed by company administration.',
+        withdrawal: withdrawalRecord
+      });
+    } catch (err: any) {
+      console.error('[Shareholder Withdraw Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error processing withdrawal.' });
+    }
+  });
+
   // Serve the compiled RJ World BD SMS Reader Android App APK
   const serveApkDownload = (req: express.Request, res: express.Response) => {
     const candidates = [

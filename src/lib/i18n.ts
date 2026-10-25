@@ -539,6 +539,7 @@ export const translations = {
     'Blog': 'ব্লগ',
     'Terms of Service': 'ব্যবহারের শর্তাবলী',
     'Privacy Policy': 'গোপনীয়তা নীতি',
+    'Share / Company Share': 'শেয়ার / কোম্পানি শেয়ার',
     'Returns & Exchanges': 'রিটার্ন ও এক্সচেঞ্জ',
     'Shipping Info': 'ডেলিভারি তথ্য',
     'All rights reserved.': 'সর্বস্বত্ব সংরক্ষিত।',

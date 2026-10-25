@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc, getDocs, collection, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
@@ -14,6 +14,7 @@ import { ALLOWED_ADMIN_EMAILS, isAllowedAdminEmail } from '../../constants/admin
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { signInWithGoogle, signInWithGoogleCredential, refreshUserData } = useAuth();
   
   const [emailOrPhone, setEmailOrPhone] = useState('');
@@ -178,8 +179,13 @@ export default function Login() {
       } else if (uData?.role === 'Reseller') {
         navigate('/reseller/dashboard', { replace: true });
       } else {
-        // Standard Customer navigates to homepage
-        navigate('/', { replace: true });
+        // Standard Customer navigates to return destination or homepage
+        const returnUrl = (location.state as any)?.from?.pathname || (location.state as any)?.from || new URLSearchParams(location.search).get('redirect') || new URLSearchParams(location.search).get('from');
+        if (returnUrl && typeof returnUrl === 'string' && returnUrl.startsWith('/')) {
+          navigate(returnUrl, { replace: true });
+        } else {
+          navigate('/', { replace: true });
+        }
       }
     } catch (error: any) {
       handleAuthError(error);
@@ -212,8 +218,10 @@ export default function Login() {
     if (isUserAdmin) {
       navigate('/admin/dashboard', { replace: true });
     } else {
+      const returnUrl = (location.state as any)?.from?.pathname || (location.state as any)?.from || new URLSearchParams(location.search).get('redirect') || new URLSearchParams(location.search).get('from');
+      const fallback = (returnUrl && typeof returnUrl === 'string' && returnUrl.startsWith('/')) ? returnUrl : '/';
       const accountStatus = await checkAccountStatus(loggedUser.email, loggedUser.uid);
-      const destination = getPostLoginRedirect(accountStatus, { isUserAdmin: false, defaultPath: '/' });
+      const destination = getPostLoginRedirect(accountStatus, { isUserAdmin: false, defaultPath: fallback });
       navigate(destination, { replace: true });
     }
   };
