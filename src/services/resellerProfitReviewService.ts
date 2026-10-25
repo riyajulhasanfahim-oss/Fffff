@@ -1208,6 +1208,14 @@ export async function adminApproveResellerProfitReview(
     details: `Profit released by admin ${adminIdentifier}`
   });
 
+  // Record Vendor Platform Fee if order was COD and is now Delivered
+  try {
+    const { recordPlatformFeeOnDelivery } = await import('./platformFeeService');
+    await recordPlatformFeeOnDelivery(cleanOrderId, { ...order, status: 'Delivered' }, vendorId);
+  } catch (feeErr) {
+    console.warn('[RESELLER_PROFIT_RELEASE] Platform fee record notice:', feeErr);
+  }
+
   // 7. Push audit log in RTDB order_status_logs
   try {
     await rtdbPush('order_status_logs', {

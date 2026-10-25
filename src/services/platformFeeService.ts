@@ -111,11 +111,41 @@ export function extractVendorIdsFromOrder(order: any): string[] {
 
 /**
  * Checks if an order payment method is Cash on Delivery (COD)
+ * Handles all formats: 'Cash on Delivery (COD)', 'cash on delivery', 'cod', 'cash', etc.
  */
 export function isCodPayment(paymentMethod?: string): boolean {
   if (!paymentMethod) return false;
-  const pm = paymentMethod.toLowerCase().trim();
-  return pm === 'cod' || pm === 'cash on delivery' || pm === 'cash_on_delivery';
+  const pm = String(paymentMethod).toLowerCase().trim();
+  
+  // Explicit online full payment methods without COD
+  if (
+    pm === 'bkash' || 
+    pm === 'nagad' || 
+    pm === 'rocket' || 
+    pm === 'upay' || 
+    pm === 'wallet' || 
+    pm === 'online' || 
+    pm === 'card' ||
+    pm === 'stripe' ||
+    pm === 'sslcommerz'
+  ) {
+    return false;
+  }
+
+  // Check if string indicates Cash on Delivery or COD
+  if (
+    pm === 'cod' ||
+    pm.includes('cod') ||
+    pm.includes('cash on delivery') ||
+    pm.includes('cash_on_delivery') ||
+    pm.includes('cash') ||
+    pm.includes('delivery charge advance') ||
+    pm.includes('hand cash')
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -123,8 +153,15 @@ export function isCodPayment(paymentMethod?: string): boolean {
  */
 export function isDeliveredStatus(status?: string): boolean {
   if (!status) return false;
-  const s = status.toLowerCase().trim();
-  return s === 'delivered' || s === 'completed';
+  const s = String(status).toLowerCase().trim();
+  return (
+    s === 'delivered' || 
+    s === 'completed' || 
+    s === 'delivery completed' || 
+    s === 'order delivered' ||
+    s.includes('deliver') || 
+    s.includes('complet')
+  );
 }
 
 /**
@@ -132,8 +169,17 @@ export function isDeliveredStatus(status?: string): boolean {
  */
 export function isCancelledOrReturnedStatus(status?: string): boolean {
   if (!status) return false;
-  const s = status.toLowerCase().trim();
-  return s === 'cancelled' || s === 'returned' || s === 'failed' || s === 'rejected';
+  const s = String(status).toLowerCase().trim();
+  return (
+    s === 'cancelled' || 
+    s === 'canceled' || 
+    s === 'returned' || 
+    s === 'failed' || 
+    s === 'rejected' || 
+    s.includes('cancel') || 
+    s.includes('return') || 
+    s.includes('fail')
+  );
 }
 
 /**
@@ -183,18 +229,27 @@ export async function recordPlatformFeeOnDelivery(
       return { success: false, reason: 'No vendor ID associated with this order' };
     }
 
-    const cleanOrderId = finalOrder.orderId || finalOrder.mainOrderId || rawOrderId;
+    let cleanOrderId = String(finalOrder.mainOrderId || finalOrder.orderId || rawOrderId || '').trim().replace(/^#/, '');
+    if (targetVendorId && cleanOrderId.endsWith(`_${targetVendorId}`)) {
+      cleanOrderId = cleanOrderId.slice(0, -(targetVendorId.length + 1));
+    }
+    if (cleanOrderId.includes('_')) {
+      const parts = cleanOrderId.split('_');
+      if (parts[0]) cleanOrderId = parts[0];
+    }
     const recordId = `${targetVendorId}_${cleanOrderId}`;
 
     // 4. DUPLICATE PROTECTION / IDEMPOTENCY CHECK
     const alreadyProcessed = await rtdbGet<any>(`processed_platform_fee_orders/${recordId}`);
     if (alreadyProcessed) {
+      await updateVendorPlatformFeeSummary(targetVendorId).catch(() => {});
       return { success: false, feeRecorded: 0, reason: 'Platform fee already recorded for this order (Idempotency protected).' };
     }
 
     // Check existing record
     const existingRecord = await rtdbGet<PlatformFeeRecord>(`platform_fee_records/${recordId}`);
     if (existingRecord) {
+      await updateVendorPlatformFeeSummary(targetVendorId).catch(() => {});
       return { success: false, feeRecorded: 0, reason: 'Platform fee record already exists.' };
     }
 
@@ -485,26 +540,131 @@ export async function updateVendorPlatformFeeSummary(vendorId: string): Promise<
 }
 
 /**
- * Gets the current platform fee summary for a vendor
+ * Scans delivered COD orders for a specific vendor, backfills any missing fee records,
+ * and recalculates the summary. Ensures self-healing accuracy whenever vendor accesses their fee page.
+ */
+export async function syncPlatformFeesForVendor(vendorId: string): Promise<VendorPlatformFeeSummary> {
+  try {
+    if (!vendorId) {
+      throw new Error('Invalid vendor ID');
+    }
+
+    // 1. Fetch vendor_orders and general orders
+    const [allVendorOrders, allMainOrders] = await Promise.all([
+      rtdbList<any>('vendor_orders').catch(() => []),
+      rtdbList<any>('orders').catch(() => [])
+    ]);
+
+    // 2. Identify delivered COD orders for this vendor
+    const eligibleOrders = new Map<string, any>(); // cleanOrderId -> orderData
+
+    for (const { id, data } of allVendorOrders) {
+      if (!data) continue;
+      const vIds = extractVendorIdsFromOrder(data);
+      const isMyOrder = data.vendorId === vendorId || 
+                        data.sellerId === vendorId || 
+                        id.endsWith(`_${vendorId}`) || 
+                        vIds.includes(vendorId);
+
+      if (!isMyOrder) continue;
+
+      const pm = data.paymentMethod || data.payment_method;
+      const st = data.status || data.orderStatus || data.vendorStatus;
+
+      if (isCodPayment(pm) && isDeliveredStatus(st)) {
+        let cleanId = String(data.mainOrderId || data.orderId || id || '').trim().replace(/^#/, '');
+        if (cleanId.endsWith(`_${vendorId}`)) {
+          cleanId = cleanId.slice(0, -(vendorId.length + 1));
+        }
+        if (cleanId.includes('_')) {
+          const parts = cleanId.split('_');
+          if (parts[0]) cleanId = parts[0];
+        }
+        if (cleanId && !eligibleOrders.has(cleanId)) {
+          eligibleOrders.set(cleanId, data);
+        }
+      }
+    }
+
+    for (const { id, data } of allMainOrders) {
+      if (!data) continue;
+      const vIds = extractVendorIdsFromOrder(data);
+      const isMyOrder = data.vendorId === vendorId || 
+                        data.sellerId === vendorId || 
+                        vIds.includes(vendorId);
+
+      if (!isMyOrder) continue;
+
+      const pm = data.paymentMethod || data.payment_method;
+      const st = data.status || data.orderStatus;
+
+      if (isCodPayment(pm) && isDeliveredStatus(st)) {
+        let cleanId = String(data.orderId || data.mainOrderId || id || '').trim().replace(/^#/, '');
+        if (cleanId.endsWith(`_${vendorId}`)) {
+          cleanId = cleanId.slice(0, -(vendorId.length + 1));
+        }
+        if (cleanId.includes('_')) {
+          const parts = cleanId.split('_');
+          if (parts[0]) cleanId = parts[0];
+        }
+        if (cleanId && !eligibleOrders.has(cleanId)) {
+          eligibleOrders.set(cleanId, data);
+        }
+      }
+    }
+
+    // 3. For each eligible order, ensure platform fee record exists
+    const now = Date.now();
+    for (const [cleanOrderId, order] of eligibleOrders.entries()) {
+      const recordId = `${vendorId}_${cleanOrderId}`;
+      const existing = await rtdbGet<PlatformFeeRecord>(`platform_fee_records/${recordId}`);
+      if (!existing) {
+        const feeAmount = Number(order.platformFee || 5);
+        const customerName = formatSafeString(order.customerName || order.shippingAddress?.name, 'Customer');
+        const customerPhone = formatSafeString(order.customerPhone || order.shippingAddress?.mobile || order.shippingAddress?.phone, '');
+
+        const newRecord: PlatformFeeRecord = {
+          id: recordId,
+          vendorId,
+          orderId: cleanOrderId,
+          mainOrderId: order.mainOrderId || cleanOrderId,
+          customerName,
+          customerPhone,
+          feeAmount,
+          paymentMethod: 'cod',
+          orderStatus: order.status || 'Delivered',
+          status: 'due',
+          deliveredAt: order.deliveredAt || now,
+          createdAt: order.createdAt || now
+        };
+
+        await Promise.allSettled([
+          rtdbSet(`platform_fee_records/${recordId}`, newRecord),
+          rtdbSet(`processed_platform_fee_orders/${recordId}`, {
+            processedAt: now,
+            feeAmount,
+            vendorId,
+            orderId: cleanOrderId
+          })
+        ]);
+      }
+    }
+
+    // 4. Update and return summary
+    return await updateVendorPlatformFeeSummary(vendorId);
+  } catch (err) {
+    console.error('Error syncing platform fees for vendor:', err);
+    return await updateVendorPlatformFeeSummary(vendorId);
+  }
+}
+
+/**
+ * Gets the current platform fee summary for a vendor with automatic synchronization
  */
 export async function getVendorPlatformFee(vendorId: string): Promise<VendorPlatformFeeSummary | null> {
   try {
-    const summary = await rtdbGet<VendorPlatformFeeSummary>(`vendor_platform_fees/${vendorId}`);
-    if (summary) {
-      return {
-        ...summary,
-        address: formatAddress(summary.address),
-        vendorName: formatSafeString(summary.vendorName, 'Vendor'),
-        storeName: formatSafeString(summary.storeName, 'Shop'),
-        mobileNumber: formatSafeString(summary.mobileNumber, ''),
-        email: formatSafeString(summary.email, ''),
-        totalDeliveredCodOrders: Number(summary.totalDeliveredCodOrders || 0),
-        totalPlatformFee: Number(summary.totalPlatformFee || 0),
-        paidPlatformFee: Number(summary.paidPlatformFee || 0),
-        duePlatformFee: Number(summary.duePlatformFee || 0),
-      };
-    }
-    return await updateVendorPlatformFeeSummary(vendorId);
+    if (!vendorId) return null;
+    return await syncPlatformFeesForVendor(vendorId);
   } catch (e) {
     console.error('Error fetching vendor platform fee summary:', e);
     return null;
@@ -607,6 +767,38 @@ export async function getAllVendorsPlatformFees(): Promise<VendorPlatformFeeSumm
           duePlatformFee: 0,
           lastUpdated: Date.now()
         });
+      }
+    }
+
+    // 3. Fetch all platform_fee_records to verify and reconcile summaries
+    const allRecords = await rtdbList<PlatformFeeRecord>('platform_fee_records').catch(() => []);
+    const recordsByVendor = new Map<string, PlatformFeeRecord[]>();
+    for (const r of allRecords) {
+      if (r && r.data && r.data.vendorId) {
+        const vId = r.data.vendorId;
+        if (!recordsByVendor.has(vId)) {
+          recordsByVendor.set(vId, []);
+        }
+        recordsByVendor.get(vId)!.push(r.data);
+      }
+    }
+
+    for (const s of summaries) {
+      const vRecords = recordsByVendor.get(s.vendorId) || [];
+      if (vRecords.length > 0) {
+        let totalFee = 0;
+        let paidFee = 0;
+        for (const rec of vRecords) {
+          const amt = Number(rec.feeAmount || 5);
+          totalFee += amt;
+          if (rec.status === 'paid') {
+            paidFee += amt;
+          }
+        }
+        s.totalDeliveredCodOrders = vRecords.length;
+        s.totalPlatformFee = totalFee;
+        s.paidPlatformFee = paidFee;
+        s.duePlatformFee = Math.max(0, totalFee - paidFee);
       }
     }
 
@@ -811,7 +1003,7 @@ export async function reconcileAllDeliveredCodOrders(): Promise<{
     for (const { id, data } of allVendorOrders) {
       if (!data) continue;
       const paymentMethod = data.paymentMethod || data.payment_method;
-      const status = data.status || data.orderStatus;
+      const status = data.status || data.orderStatus || data.vendorStatus;
 
       if (isCodPayment(paymentMethod) && isDeliveredStatus(status)) {
         const vendorIds = extractVendorIdsFromOrder(data);
@@ -821,8 +1013,8 @@ export async function reconcileAllDeliveredCodOrders(): Promise<{
             if (res.success) {
               processedCount++;
               totalFeeAccrued += (res.feeRecorded || 5);
-              affectedVendorIds.add(vId);
             }
+            affectedVendorIds.add(vId);
           }
         }
       }
@@ -832,7 +1024,7 @@ export async function reconcileAllDeliveredCodOrders(): Promise<{
     for (const { id, data } of allMainOrders) {
       if (!data) continue;
       const paymentMethod = data.paymentMethod || data.payment_method;
-      const status = data.status || data.orderStatus;
+      const status = data.status || data.orderStatus || data.vendorStatus;
 
       if (isCodPayment(paymentMethod) && isDeliveredStatus(status)) {
         const vendorIds = extractVendorIdsFromOrder(data);
@@ -842,8 +1034,8 @@ export async function reconcileAllDeliveredCodOrders(): Promise<{
             if (res.success) {
               processedCount++;
               totalFeeAccrued += (res.feeRecorded || 5);
-              affectedVendorIds.add(vId);
             }
+            affectedVendorIds.add(vId);
           }
         }
       }

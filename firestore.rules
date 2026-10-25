@@ -145,6 +145,22 @@ service cloud.firestore {
       allow read, write: if isUserAdmin() || isSignedIn();
     }
 
+    match /platform_fee_records/{feeId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
+    match /vendor_platform_fees/{vendorId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
+    match /platform_fee_payments/{paymentId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
+    match /processed_platform_fee_orders/{docId} {
+      allow read, write: if isUserAdmin() || isSignedIn();
+    }
+
     match /wallet_transactions/{transactionId} {
       allow read: if isUserAdmin() || (isSignedIn() && resource.data.vendorId == request.auth.uid);
       allow write, create: if isUserAdmin() || isSignedIn();
