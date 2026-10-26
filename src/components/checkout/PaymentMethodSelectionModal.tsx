@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Home, X, Headphones, ArrowLeftRight, Info, Smartphone, CheckCircle2, Check, MessageSquare } from 'lucide-react';
+import { Home, X, Headphones, ArrowLeftRight, Info, Smartphone, CheckCircle2, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
-import LiveSupportChatBox from '../support/LiveSupportChatBox';
 
 export interface PaymentMethodSelectionModalProps {
   isOpen: boolean;
@@ -30,7 +29,6 @@ export default function PaymentMethodSelectionModal({
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'help' | 'payment' | 'info'>('payment');
   const [internalSelectedChannel, setInternalSelectedChannel] = useState<'bkash' | 'nagad' | 'rocket' | 'upay' | null>(null);
-  const [showLiveChatModal, setShowLiveChatModal] = useState(false);
 
   const selectedChannel = controlledChannel !== undefined ? controlledChannel : internalSelectedChannel;
   const handleSelect = (channel: 'bkash' | 'nagad' | 'rocket' | 'upay') => {
@@ -172,37 +170,40 @@ export default function PaymentMethodSelectionModal({
                   </div>
                 </a>
 
-                {/* Option 2: Customer Live Support System (কাষ্টমার লাইভ সাপোর্ট সিস্টেম) */}
-                <button
-                  type="button"
-                  onClick={() => setShowLiveChatModal(true)}
-                  className="w-full border border-gray-200 hover:border-blue-300 rounded-xl p-2.5 sm:p-3 flex items-center gap-2.5 sm:gap-3 bg-white hover:bg-blue-50/30 active:scale-[0.99] transition-all shadow-2xs text-left cursor-pointer group block"
+                {/* Option 2: WhatsApp Support */}
+                <a
+                  href="https://wa.me/8801864670673"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full border border-gray-200 hover:border-emerald-300 rounded-xl p-2.5 sm:p-3 flex items-center gap-2.5 sm:gap-3 bg-white hover:bg-emerald-50/30 active:scale-[0.99] transition-all shadow-2xs text-left cursor-pointer group no-underline block"
                 >
-                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shrink-0 relative bg-blue-50 text-blue-600 border border-blue-100/80 group-hover:bg-blue-100 transition-colors">
+                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shrink-0 relative bg-emerald-50 text-emerald-600 border border-emerald-100/80 group-hover:bg-emerald-100 transition-colors">
                     <svg viewBox="0 0 36 36" className="w-7 h-7 sm:w-8 sm:h-8" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <circle cx="18" cy="18" r="16" fill="#0084FF"/>
-                      <path d="M18 9C12.5 9 8 13 8 18C8 20.8 9.2 23.3 11.2 25L10.5 28.5L14.2 27.2C15.4 27.7 16.7 28 18 28C23.5 28 28 24 28 18C28 13 23.5 9 18 9Z" fill="white"/>
-                      <circle cx="13.5" cy="18" r="1.5" fill="#0084FF"/>
-                      <circle cx="18" cy="18" r="1.5" fill="#0084FF"/>
-                      <circle cx="22.5" cy="18" r="1.5" fill="#0084FF"/>
+                      <circle cx="18" cy="18" r="16" fill="#25D366"/>
+                      <path
+                        fillRule="evenodd"
+                        clipRule="evenodd"
+                        d="M18 9C13.03 9 9 13.03 9 18C9 19.67 9.46 21.23 10.26 22.58L9.2 26.8L13.54 25.77C14.85 26.55 16.38 27 18 27C22.97 27 27 22.97 27 18C27 13.03 22.97 9 18 9ZM22.5 21.3C22.3 21.85 21.5 22.25 20.85 22.4C20.4 22.5 19.82 22.57 17.85 21.76C15.34 20.73 13.72 18.17 13.6 18.01C13.47 17.85 12.62 16.71 12.62 15.53C12.62 14.35 13.22 13.78 13.45 13.54C13.65 13.33 13.93 13.23 14.23 13.23C14.33 13.23 14.42 13.23 14.5 13.24C14.73 13.25 14.85 13.26 15 13.63C15.2 14.1 15.68 15.28 15.74 15.4C15.8 15.52 15.84 15.67 15.76 15.83C15.68 15.99 15.63 16.08 15.51 16.22C15.39 16.36 15.26 16.52 15.15 16.62C15.02 16.74 14.89 16.88 15.04 17.13C15.19 17.38 15.71 18.23 16.48 18.91C17.47 19.79 18.28 20.07 18.57 20.19C18.8 20.29 18.97 20.27 19.12 20.1C19.31 19.88 19.57 19.46 19.78 19.16C19.95 18.92 20.14 18.95 20.37 19.04C20.61 19.12 21.88 19.75 22.14 19.88C22.4 20.01 22.58 20.07 22.64 20.18C22.7 20.29 22.7 20.75 22.5 21.3Z"
+                        fill="white"
+                      />
                     </svg>
                     <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 sm:w-2.5 sm:h-2.5 bg-emerald-500 rounded-full border-2 border-white animate-pulse" />
                   </div>
                   <div className="min-w-0 flex-1 flex flex-wrap items-center justify-between gap-1">
                     <div>
-                      <span className="text-xs sm:text-sm font-bold text-gray-800 group-hover:text-blue-600 transition-colors flex items-center gap-1.5">
-                        কাষ্টমার লাইভ সাপোর্ট
+                      <span className="text-xs sm:text-sm font-bold text-gray-800 group-hover:text-emerald-700 transition-colors flex items-center gap-1.5">
+                        WhatsApp: <span className="font-extrabold text-gray-900">01864670673</span>
                       </span>
                       <p className="text-[10px] sm:text-[11px] text-gray-500 font-medium leading-tight mt-0.5">
-                        পেমেন্ট ও অর্ডার সহায়তায় সরাসরি কথা বলুন
+                        পেমেন্ট ও অর্ডার সহায়তায় সরাসরি হোয়াটসঅ্যাপে কথা বলুন
                       </p>
                     </div>
-                    <span className="font-extrabold text-blue-700 bg-blue-50 group-hover:bg-blue-100 px-2 py-0.5 rounded text-[11px] sm:text-xs border border-blue-200/80 flex items-center gap-1 tracking-wide transition-colors">
+                    <span className="font-extrabold text-emerald-700 bg-emerald-50 group-hover:bg-emerald-100 px-2 py-0.5 rounded text-[11px] sm:text-xs border border-emerald-200/80 flex items-center gap-1 tracking-wide transition-colors">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      লাইভ চ্যাট
+                      WhatsApp Support
                     </span>
                   </div>
-                </button>
+                </a>
 
                 {/* Option 3: Email Support */}
                 <a
@@ -476,31 +477,6 @@ export default function PaymentMethodSelectionModal({
           )}
         </button>
       </div>
-
-      {/* Customer Live Support System Modal */}
-      {showLiveChatModal && (
-        <div 
-          className="fixed inset-0 z-70 bg-black/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-in fade-in duration-200"
-          onClick={() => setShowLiveChatModal(false)}
-        >
-          <div 
-            className="w-full max-w-[560px] max-h-[94vh] flex flex-col bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 my-auto relative"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <LiveSupportChatBox
-              initialRole={
-                paymentType === 'reseller_registration_fee' ? 'reseller' :
-                paymentType === 'vendor_registration_fee' ? 'vendor' :
-                'customer'
-              }
-              title="কাষ্টমার লাইভ সাপোর্ট"
-              subtitle="পেমেন্ট ও সার্ভিস সংক্রান্ত তাৎক্ষণিক সহায়তা"
-              className="h-[560px] sm:h-[620px] max-h-[85vh] border-0 rounded-none shadow-none"
-              onClose={() => setShowLiveChatModal(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }

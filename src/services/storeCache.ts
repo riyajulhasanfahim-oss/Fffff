@@ -1,6 +1,6 @@
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbList, rtdbSubscribe } from '../lib/rtdb';
 import { INITIAL_VENDORS, INITIAL_VENDOR_PROFILES, INITIAL_VENDOR_THEMES } from '../lib/firebaseSeed';
-import { enrichProductsWithRealMetrics } from './productMetricsService';
+import { enrichProductsWithRealMetrics, getCachedProductMetrics } from './productMetricsService';
 import { db } from '../lib/firebase';
 import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { getVendorRealFollowersCount } from './vendorFollowerService';
@@ -616,22 +616,49 @@ export function getSeedProductsForStore(storeId: string): any[] {
 export function getStoreProductsFromCache(storeId: string): any[] {
   if (!storeId) return [];
   const cleanId = String(storeId).trim();
+  const lowerId = cleanId.toLowerCase();
 
   // 1. Check in-memory products map
   if (inMemoryStoreProductsCache.has(cleanId)) {
     const mem = inMemoryStoreProductsCache.get(cleanId);
     if (Array.isArray(mem) && mem.length > 0) return mem;
   }
+  if (inMemoryStoreProductsCache.has(lowerId)) {
+    const mem = inMemoryStoreProductsCache.get(lowerId);
+    if (Array.isArray(mem) && mem.length > 0) return mem;
+  }
 
   // 2. Check localStorage
   if (typeof window !== 'undefined') {
     try {
-      const stored = localStorage.getItem(`rj_store_products_${cleanId}`);
+      const stored = localStorage.getItem(`rj_store_products_${cleanId}`) || localStorage.getItem(`rj_store_products_${lowerId}`);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
           inMemoryStoreProductsCache.set(cleanId, parsed);
+          inMemoryStoreProductsCache.set(lowerId, parsed);
           return parsed;
+        }
+      }
+    } catch (_) {}
+
+    // Check shared marketplace products cache for instant frame-0 product display
+    try {
+      const storedMarketplace = localStorage.getItem('rj_cached_marketplace_products_v2');
+      if (storedMarketplace) {
+        const parsed = JSON.parse(storedMarketplace);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const matched = parsed.filter((p: any) => {
+            const vId = String(p.vendorId || p.storeId || p.vendor?.id || p.vendor?.storeId || '').toLowerCase().trim();
+            const sSlug = String(p.vendor?.storeSlug || p.vendor?.shopSlug || p.storeSlug || p.shopSlug || '').toLowerCase().trim();
+            const sName = String(p.vendor?.storeName || p.vendor?.name || p.storeName || '').toLowerCase().trim();
+            return vId === lowerId || sSlug === lowerId || sName === lowerId;
+          });
+          if (matched.length > 0) {
+            inMemoryStoreProductsCache.set(cleanId, matched);
+            inMemoryStoreProductsCache.set(lowerId, matched);
+            return matched;
+          }
         }
       }
     } catch (_) {}
@@ -653,18 +680,24 @@ export function getStoreProductsFromCache(storeId: string): any[] {
 export function saveStoreProductsToCache(storeId: string, products: any[]): void {
   if (!storeId || !Array.isArray(products) || products.length === 0) return;
   const cleanId = String(storeId).trim();
+  const lowerId = cleanId.toLowerCase();
 
   inMemoryStoreProductsCache.set(cleanId, products);
+  inMemoryStoreProductsCache.set(lowerId, products);
 
   if (typeof window !== 'undefined') {
     try {
       localStorage.setItem(`rj_store_products_${cleanId}`, JSON.stringify(products));
+      if (cleanId !== lowerId) {
+        localStorage.setItem(`rj_store_products_${lowerId}`, JSON.stringify(products));
+      }
     } catch (_) {}
   }
 }
 
 /**
- * Fetches products for a store from RTDB and updates the cache without flicker
+ * Fetches products for a store from RTDB and updates the cache without flicker.
+ * Runs concurrent queries and returns products immediately without blocking on heavy metrics.
  */
 export async function fetchStoreProductsFromRTDB(storeId: string): Promise<any[]> {
   const cached = getStoreProductsFromCache(storeId);
@@ -672,15 +705,19 @@ export async function fetchStoreProductsFromRTDB(storeId: string): Promise<any[]
   if (!cleanId) return [];
 
   try {
-    const [productsSnap, vendorsSnap, storesSnap] = await Promise.all([
-      rtdbGet<Record<string, any>>('products'),
-      rtdbGet<Record<string, any>>('vendors'),
-      rtdbGet<Record<string, any>>('stores')
+    // 1. Fetch products, vendors, stores, and vendor_products concurrently with timeout protection
+    const [productsSnap, vendorsSnap, storesSnap, vpSnap, vpSnapClean] = await Promise.all([
+      rtdbGet<Record<string, any>>('products', 3500),
+      rtdbGet<Record<string, any>>('vendors', 3500),
+      rtdbGet<Record<string, any>>('stores', 3500),
+      rtdbGet<Record<string, any>>(`vendor_products/${storeId}`, 3500),
+      cleanId !== storeId ? rtdbGet<Record<string, any>>(`vendor_products/${cleanId}`, 3500) : Promise.resolve(null)
     ]);
 
     // Build comprehensive set of all possible aliases for this store/vendor
     const storeAliases = new Set<string>();
     storeAliases.add(cleanId);
+    storeAliases.add(String(storeId).trim().toLowerCase());
 
     // Look for matching vendor in vendors node
     if (vendorsSnap && typeof vendorsSnap === 'object') {
@@ -739,8 +776,25 @@ export async function fetchStoreProductsFromRTDB(storeId: string): Promise<any[]
       }
     }
 
-    let loadedProducts: any[] = [];
+    const loadedMap = new Map<string, any>();
 
+    // 2. Add products from direct vendor_products nodes
+    const processVpSnap = (snap: any) => {
+      if (snap && typeof snap === 'object') {
+        for (const [vpKey, vpVal] of Object.entries(snap)) {
+          if (vpVal && typeof vpVal === 'object') {
+            const statusLower = String((vpVal as any).status || '').toLowerCase();
+            if (statusLower !== 'archived' && statusLower !== 'inactive' && statusLower !== 'deleted') {
+              loadedMap.set(vpKey, { id: vpKey, ...(vpVal as any) });
+            }
+          }
+        }
+      }
+    };
+    processVpSnap(vpSnap);
+    processVpSnap(vpSnapClean);
+
+    // 3. Scan products node with storeAliases
     if (productsSnap && typeof productsSnap === 'object') {
       for (const [pKey, pVal] of Object.entries(productsSnap)) {
         if (pVal && typeof pVal === 'object') {
@@ -758,38 +812,49 @@ export async function fetchStoreProductsFromRTDB(storeId: string): Promise<any[]
             (sSlug && storeAliases.has(sSlug)) ||
             (sName && storeAliases.has(sName))
           ) {
-            loadedProducts.push({ id: pKey, ...pVal });
+            loadedMap.set(pKey, { id: pKey, ...pVal });
           }
         }
       }
     }
 
-    // Also check vendor_products/${storeId} node
-    if (loadedProducts.length === 0) {
-      try {
-        const vpSnap = await rtdbGet<Record<string, any>>(`vendor_products/${storeId}`);
-        if (vpSnap && typeof vpSnap === 'object') {
-          for (const [vpKey, vpVal] of Object.entries(vpSnap)) {
-            if (vpVal && typeof vpVal === 'object') {
-              const statusLower = String(vpVal.status || '').toLowerCase();
-              if (statusLower !== 'archived' && statusLower !== 'inactive' && statusLower !== 'deleted') {
-                loadedProducts.push({ id: vpKey, ...vpVal });
-              }
-            }
-          }
-        }
-      } catch (_) {}
-    }
+    const loadedProducts = Array.from(loadedMap.values());
 
     if (loadedProducts.length > 0) {
-      const enriched = await enrichProductsWithRealMetrics(loadedProducts);
-      saveStoreProductsToCache(storeId, enriched);
-      return enriched;
+      // Apply in-memory metrics synchronously (0ms) so products are immediately available
+      const fastProducts = loadedProducts.map(p => {
+        const m = getCachedProductMetrics(p.id);
+        if (!m) return p;
+        return {
+          ...p,
+          soldCount: m.soldCount ?? p.soldCount ?? 0,
+          salesCount: m.soldCount ?? p.salesCount ?? 0,
+          reviews: m.reviewsCount ?? p.reviewsCount ?? 0,
+          reviewsCount: m.reviewsCount ?? p.reviewsCount ?? 0,
+          rating: m.rating ?? p.rating ?? 0
+        };
+      });
+
+      saveStoreProductsToCache(storeId, fastProducts);
+      if (cleanId !== storeId) {
+        saveStoreProductsToCache(cleanId, fastProducts);
+      }
+
+      // Background enrichment - never blocks initial product rendering!
+      enrichProductsWithRealMetrics(fastProducts).then(enriched => {
+        if (enriched && Array.isArray(enriched) && enriched.length > 0) {
+          saveStoreProductsToCache(storeId, enriched);
+          if (cleanId !== storeId) {
+            saveStoreProductsToCache(cleanId, enriched);
+          }
+        }
+      }).catch(() => {});
+
+      return fastProducts;
     }
 
-    // Store legitimately has no products
-    saveStoreProductsToCache(storeId, []);
-    return [];
+    // Preserve existing cache if available; never overwrite with empty array
+    return cached && cached.length > 0 ? cached : [];
   } catch (err) {
     console.warn(`[fetchStoreProductsFromRTDB error for ${storeId}]:`, err);
     return cached && cached.length > 0 ? cached : [];

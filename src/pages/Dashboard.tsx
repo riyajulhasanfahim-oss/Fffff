@@ -163,6 +163,7 @@ export default function Dashboard() {
 
   // Mouse Drag-To-Scroll Handlers (for effortless desktop click-and-drag)
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
     if (!scrollRef.current) return;
     setIsMouseDown(true);
     setStartX(e.pageX - scrollRef.current.offsetLeft);
@@ -172,11 +173,13 @@ export default function Dashboard() {
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isMouseDown || !scrollRef.current) return;
-    e.preventDefault();
     const x = e.pageX - scrollRef.current.offsetLeft;
     const walk = (x - startX) * 1.5; // Smooth 1.5x displacement
-    scrollRef.current.scrollLeft = scrollStartLeft - walk;
-    setDraggedDistance(prev => prev + Math.abs(walk));
+    if (Math.abs(walk) > 4) {
+      e.preventDefault();
+      scrollRef.current.scrollLeft = scrollStartLeft - walk;
+      setDraggedDistance(prev => prev + Math.abs(walk));
+    }
   };
 
   const handleMouseUpOrLeave = () => {
@@ -428,9 +431,6 @@ export default function Dashboard() {
               </div>
               
               <div className="flex items-center gap-1.5 sm:gap-2 ml-auto shrink-0">
-                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                  {relatedProducts.length} items
-                </span>
                 {/* Visual drag/swipe hint badge */}
                 <span className="hidden md:inline-flex items-center gap-1 text-[11px] text-slate-400 font-medium bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100">
                   <MoveHorizontal className="w-3 h-3 text-slate-400" /> টেনে বা সোয়াইপ করুন
@@ -464,11 +464,12 @@ export default function Dashboard() {
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUpOrLeave}
               onMouseLeave={handleMouseUpOrLeave}
-              className={`flex overflow-x-auto gap-2.5 sm:gap-3 pb-2 pt-1 hide-scrollbar select-none touch-pan-x overscroll-x-contain ${
+              className={`flex overflow-x-auto gap-2.5 sm:gap-3 pb-2 pt-1 hide-scrollbar touch-pan-x touch-pan-y ${
                 isMouseDown ? 'cursor-grabbing' : 'cursor-grab'
               }`}
               style={{
-                WebkitOverflowScrolling: 'touch'
+                WebkitOverflowScrolling: 'touch',
+                touchAction: 'pan-x pan-y'
               }}
             >
               {relatedProducts.map((product) => (

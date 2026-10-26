@@ -155,7 +155,9 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
   const [profile, setProfile] = useState<any>(() => initialCached);
   const [theme, setTheme] = useState<any>(() => initialTheme);
   const [products, setProducts] = useState<any[]>(() => initialProducts);
+  const [productsLoading, setProductsLoading] = useState<boolean>(() => initialProducts.length === 0);
   const [reviews, setReviews] = useState<any[]>([]);
+  const [reviewsLoading, setReviewsLoading] = useState<boolean>(true);
   const [selectedReviewImage, setSelectedReviewImage] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(() => !initialCached && initialProducts.length === 0);
   const [isDeletedStore, setIsDeletedStore] = useState<boolean>(() => {
@@ -326,7 +328,11 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
       }
       if (prods && prods.length > 0) {
         setProducts(prods);
+        setProductsLoading(false);
+      } else {
+        setProductsLoading(true);
       }
+      setReviewsLoading(true);
 
       let th = (location.state as any)?.initialTheme;
       if (!th) {
@@ -350,19 +356,65 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
     }
   }, [vendorId, user?.uid, location.state]);
 
-  // Fetch Vendor Profile, Subscription Status, Products & Reviews strictly from RTDB
+  // Fetch Vendor Profile, Subscription Status, Products & Reviews strictly from RTDB concurrently
   useEffect(() => {
     if (!vendorId) return;
 
     let isMounted = true;
     const fetchStoreData = async () => {
-      // Only set loading if there is absolutely no store and product data in cache
+      // 1. Maintain accurate loading states
+      if (products.length === 0) {
+        setProductsLoading(true);
+      }
+      setReviewsLoading(true);
       if (!initialCached && products.length === 0) {
         setLoading(true);
       }
 
+      // 2. Parallel Task: Load Products immediately using vendorId
+      const loadStoreProducts = async (targetVendorId: string) => {
+        try {
+          const freshProds = await fetchStoreProductsFromRTDB(targetVendorId);
+          if (isMounted && Array.isArray(freshProds) && freshProds.length > 0) {
+            setProducts(freshProds);
+            setProductsLoading(false);
+            return freshProds;
+          }
+          return freshProds || [];
+        } catch (e) {
+          console.warn('Error fetching products from RTDB:', e);
+          return [];
+        }
+      };
+
+      // 3. Parallel Task: Load Reviews immediately using vendorId
+      const loadStoreReviews = async (targetVendorId: string) => {
+        try {
+          const freshVendorReviews = await fetchVendorReviews(targetVendorId);
+          if (isMounted && freshVendorReviews && freshVendorReviews.length > 0) {
+            setReviews(freshVendorReviews);
+          } else {
+            const revItems = await rtdbList<any>('vendor_reviews', (r: any) => r.vendorId === targetVendorId || r.vendorId === vendorId);
+            const loadedReviews = revItems.map(d => ({ id: d.id, ...d.data }));
+            if (isMounted && loadedReviews.length > 0) {
+              setReviews(loadedReviews);
+            }
+          }
+        } catch (e) {
+          console.warn('Error fetching store reviews:', e);
+        } finally {
+          if (isMounted) {
+            setReviewsLoading(false);
+          }
+        }
+      };
+
+      // KICK OFF PRODUCTS AND REVIEWS AT T=0 (Zero waiting for store details/theme/followers)
+      const initialProductsPromise = loadStoreProducts(vendorId);
+      loadStoreReviews(vendorId);
+
       try {
-        // 1. Fetch Vendor & Store Data strictly from RTDB via storeCache service
+        // 4. Fetch Vendor & Store Data strictly from RTDB via storeCache service
         const freshStore = await fetchStoreDetailFromRTDB(vendorId);
 
         const isStoreUnavailable = 
@@ -377,6 +429,8 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
           if (isMounted) {
             setIsDeletedStore(true);
             setLoading(false);
+            setProductsLoading(false);
+            setReviewsLoading(false);
           }
           return;
         }
@@ -396,72 +450,71 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
         const resolvedId = freshStore?.id || freshStore?.vendorId || vendorId;
 
-        // Fetch theme from RTDB - never overwrite with null or default
-        try {
-          const [themeSnap, storeData, profileData] = await Promise.all([
-            rtdbGet<any>(`vendor_themes/${resolvedId}`),
-            rtdbGet<any>(`stores/${resolvedId}/theme`),
-            rtdbGet<any>(`vendor_profiles/${resolvedId}/theme`)
-          ]);
-          const validTheme = (themeSnap && (themeSnap.primaryColor || themeSnap.layout)) 
-            ? themeSnap 
-            : (storeData && (storeData.primaryColor || storeData.layout)) 
-              ? storeData 
-              : (profileData && (profileData.primaryColor || profileData.layout))
-                ? profileData
-                : null;
-
-          if (isMounted && validTheme) {
-            setTheme((prev: any) => ({ ...(prev || {}), ...validTheme }));
-            saveStoreThemeToCache(resolvedId, validTheme);
-            saveStoreThemeToCache(vendorId, validTheme);
-          }
-        } catch (themeErr) {
-          console.warn('Error fetching theme from RTDB:', themeErr);
-        }
-
-        // 2. Determine Follower Count strictly from actual database state
-        try {
-          const realFollowersCount = await getVendorRealFollowersCount(resolvedId);
-          if (isMounted) {
-            setFollowersCount(realFollowersCount);
-          }
-          saveStoreToCache(resolvedId, { followersCount: realFollowersCount, followers: realFollowersCount });
-          saveStoreToCache(vendorId, { followersCount: realFollowersCount, followers: realFollowersCount });
-        } catch (fErr) {
-          console.warn('Error fetching authentic store followers from database:', fErr);
-        }
-
-        // 3. Fetch Products for this Vendor strictly from RTDB
-        try {
-          const freshProducts = await fetchStoreProductsFromRTDB(resolvedId);
-          if (isMounted && Array.isArray(freshProducts)) {
-            setProducts(freshProducts);
-          }
-        } catch (e) {
-          console.warn('Error fetching products from RTDB, preserving cached products:', e);
-        }
-
-        // 4. Fetch Store Reviews from RTDB & Firestore via fetchVendorReviews
-        try {
-          const freshVendorReviews = await fetchVendorReviews(resolvedId);
-          if (isMounted && freshVendorReviews.length > 0) {
-            setReviews(freshVendorReviews);
-          } else {
-            const revItems = await rtdbList<any>('vendor_reviews', (r: any) => r.vendorId === resolvedId || r.vendorId === vendorId);
-            const loadedReviews = revItems.map(d => ({ id: d.id, ...d.data }));
-            if (isMounted && loadedReviews.length > 0) {
-              setReviews(loadedReviews);
+        // If store resolved to a different ID than vendorId, check if products were already found
+        if (resolvedId && resolvedId !== vendorId) {
+          initialProductsPromise.then(prodsResult => {
+            if (!prodsResult || prodsResult.length === 0) {
+              loadStoreProducts(resolvedId).finally(() => {
+                if (isMounted) setProductsLoading(false);
+              });
+            } else {
+              if (isMounted) setProductsLoading(false);
             }
-          }
-        } catch (e) {
-          console.warn('Error fetching store reviews:', e);
+          });
+          loadStoreReviews(resolvedId);
+        } else {
+          initialProductsPromise.finally(() => {
+            if (isMounted) setProductsLoading(false);
+          });
         }
+
+        // Fetch theme and followers concurrently in background without blocking products
+        Promise.all([
+          (async () => {
+            try {
+              const [themeSnap, storeData, profileData] = await Promise.all([
+                rtdbGet<any>(`vendor_themes/${resolvedId}`),
+                rtdbGet<any>(`stores/${resolvedId}/theme`),
+                rtdbGet<any>(`vendor_profiles/${resolvedId}/theme`)
+              ]);
+              const validTheme = (themeSnap && (themeSnap.primaryColor || themeSnap.layout)) 
+                ? themeSnap 
+                : (storeData && (storeData.primaryColor || storeData.layout)) 
+                  ? storeData 
+                  : (profileData && (profileData.primaryColor || profileData.layout))
+                    ? profileData
+                    : null;
+
+              if (isMounted && validTheme) {
+                setTheme((prev: any) => ({ ...(prev || {}), ...validTheme }));
+                saveStoreThemeToCache(resolvedId, validTheme);
+                saveStoreThemeToCache(vendorId, validTheme);
+              }
+            } catch (themeErr) {
+              console.warn('Error fetching theme from RTDB:', themeErr);
+            }
+          })(),
+          (async () => {
+            try {
+              const realFollowersCount = await getVendorRealFollowersCount(resolvedId);
+              if (isMounted) {
+                setFollowersCount(realFollowersCount);
+              }
+              saveStoreToCache(resolvedId, { followersCount: realFollowersCount, followers: realFollowersCount });
+              saveStoreToCache(vendorId, { followersCount: realFollowersCount, followers: realFollowersCount });
+            } catch (fErr) {
+              console.warn('Error fetching authentic store followers from database:', fErr);
+            }
+          })()
+        ]);
       } catch (err) {
         console.error('Error loading vendor store data from RTDB:', err);
       } finally {
         if (isMounted) {
           setLoading(false);
+          initialProductsPromise.finally(() => {
+            if (isMounted) setProductsLoading(false);
+          });
         }
       }
     };
@@ -1391,7 +1444,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
             {/* ------------------------------------------------------- */}
             {/* PRODUCT GRID (Clean, Modern, Mobile-First 2-Column)     */}
             {/* ------------------------------------------------------- */}
-            {loading && products.length === 0 ? (
+            {(productsLoading || loading) && products.length === 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[...Array(8)].map((_, i) => (
                   <div key={i} className="bg-white rounded-2xl border border-slate-200/80 p-3 animate-pulse space-y-3">
@@ -1580,7 +1633,23 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
             {/* Customer Reviews List */}
             <div className="space-y-3">
-              {reviews.length === 0 ? (
+              {reviewsLoading && reviews.length === 0 ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 animate-pulse space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-slate-100" />
+                        <div className="space-y-1.5 flex-1">
+                          <div className="h-3 bg-slate-100 rounded w-28" />
+                          <div className="h-2.5 bg-slate-100 rounded w-40" />
+                        </div>
+                      </div>
+                      <div className="h-3 bg-slate-100 rounded w-full" />
+                      <div className="h-3 bg-slate-100 rounded w-3/4" />
+                    </div>
+                  ))}
+                </div>
+              ) : reviews.length === 0 ? (
                 <div className="bg-white rounded-2xl p-10 text-center border border-slate-200">
                   <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-3">
                     <Star className="w-6 h-6" />

@@ -259,11 +259,17 @@ export async function fetchAllProductsMetricsFromRTDB(forceRefresh = false): Pro
 
   inflightMetricsPromise = (async () => {
     try {
-      // Fetch directly from Cloud Firestore and RTDB collections (orders, products, reviews)
+      // Fetch directly from Cloud Firestore and RTDB collections with strict timeout protection
+      const timeoutFs = <T>(p: Promise<T>, ms = 2500): Promise<T | null> =>
+        Promise.race([
+          p,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))
+        ]).catch(() => null);
+
       const [fsOrdersSnap, fsProductsSnap, fsReviewsSnap, rtdbOrders, rtdbOrderItems, rtdbReviews] = await Promise.all([
-        getDocs(collection(db, 'orders')).catch(() => null),
-        getDocs(collection(db, 'products')).catch(() => null),
-        getDocs(collection(db, 'reviews')).catch(() => null),
+        timeoutFs(getDocs(collection(db, 'orders'))),
+        timeoutFs(getDocs(collection(db, 'products'))),
+        timeoutFs(getDocs(collection(db, 'reviews'))),
         rtdbGet<Record<string, any>>('orders', 2500).catch(() => null),
         rtdbGet<Record<string, any>>('orderItems', 2500).catch(() => null),
         rtdbGet<Record<string, any>>('reviews', 2500).catch(() => null)
