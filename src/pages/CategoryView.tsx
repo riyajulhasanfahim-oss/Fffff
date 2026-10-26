@@ -709,7 +709,7 @@ export default function CategoryView() {
                     {loading
                       ? 'পণ্য অনুসন্ধান করা হচ্ছে...'
                       : searchResults.length > 0
-                        ? `${searchResults.length} টি পণ্য পাওয়া গেছে`
+                        ? 'পণ্য পাওয়া গেছে'
                         : 'কোনো পণ্য পাওয়া যায়নি'}
                   </p>
                 </div>
@@ -863,13 +863,6 @@ export default function CategoryView() {
                   ) : null}
                 </nav>
               </div>
-
-              <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500">
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white rounded-lg border border-slate-200 shadow-2xs font-semibold text-slate-700">
-                  <ShoppingBag className="w-3.5 h-3.5 text-primary-main" />
-                  {filteredAndSortedProducts.length} টি পণ্য
-                </span>
-              </div>
             </div>
 
             {/* Page Banner / Header Card */}
@@ -880,9 +873,6 @@ export default function CategoryView() {
                     <h1 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight">
                       {pageTitle}
                     </h1>
-                    <span className="text-xs font-bold text-primary-main bg-sky-50 border border-sky-200/80 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
-                      {filteredAndSortedProducts.length} টি ফলাফল
-                    </span>
                   </div>
                   <p className="text-xs sm:text-sm text-slate-500 mt-1">
                     প্রয়োজনীয় পণ্য সহজে খুঁজে পেতে ফিল্টার বা সর্ট অপশন ব্যবহার করুন
@@ -958,9 +948,7 @@ export default function CategoryView() {
                 {/* Result count */}
                 <div className="flex items-center gap-2">
                   <p className="text-xs sm:text-sm text-slate-600">
-                    দেখাচ্ছে <span className="font-bold text-slate-900">
-                      {filteredAndSortedProducts.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredAndSortedProducts.length)}
-                    </span> (মোট <span className="font-bold text-primary-main">{filteredAndSortedProducts.length}</span> টি পণ্য)
+                    পণ্য তালিকা
                   </p>
                 </div>
 
@@ -1385,7 +1373,7 @@ export default function CategoryView() {
                   onClick={() => setIsMobileFilterOpen(false)}
                   className="w-full py-2.5 bg-primary-main hover:bg-sky-600 text-white font-bold rounded-xl text-xs shadow-2xs transition-colors"
                 >
-                  ফলাফল ({filteredAndSortedProducts.length})
+                  ফলাফল দেখুন
                 </button>
               </div>
             </motion.div>

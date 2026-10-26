@@ -752,11 +752,6 @@ export default function CartPage() {
               </div>
 
               <div className="flex items-center gap-2 self-start sm:self-auto">
-                {relatedProducts.length > 0 && (
-                  <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">
-                    {relatedProducts.length} টি পণ্য পাওয়া গেছে
-                  </span>
-                )}
                 <Link
                   to="/"
                   className="text-xs sm:text-sm font-bold text-primary-main hover:text-sky-600 flex items-center gap-1 py-1"
@@ -801,7 +796,7 @@ export default function CartPage() {
                       onClick={() => setVisibleRelatedCount(prev => prev + 10)}
                       className="px-6 py-2.5 text-xs sm:text-sm font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl shadow-2xs hover:shadow transition-all cursor-pointer"
                     >
-                      আরো পণ্য দেখুন ({relatedProducts.length - visibleRelatedCount} টি বাকি)
+                      আরো পণ্য দেখুন
                     </button>
                   </div>
                 )}

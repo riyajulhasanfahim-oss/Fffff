@@ -1089,12 +1089,6 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                         <span className="text-slate-500 font-medium">০ রিভিউ</span>
                       )}
                     </button>
-
-                    {/* Products Count */}
-                    <span className="hidden sm:inline text-slate-300">•</span>
-                    <span className="hidden sm:inline text-slate-500 text-[11px]">
-                      {products.length} Products
-                    </span>
                   </div>
 
                   {/* Connected Social Media Platforms (Only connected ones shown!) */}
@@ -1183,7 +1177,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                     : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <span>Products ({products.length})</span>
+                <span>Products</span>
                 {activeTab === 'products' && (
                   <span 
                     className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full"
@@ -1297,9 +1291,6 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                     <span className="text-[11px] font-semibold leading-tight line-clamp-1">
                       All Items
                     </span>
-                    <span className="text-[9px] text-slate-400 font-normal">
-                      {products.length}
-                    </span>
                   </button>
 
                   {/* Individual Categories With Images */}
@@ -1326,9 +1317,6 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                         </div>
                         <span className="text-[11px] font-semibold leading-tight line-clamp-1">
                           {cat.name}
-                        </span>
-                        <span className="text-[9px] text-slate-400 font-normal">
-                          {cat.count}
                         </span>
                       </button>
                     );
@@ -1429,7 +1417,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
             {selectedCategory !== 'all' && (
               <div className="flex items-center justify-between px-3 py-2 bg-sky-50 border border-sky-100 rounded-xl text-xs text-sky-800">
                 <span>
-                  Showing products in <strong>{selectedCategory}</strong> ({filteredProducts.length})
+                  Showing products in <strong>{selectedCategory}</strong>
                 </span>
                 <button
                   type="button"
@@ -1613,7 +1601,7 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
                       <Star className="w-3.5 h-3.5 fill-current" />
                       <span>
                         {userReviewStatus?.canReview 
-                          ? `রিভিউ দিন (${userReviewStatus.unreviewedItems.length}টি পণ্য বাকি)` 
+                          ? 'রিভিউ দিন' 
                           : 'রিভিউ দিন (ভেরিফাইড ক্রেতা)'}
                       </span>
                     </button>

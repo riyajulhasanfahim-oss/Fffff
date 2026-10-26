@@ -218,7 +218,7 @@ export default function Home() {
                     </div>
 
                     <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-slate-950 text-amber-300 shadow-2xs">
-                      ৫০% পর্যন্ত ছাড়! ({flashSaleProducts.length}টি অফার)
+                      ৫০% পর্যন্ত ছাড়!
                     </span>
                   </div>
 

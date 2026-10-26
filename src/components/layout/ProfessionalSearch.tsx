@@ -178,7 +178,7 @@ export default function ProfessionalSearch({ placeholder = 'Search in RJ WORLD B
       const targetTerm = result.searchQuery || result.detectedItem;
 
       if (result.matchedProducts.length > 0) {
-        toast.success(`${result.matchedProducts.length} টি মিল থাকা পণ্য পাওয়া গেছে!`);
+        toast.success('মিল থাকা পণ্য পাওয়া গেছে!');
         // Navigate to CategoryView with the detected query term and pass matched products in state
         navigate(`/category/all?q=${encodeURIComponent(targetTerm)}`, {
           state: {

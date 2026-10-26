@@ -59,10 +59,6 @@ export default function ProductSection({
                 {title}
               </h2>
 
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-                {products.length}টি
-              </span>
-
               {badge && (
                 <span className="text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full bg-rose-500 text-white shadow-2xs">
                   {badge}

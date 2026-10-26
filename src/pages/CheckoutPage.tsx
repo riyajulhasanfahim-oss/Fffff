@@ -2224,11 +2224,6 @@ export default function CheckoutPage() {
                   আপনার পছন্দ হতে পারে এমন কিছু জনপ্রিয় পণ্য
                 </p>
               </div>
-              {relatedProducts.length > 0 && (
-                <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-full self-start sm:self-auto">
-                  {relatedProducts.length} টি পণ্য পাওয়া গেছে
-                </span>
-              )}
             </div>
 
             {loadingRelated ? (
@@ -2249,7 +2244,7 @@ export default function CheckoutPage() {
                       onClick={() => setVisibleRelatedCount(prev => prev + 8)}
                       className="px-5 py-2.5 text-xs sm:text-sm font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl shadow-2xs hover:shadow transition-all cursor-pointer"
                     >
-                      আরো পণ্য দেখুন ({relatedProducts.length - visibleRelatedCount} টি বাকি)
+                      আরো পণ্য দেখুন
                     </button>
                   </div>
                 )}

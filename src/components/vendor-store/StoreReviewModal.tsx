@@ -409,9 +409,6 @@ export default function StoreReviewModal({
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                     <span>আপনি যে পণ্যটির রিভিউ দিতে চান:</span>
                   </span>
-                  <span className="text-[10px] text-slate-500 font-normal">
-                    {eligibleItems.length}টি ডেলিভারিকৃত পণ্য বাকি
-                  </span>
                 </label>
                 
                 {eligibleItems.length === 1 ? (

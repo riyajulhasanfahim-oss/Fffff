@@ -226,11 +226,8 @@ export default function FlashSalePage() {
               ))}
             </div>
 
-            {/* Sort Dropdown & Product Counter */}
+            {/* Sort Dropdown */}
             <div className="flex items-center gap-3 shrink-0">
-              <span className="text-xs font-bold text-slate-600">
-                মোট <strong className="text-red-600 font-black">{displayedProducts.length}</strong> টি লাইভ অফার
-              </span>
 
               <select
                 value={sortBy}
