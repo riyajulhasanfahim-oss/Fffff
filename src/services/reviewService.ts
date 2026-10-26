@@ -1,7 +1,8 @@
 import { rtdbGet, rtdbSet, rtdbList, rtdbUpdate, rtdbRemove, rtdbSubscribe } from '../lib/rtdb';
 import { db } from '../lib/firebase';
 import { notifyVendorNewReview } from './vendorNotificationService';
-import { getCachedMarketplaceProducts } from './productService';
+import { getCachedMarketplaceProducts, updateProductInMarketplaceCache } from './productService';
+import { updateProductReviewMetricsInMemory } from './productMetricsService';
 import { generateProductSlug } from '../utils/seo';
 import { isCodOrder } from './vendorPayoutService';
 import { isCodPayment, recordPlatformFeeOnDelivery, markCodOrderDelivered } from './platformFeeService';
@@ -1126,37 +1127,73 @@ export async function replyToCustomerReview(params: {
 }
 
 /**
- * Updates aggregate rating & review count for a product across RTDB and Firestore
+/**
+ * Alias mapping from slug -> actual productId
+ */
+const productSlugAliases = new Map<string, string>();
+
+export function registerProductSlugAlias(slug: string, productId: string): void {
+  if (slug && productId) {
+    const s = String(slug).trim().toLowerCase();
+    const p = String(productId).trim();
+    productSlugAliases.set(s, p);
+  }
+}
+
+/**
+ * Updates aggregate rating & review count for a product across RTDB and Firestore,
+ * and synchronizes live in-memory metrics and marketplace caches immediately (0ms delay).
  */
 export async function updateProductAggregateRating(productId: string) {
   try {
-    // Read all reviews for this product from RTDB
+    const pId = String(productId).trim();
+    // Read all reviews for this product from RTDB and global cache
     const reviewsSnap = await rtdbGet<Record<string, any>>('reviews', 1500).catch(() => null);
     let totalStars = 0;
     let count = 0;
 
+    const countedIds = new Set<string>();
+
     if (reviewsSnap && typeof reviewsSnap === 'object') {
-      Object.values(reviewsSnap).forEach((r: any) => {
-        if (r && String(r.productId) === String(productId)) {
+      Object.entries(reviewsSnap).forEach(([k, r]: [string, any]) => {
+        if (r && String(r.productId) === pId) {
           totalStars += Number(r.rating) || 5;
           count += 1;
+          countedIds.add(k);
         }
       });
     }
 
+    // Also include any reviews in memory not yet returned by rtdbGet
+    globalReviewsCache.forEach((r, k) => {
+      if (r && String(r.productId) === pId && !countedIds.has(k)) {
+        totalStars += Number(r.rating) || 5;
+        count += 1;
+        countedIds.add(k);
+      }
+    });
+
     if (count > 0) {
       const avgRating = Number((totalStars / count).toFixed(1));
 
-      // Update RTDB product metrics
-      await rtdbUpdate(`product_metrics/${productId}`, {
+      // 1. Update RTDB product_metrics
+      await rtdbUpdate(`product_metrics/${pId}`, {
         rating: avgRating,
         reviewsCount: count,
         updatedAt: Date.now()
       }).catch(() => null);
 
-      // Update Firestore product
+      // 2. Update RTDB products node directly
+      await rtdbUpdate(`products/${pId}`, {
+        rating: avgRating,
+        reviews: count,
+        reviewsCount: count,
+        updatedAt: Date.now()
+      }).catch(() => null);
+
+      // 3. Update Firestore product
       try {
-        const prodRef = doc(db, 'products', productId);
+        const prodRef = doc(db, 'products', pId);
         await updateDoc(prodRef, {
           rating: avgRating,
           reviews: count,
@@ -1165,6 +1202,18 @@ export async function updateProductAggregateRating(productId: string) {
       } catch (fErr) {
         // Document might not exist in Firestore
       }
+
+      // 4. Update in-memory metrics cache directly (immediate real-time update)
+      updateProductReviewMetricsInMemory(pId, avgRating, count);
+
+      // 5. Update marketplace product cache so all ProductCards on Home update immediately
+      updateProductInMarketplaceCache(pId, {
+        rating: avgRating,
+        reviews: count,
+        reviewsCount: count
+      });
+
+      broadcastReviewsUpdate();
     }
   } catch (err) {
     console.warn('Could not recalculate product rating:', err);
@@ -1202,12 +1251,35 @@ function ensureGlobalReviewsListener() {
   try {
     globalReviewsUnsubscribe = rtdbSubscribe<Record<string, any>>('reviews', (data) => {
       if (data && typeof data === 'object') {
+        const productStats = new Map<string, { totalStars: number; count: number }>();
+
         Object.entries(data).forEach(([key, val]) => {
           if (val && typeof val === 'object') {
             const rev: ProductReview = { id: key, reviewId: key, ...val };
             globalReviewsCache.set(key, rev);
+
+            if (rev.productId) {
+              const pId = String(rev.productId).trim();
+              const cur = productStats.get(pId) || { totalStars: 0, count: 0 };
+              productStats.set(pId, {
+                totalStars: cur.totalStars + (Number(rev.rating) || 5),
+                count: cur.count + 1
+              });
+            }
           }
         });
+
+        // Sync aggregate review metrics in memory
+        productStats.forEach((stat, pId) => {
+          const avg = Number((stat.totalStars / stat.count).toFixed(1));
+          updateProductReviewMetricsInMemory(pId, avg, stat.count);
+          updateProductInMarketplaceCache(pId, {
+            rating: avg,
+            reviews: stat.count,
+            reviewsCount: stat.count
+          });
+        });
+
         broadcastReviewsUpdate();
       }
     });
@@ -1227,6 +1299,13 @@ function resolveProductKeys(productId: string): Set<string> {
   const lower = raw.toLowerCase();
   keys.add(raw);
   keys.add(lower);
+
+  // Check registered slug aliases
+  if (productSlugAliases.has(lower)) {
+    const aliasedId = productSlugAliases.get(lower)!;
+    keys.add(aliasedId);
+    keys.add(aliasedId.toLowerCase());
+  }
 
   const allProds = getCachedMarketplaceProducts();
   const matchedProd = allProds.find(p => {

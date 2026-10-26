@@ -169,6 +169,38 @@ export function getCachedMarketplaceProducts(): Product[] {
 }
 
 /**
+ * Updates a product's rating, review counts, or metrics directly in the shared marketplace cache
+ * and notifies all live product subscribers across Home, Cards, Search, and Category views immediately.
+ */
+export function updateProductInMarketplaceCache(productId: string, updates: Partial<Product>): void {
+  if (!productId || !globalMarketplaceProducts) return;
+  const pIdStr = String(productId).trim().toLowerCase();
+  let modified = false;
+
+  globalMarketplaceProducts = globalMarketplaceProducts.map(prod => {
+    if (String(prod.id).trim().toLowerCase() === pIdStr || (prod.originalProductId && String(prod.originalProductId).trim().toLowerCase() === pIdStr)) {
+      modified = true;
+      return {
+        ...prod,
+        ...updates
+      };
+    }
+    return prod;
+  });
+
+  if (modified) {
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(CACHED_PRODUCTS_KEY, JSON.stringify(globalMarketplaceProducts));
+      }
+    } catch (_) {}
+    subscribers.forEach(cb => {
+      try { cb([...globalMarketplaceProducts!]); } catch (_) {}
+    });
+  }
+}
+
+/**
  * Helper to enrich products with real vendor details from vendors map
  */
 function enrichWithVendors(products: Product[], vendors: Record<string, any>): Product[] {

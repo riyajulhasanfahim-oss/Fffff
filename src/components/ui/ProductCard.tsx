@@ -7,6 +7,7 @@ import { useWishlist } from '../../contexts/WishlistContext';
 import { useAuth } from '../../context/AuthContext';
 import { getProductPath } from '../../utils/seo';
 import { getCachedProductMetrics, fetchProductMetricsFromRTDB, subscribeToProductMetrics, isMetricsLoaded } from '../../services/productMetricsService';
+import { getCachedProductReviews, subscribeToProductReviews } from '../../services/reviewService';
 import { formatDirectImageUrl, handleProductImageError, PLACEHOLDER_PRODUCT_IMAGE } from '../../utils/imageUrl';
 import { useLanguage } from '../common/LanguageProvider';
 import toast from 'react-hot-toast';
@@ -158,37 +159,48 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
   const regularPrice = product.originalPrice && product.originalPrice > shopPrice ? Number(product.originalPrice) : undefined;
   const discountPercent = product.discount || (regularPrice ? Math.round(((regularPrice - shopPrice) / regularPrice) * 100) : undefined);
 
-  // Real sales & review metrics from Cloud Firestore
+  // Real sales & review metrics from Cloud Firestore / RTDB
   const cachedMetrics = product.id 
     ? (getCachedProductMetrics(product.id) || (product.originalProductId ? getCachedProductMetrics(product.originalProductId) : null))
     : null;
   const [metrics, setMetrics] = useState<{ soldCount: number; rating: number; reviewsCount: number } | null>(cachedMetrics);
 
+  // Authoritative cached direct reviews
+  const cachedDirectRevs = product.id 
+    ? (getCachedProductReviews(product.id) || (product.originalProductId ? getCachedProductReviews(product.originalProductId) : null))
+    : null;
+  const [liveReviews, setLiveReviews] = useState<any[] | null>(cachedDirectRevs);
+
   useEffect(() => {
     if (!product.id) return;
 
     // 1. Subscribe to real-time metrics updates
-    const unsubscribe = subscribeToProductMetrics((metricsMap) => {
+    const unsubscribeMetrics = subscribeToProductMetrics((metricsMap) => {
       const m = metricsMap.get(product.id) || (product.originalProductId ? metricsMap.get(product.originalProductId) : null);
       if (m) {
         setMetrics(m);
       }
     });
 
-    // 2. Fetch if not already available in cache
+    // 2. Subscribe to real-time reviews updates
+    const unsubscribeReviews = subscribeToProductReviews(product.id, (revs) => {
+      if (revs) {
+        setLiveReviews(revs);
+      }
+    });
+
+    // 3. Fetch if not already available in cache
+    let isMounted = true;
     if (!metrics) {
-      let isMounted = true;
       fetchProductMetricsFromRTDB(product.id).then(m => {
         if (isMounted && m) setMetrics(m);
       });
-      return () => {
-        isMounted = false;
-        unsubscribe();
-      };
     }
 
     return () => {
-      unsubscribe();
+      isMounted = false;
+      unsubscribeMetrics();
+      unsubscribeReviews();
     };
   }, [product.id, product.originalProductId]);
 
@@ -198,11 +210,24 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
 
   const soldCount = metrics?.soldCount ?? productDirectSold;
 
-  const reviewsCount = metrics?.reviewsCount 
-    ?? Number(product.reviewsCount ?? product.reviews ?? 0);
+  const directCount = liveReviews ? liveReviews.length : (cachedDirectRevs ? cachedDirectRevs.length : null);
+  const directRating = liveReviews && liveReviews.length > 0
+    ? (liveReviews.reduce((sum, r) => sum + (Number(r.rating) || 5), 0) / liveReviews.length)
+    : (cachedDirectRevs && cachedDirectRevs.length > 0 
+      ? (cachedDirectRevs.reduce((sum, r) => sum + (Number(r.rating) || 5), 0) / cachedDirectRevs.length) 
+      : null);
 
-  const rating = metrics?.rating 
-    ?? (reviewsCount > 0 ? Number(product.rating || 0) : 0);
+  const reviewsCount = directCount !== null && directCount > 0
+    ? directCount
+    : (metrics?.reviewsCount && metrics.reviewsCount > 0
+      ? metrics.reviewsCount
+      : Number(product.reviewsCount ?? product.reviews ?? 0));
+
+  const rating = directRating !== null && directRating > 0
+    ? directRating
+    : (metrics?.rating && metrics.rating > 0
+      ? metrics.rating
+      : (reviewsCount > 0 ? Number(product.rating || 0) : 0));
 
   return (
     <motion.div 

@@ -1,6 +1,6 @@
 import { collection, getDocs, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { rtdbGet } from '../lib/rtdb';
+import { rtdbGet, rtdbSubscribe } from '../lib/rtdb';
 
 export interface ProductMetrics {
   soldCount: number;
@@ -11,11 +11,16 @@ export interface ProductMetrics {
 const LOCAL_STORAGE_METRICS_KEY = 'rj_cached_product_metrics_v2';
 const inMemoryMetricsCache = new Map<string, ProductMetrics>();
 let cacheLastFetched = 0;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minute cache freshness
+const CACHE_TTL_MS = 20 * 1000; // 20 second freshness
 let isMetricsInitialLoaded = false;
 let inflightMetricsPromise: Promise<Map<string, ProductMetrics>> | null = null;
 const metricsListeners = new Set<(metricsMap: Map<string, ProductMetrics>) => void>();
 let ordersUnsubscribe: (() => void) | null = null;
+let reviewsUnsubscribe: (() => void) | null = null;
+let rtdbReviewsUnsubscribe: (() => void) | null = null;
+
+// Track active reviews in memory across RTDB & Firestore
+const cachedReviewsMap = new Map<string, any>();
 
 // Synchronously bootstrap metrics from localStorage on module load (0ms frame-0 availability)
 try {
@@ -36,6 +41,30 @@ try {
     }
   }
 } catch (_) {}
+
+/**
+ * Directly updates review metrics for a product in memory, notifies subscribers,
+ * and persists to localStorage immediately (0ms delay).
+ */
+export function updateProductReviewMetricsInMemory(
+  productId: string,
+  rating: number,
+  reviewsCount: number
+): void {
+  if (!productId) return;
+  const pId = String(productId).trim();
+  const existing = inMemoryMetricsCache.get(pId) || { soldCount: 0, rating: 0, reviewsCount: 0 };
+  
+  const updated: ProductMetrics = {
+    soldCount: existing.soldCount,
+    rating: Number(rating) || 0,
+    reviewsCount: Math.max(0, Number(reviewsCount) || 0)
+  };
+
+  inMemoryMetricsCache.set(pId, updated);
+  persistMetricsToLocalStorage();
+  notifyMetricsSubscribers();
+}
 
 /**
  * Returns whether initial metrics have been loaded from cache or Firestore
@@ -173,14 +202,31 @@ function processMetricsData(
   }
 
   // Combine into inMemoryMetricsCache
-  const allProductIds = new Set<string>([...salesMap.keys(), ...ratingsMap.keys()]);
+  const allProductIds = new Set<string>([...salesMap.keys(), ...ratingsMap.keys(), ...inMemoryMetricsCache.keys()]);
   for (const pId of allProductIds) {
-    const sold = salesMap.get(pId) || 0;
+    const sold = salesMap.get(pId) || (inMemoryMetricsCache.get(pId)?.soldCount ?? 0);
     const reviewInfo = ratingsMap.get(pId);
-    const reviewsCount = reviewInfo ? reviewInfo.count : 0;
-    const rating = reviewInfo && reviewInfo.count > 0 
+    
+    let reviewsCount = reviewInfo ? reviewInfo.count : 0;
+    let rating = reviewInfo && reviewInfo.count > 0 
       ? Number((reviewInfo.totalStars / reviewInfo.count).toFixed(1)) 
       : 0;
+
+    // Fallback: If not in ratingsMap for this batch, preserve existing cached review count or product doc review count
+    if (reviewsCount === 0) {
+      const existing = inMemoryMetricsCache.get(pId);
+      if (existing && existing.reviewsCount > 0) {
+        reviewsCount = existing.reviewsCount;
+        rating = existing.rating;
+      } else {
+        const prodDoc = Array.isArray(productsData) ? productsData.find(p => p && p.id === pId) : null;
+        const docCount = Number(prodDoc?.reviewsCount ?? prodDoc?.reviews ?? 0);
+        if (docCount > 0) {
+          reviewsCount = docCount;
+          rating = Number(prodDoc?.rating || 0);
+        }
+      }
+    }
 
     inMemoryMetricsCache.set(pId, {
       soldCount: sold,
@@ -198,7 +244,7 @@ function processMetricsData(
 }
 
 /**
- * Calculates confirmed sales and verified reviews strictly from Cloud Firestore
+ * Calculates confirmed sales and verified reviews strictly from Cloud Firestore and Realtime Database
  * with shared in-flight deduplication and local persistence.
  */
 export async function fetchAllProductsMetricsFromRTDB(forceRefresh = false): Promise<Map<string, ProductMetrics>> {
@@ -213,13 +259,14 @@ export async function fetchAllProductsMetricsFromRTDB(forceRefresh = false): Pro
 
   inflightMetricsPromise = (async () => {
     try {
-      // Fetch directly from Cloud Firestore collections (orders, products, reviews)
-      const [fsOrdersSnap, fsProductsSnap, fsReviewsSnap, rtdbOrders, rtdbOrderItems] = await Promise.all([
+      // Fetch directly from Cloud Firestore and RTDB collections (orders, products, reviews)
+      const [fsOrdersSnap, fsProductsSnap, fsReviewsSnap, rtdbOrders, rtdbOrderItems, rtdbReviews] = await Promise.all([
         getDocs(collection(db, 'orders')).catch(() => null),
         getDocs(collection(db, 'products')).catch(() => null),
         getDocs(collection(db, 'reviews')).catch(() => null),
         rtdbGet<Record<string, any>>('orders', 2500).catch(() => null),
-        rtdbGet<Record<string, any>>('orderItems', 2500).catch(() => null)
+        rtdbGet<Record<string, any>>('orderItems', 2500).catch(() => null),
+        rtdbGet<Record<string, any>>('reviews', 2500).catch(() => null)
       ]);
 
       const ordersList: any[] = [];
@@ -238,16 +285,28 @@ export async function fetchAllProductsMetricsFromRTDB(forceRefresh = false): Pro
         });
       }
 
-      const reviewsList: any[] = [];
-      if (fsReviewsSnap && !fsReviewsSnap.empty) {
-        fsReviewsSnap.forEach(docSnap => {
-          reviewsList.push({ id: docSnap.id, ...docSnap.data() });
+      if (rtdbReviews && typeof rtdbReviews === 'object') {
+        Object.entries(rtdbReviews).forEach(([k, v]) => {
+          if (v && typeof v === 'object' && (v as any).productId) {
+            cachedReviewsMap.set(k, { id: k, ...(v as any) });
+          }
         });
       }
 
+      if (fsReviewsSnap && !fsReviewsSnap.empty) {
+        fsReviewsSnap.forEach(docSnap => {
+          const data = docSnap.data();
+          if (data && data.productId) {
+            cachedReviewsMap.set(docSnap.id, { id: docSnap.id, ...data });
+          }
+        });
+      }
+
+      const reviewsList = Array.from(cachedReviewsMap.values());
+
       processMetricsData(ordersList, productsList, reviewsList, rtdbOrderItems || undefined);
 
-      // Ensure single real-time Firestore listener on orders for immediate live sync
+      // Ensure real-time Firestore & RTDB listeners for immediate live sync
       initProductMetricsRealtimeListener();
 
       return inMemoryMetricsCache;
@@ -264,32 +323,79 @@ export async function fetchAllProductsMetricsFromRTDB(forceRefresh = false): Pro
 }
 
 /**
- * Initializes a single real-time Firestore onSnapshot listener on 'orders'
+ * Initializes real-time listeners on 'orders' and 'reviews'
  * without creating redundant listeners or polling storms.
  */
 export function initProductMetricsRealtimeListener(): void {
-  if (ordersUnsubscribe || typeof window === 'undefined') return;
+  if (typeof window === 'undefined') return;
 
-  try {
-    ordersUnsubscribe = onSnapshot(
-      collection(db, 'orders'),
-      (snap) => {
-        if (!snap || snap.empty) return;
-        const ordersList: any[] = [];
-        snap.forEach(docSnap => {
-          ordersList.push({ id: docSnap.id, ...docSnap.data() });
-        });
+  // 1. RTDB Reviews real-time listener
+  if (!rtdbReviewsUnsubscribe) {
+    try {
+      rtdbReviewsUnsubscribe = rtdbSubscribe<Record<string, any>>('reviews', (data) => {
+        if (data && typeof data === 'object') {
+          Object.entries(data).forEach(([k, v]) => {
+            if (v && typeof v === 'object' && v.productId) {
+              cachedReviewsMap.set(k, { id: k, ...v });
+            }
+          });
+          const currentProducts = Array.from(inMemoryMetricsCache.keys()).map(id => ({ id }));
+          processMetricsData([], currentProducts, Array.from(cachedReviewsMap.values()));
+        }
+      });
+    } catch (e) {
+      console.warn('[RTDB reviews subscribe exception]:', e);
+    }
+  }
 
-        // Fast re-compute with cached products and reviews
-        const currentProducts = Array.from(inMemoryMetricsCache.keys()).map(id => ({ id }));
-        processMetricsData(ordersList, currentProducts, []);
-      },
-      (err) => {
-        console.warn('[Firestore orders onSnapshot notice]:', err?.message);
-      }
-    );
-  } catch (e) {
-    console.warn('[initProductMetricsRealtimeListener exception]:', e);
+  // 2. Firestore Reviews onSnapshot
+  if (!reviewsUnsubscribe) {
+    try {
+      reviewsUnsubscribe = onSnapshot(
+        collection(db, 'reviews'),
+        (snap) => {
+          if (!snap || snap.empty) return;
+          snap.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data && data.productId) {
+              cachedReviewsMap.set(docSnap.id, { id: docSnap.id, ...data });
+            }
+          });
+          const currentProducts = Array.from(inMemoryMetricsCache.keys()).map(id => ({ id }));
+          processMetricsData([], currentProducts, Array.from(cachedReviewsMap.values()));
+        },
+        (err) => {
+          console.warn('[Firestore reviews onSnapshot notice]:', err?.message);
+        }
+      );
+    } catch (e) {
+      console.warn('[Firestore reviews onSnapshot exception]:', e);
+    }
+  }
+
+  // 3. Firestore Orders onSnapshot
+  if (!ordersUnsubscribe) {
+    try {
+      ordersUnsubscribe = onSnapshot(
+        collection(db, 'orders'),
+        (snap) => {
+          if (!snap || snap.empty) return;
+          const ordersList: any[] = [];
+          snap.forEach(docSnap => {
+            ordersList.push({ id: docSnap.id, ...docSnap.data() });
+          });
+
+          // Re-compute with cached products and cached reviews (never empty!)
+          const currentProducts = Array.from(inMemoryMetricsCache.keys()).map(id => ({ id }));
+          processMetricsData(ordersList, currentProducts, Array.from(cachedReviewsMap.values()));
+        },
+        (err) => {
+          console.warn('[Firestore orders onSnapshot notice]:', err?.message);
+        }
+      );
+    } catch (e) {
+      console.warn('[initProductMetricsRealtimeListener exception]:', e);
+    }
   }
 }
 

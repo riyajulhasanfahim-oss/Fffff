@@ -11,11 +11,12 @@ import { useAuth } from '../../context/AuthContext';
 import { collection, query, where, getDocs, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { getStoreFromCache, fetchStoreDetailFromRTDB, isStorePlanVerified } from '../../services/storeCache';
-import { slugifyVendorName } from '../../utils/subdomain';
-import { fetchProductMetricsFromRTDB } from '../../services/productMetricsService';
+import { fetchProductMetricsFromRTDB, subscribeToProductMetrics, getCachedProductMetrics } from '../../services/productMetricsService';
+import { getCachedProductReviews, subscribeToProductReviews } from '../../services/reviewService';
 import { rtdbGet, rtdbList } from '../../lib/rtdb';
 import type { ProductVariant, ProductColor, ProductSize } from '../../types/variant';
 import { getResellerProduct, saveOrUpdateResellerProductPrice, createResellerPriceSnapshot } from '../../services/resellerPricingService';
+import { slugifyVendorName } from '../../utils/subdomain';
 import ShareModal from '../common/ShareModal';
 
 export function formatProductWeight(raw: any): string | null {
@@ -56,6 +57,8 @@ interface ProductInfoProps {
     sku?: string;
     rating?: number;
     reviews?: number;
+    reviewsCount?: number;
+    originalProductId?: string;
     price: number;
     regularPrice?: number;
     originalPrice?: number;
@@ -751,39 +754,74 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
     return Number(p.soldCount ?? p.salesCount ?? p.totalSold ?? 0);
   });
 
-  // Authentic Reviews & Rating from RTDB
-  const [actualRating, setActualRating] = useState<number>(() => Number(product.rating || 0));
-  const [actualReviewsCount, setActualReviewsCount] = useState<number>(() => Number(product.reviews || 0));
+  // Authentic Reviews & Rating from reviewService and RTDB
+  const initialCachedRevs = product.id ? getCachedProductReviews(product.id) : [];
+  const initialCachedMetrics = product.id ? getCachedProductMetrics(product.id) : null;
+  const initialReviewsCount = initialCachedRevs.length > 0 
+    ? initialCachedRevs.length 
+    : (initialCachedMetrics?.reviewsCount ?? Number(product.reviewsCount ?? product.reviews ?? 0));
+  const initialRating = initialCachedRevs.length > 0
+    ? Number((initialCachedRevs.reduce((acc, r) => acc + (Number(r.rating) || 5), 0) / initialCachedRevs.length).toFixed(1))
+    : (initialCachedMetrics?.rating ?? (initialReviewsCount > 0 ? Number(product.rating || 0) : 0));
+
+  const [actualRating, setActualRating] = useState<number>(initialRating);
+  const [actualReviewsCount, setActualReviewsCount] = useState<number>(initialReviewsCount);
 
   useEffect(() => {
     let isSubscribed = true;
     const targetId = product.id;
     if (!targetId) return;
 
-    const syncRealMetrics = async () => {
-      try {
-        const metrics = await fetchProductMetricsFromRTDB(targetId);
-        if (isSubscribed) {
-          setActualSoldCount(metrics.soldCount);
-          if (metrics.reviewsCount > 0) {
-            setActualRating(metrics.rating);
-            setActualReviewsCount(metrics.reviewsCount);
-          } else {
-            setActualRating(Number(product.rating || 0));
-            setActualReviewsCount(Number(product.reviews || 0));
-          }
-        }
-      } catch (e) {
-        console.warn('Notice syncing real product metrics from RTDB:', e);
+    // 1. Subscribe to real-time reviews for this product (instant sync whenever a review is submitted)
+    const unsubReviews = subscribeToProductReviews(targetId, (liveRevs) => {
+      if (!isSubscribed) return;
+      if (liveRevs && liveRevs.length > 0) {
+        const totalStars = liveRevs.reduce((acc, r) => acc + (Number(r.rating) || 5), 0);
+        const avg = Number((totalStars / liveRevs.length).toFixed(1));
+        setActualRating(avg);
+        setActualReviewsCount(liveRevs.length);
       }
-    };
+    });
 
-    syncRealMetrics();
+    // 2. Subscribe to real-time product metrics
+    const unsubMetrics = subscribeToProductMetrics((metricsMap) => {
+      if (!isSubscribed) return;
+      const m = metricsMap.get(targetId) || (product.originalProductId ? metricsMap.get(product.originalProductId) : null);
+      if (m) {
+        setActualSoldCount(m.soldCount);
+        if (m.reviewsCount > 0) {
+          setActualRating(m.rating);
+          setActualReviewsCount(m.reviewsCount);
+        }
+      }
+    });
+
+    // 3. Fallback initial sync
+    fetchProductMetricsFromRTDB(targetId).then(metrics => {
+      if (!isSubscribed || !metrics) return;
+      setActualSoldCount(metrics.soldCount);
+      if (metrics.reviewsCount > 0) {
+        setActualRating(metrics.rating);
+        setActualReviewsCount(metrics.reviewsCount);
+      } else {
+        const cached = getCachedProductReviews(targetId);
+        if (cached.length > 0) {
+          const totalStars = cached.reduce((acc, r) => acc + (Number(r.rating) || 5), 0);
+          setActualRating(Number((totalStars / cached.length).toFixed(1)));
+          setActualReviewsCount(cached.length);
+        } else {
+          setActualRating(Number(product.rating || 0));
+          setActualReviewsCount(Number(product.reviewsCount ?? product.reviews ?? 0));
+        }
+      }
+    }).catch(() => {});
 
     return () => {
       isSubscribed = false;
+      unsubReviews();
+      unsubMetrics();
     };
-  }, [product.id, product.rating, product.reviews]);
+  }, [product.id, product.originalProductId, product.rating, product.reviews, product.reviewsCount]);
 
   // Age / Baby / বয়স info (prominently shown in upper/middle section if provided)
   const ageInfo = useMemo(() => {

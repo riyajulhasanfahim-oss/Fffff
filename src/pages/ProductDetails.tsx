@@ -16,6 +16,7 @@ import { useWishlist } from '../contexts/WishlistContext';
 import { useAuth } from '../context/AuthContext';
 import { fetchProductById, normalizeProduct } from '../services/productService';
 import { isFlashSaleActive, fetchAllFlashSales } from '../services/flashSaleService';
+import { registerProductSlugAlias } from '../services/reviewService';
 import { updateClientSeo, resetDefaultSeo } from '../utils/seo';
 import { formatDirectImageUrl, PLACEHOLDER_PRODUCT_IMAGE } from '../utils/imageUrl';
 
@@ -254,7 +255,8 @@ export default function ProductDetails() {
           brand: normalizedBrand,
           category: rawProd.category && String(rawProd.category).trim() !== '' ? String(rawProd.category).trim() : undefined,
           rating: Number(rawProd.rating) || 0,
-          reviews: Number(rawProd.reviews) || 0,
+          reviews: Number(rawProd.reviewsCount ?? rawProd.reviews ?? 0),
+          reviewsCount: Number(rawProd.reviewsCount ?? rawProd.reviews ?? 0),
           colors: colorsList && colorsList.length > 0 ? colorsList : undefined,
           sizes: sizesList && sizesList.length > 0 ? sizesList : undefined,
           tags: tagsList && tagsList.length > 0 ? tagsList : undefined,
@@ -279,6 +281,9 @@ export default function ProductDetails() {
         };
 
         if (isMounted) {
+          if (productId && normalized.id) {
+            registerProductSlugAlias(productId, normalized.id);
+          }
           setProductData(normalized);
           setLoading(false);
           updateClientSeo(normalized);
@@ -488,7 +493,7 @@ export default function ProductDetails() {
                 
                 {/* Ratings & Reviews Section - Compact */}
                 <div id="reviews" className="bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 border border-slate-100 shadow-2xs">
-                  <ProductReviews productId={productData?.originalProductId || productData?.id || productId || ''} />
+                  <ProductReviews productId={productData?.id || productData?.originalProductId || productId || ''} />
                 </div>
 
                 {/* Description Section - Immediately below Reviews */}

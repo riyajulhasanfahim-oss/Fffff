@@ -484,11 +484,11 @@ export async function ensureProductEmbedding(
 
 /**
  * Main Visual Similarity Search Engine:
- * 1. Takes customer uploaded image.
- * 2. Generates customer image visual embedding vector.
- * 3. Compares against all vendor products' visual embeddings.
- * 4. Ranks products by similarity score (highest visual match first).
- * 5. Returns matched products, similarity percentages, and descriptive suggestions.
+ * 1. Takes customer uploaded image and store catalog.
+ * 2. Uses Gemini Multimodal Vision to inspect packaging, branding, text, shape, and category.
+ * 3. Strictly matches the image against products available in the store catalog.
+ * 4. Only returns genuine matches. If no catalog product matches the image, returns empty matches [].
+ * 5. Uses strict semantic keyword verification as a reliable fallback.
  */
 export async function analyzeImageForProductMatch(
   input: SearchByImageInput
@@ -505,154 +505,163 @@ export async function analyzeImageForProductMatch(
     };
   }
 
-  // 1. Decode customer uploaded image into buffer
   const cleanBase64 = base64Image.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
-  const uploadedBuffer = Buffer.from(cleanBase64, 'base64');
+  const candidateProducts = Array.isArray(vendorProducts) ? vendorProducts : [];
 
-  // 2. Generate visual feature vector for the uploaded image
-  let queryEmbedding: number[];
-  try {
-    queryEmbedding = await computeVisualEmbedding(uploadedBuffer);
-  } catch (err) {
-    console.error('[VisualSearch] Failed to extract features from uploaded image:', err);
-    return {
-      matchedProductIds: [],
-      matchedProductsWithScores: [],
-      detectedItem: '',
-      confidenceKeywords: [],
-      searchQuerySuggestion: ''
-    };
-  }
-
-  // 3. Ensure visual embeddings exist for all candidate products
-  const productsToCompare = Array.isArray(vendorProducts) ? vendorProducts : [];
-  const scoredProducts: Array<{
-    id: string;
-    product: VendorProductInput;
-    similarity: number;
-    matchPercentage: number;
-  }> = [];
-
-  // Batch process embeddings if missing
-  const embeddingPromises = productsToCompare.map(async (prod) => {
-    try {
-      const emb = await ensureProductEmbedding(prod);
-      if (emb) {
-        const sim = calculateCosineSimilarity(queryEmbedding, emb);
-        // Calibrate match percentage: cosine similarity of normalized positive features
-        // typically ranges from ~0.35 (dissimilar) to ~1.0 (identical)
-        const matchPct = Math.round(
-          Math.max(5, Math.min(99, ((sim - 0.35) / 0.65) * 100))
-        );
-        return {
-          id: prod.id,
-          product: prod,
-          similarity: sim,
-          matchPercentage: matchPct
-        };
-      }
-    } catch (_) {}
-    return null;
-  });
-
-  const results = await Promise.all(embeddingPromises);
-  for (const item of results) {
-    if (item && !isNaN(item.similarity)) {
-      scoredProducts.push(item);
-    }
-  }
-
-  // 4. Sort strictly by visual similarity in descending order (highest similarity first)
-  scoredProducts.sort((a, b) => b.similarity - a.similarity);
-
-  // Filter relevant visual matches (e.g. above similarity threshold or top relative matches)
-  // If top match has strong similarity, filter products within reasonable range
-  let matchedList = scoredProducts;
-  if (scoredProducts.length > 0) {
-    const topSim = scoredProducts[0].similarity;
-    if (topSim >= 0.70) {
-      // Return products that have visual similarity close to top match
-      matchedList = scoredProducts.filter((s) => s.similarity >= Math.max(0.65, topSim - 0.20));
-    } else if (topSim >= 0.50) {
-      matchedList = scoredProducts.slice(0, 10);
-    } else {
-      // If overall similarity is very low, still provide closest 3 items or empty
-      matchedList = scoredProducts.filter((s) => s.similarity >= 0.45).slice(0, 6);
-    }
-  }
-
-  // 5. Detect product label / keywords using Gemini if available or best matching item title
   let detectedItem = '';
   let searchQuerySuggestion = '';
   let confidenceKeywords: string[] = [];
+  const matchedProductsWithScores: MatchedProductScore[] = [];
+  const matchedProductIds: string[] = [];
 
-  const topProduct = matchedList[0]?.product || scoredProducts[0]?.product;
-  if (topProduct) {
-    detectedItem = topProduct.name;
-    searchQuerySuggestion = topProduct.name;
-    confidenceKeywords = [
-      topProduct.name,
-      topProduct.brand || '',
-      topProduct.category || ''
-    ].filter(Boolean);
-  }
-
-  // Optional: Try Gemini API for supplementary text description if key works
   const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey) {
-    try {
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-      });
-      const aiPrompt = `Identify the product in this image in 2-4 words (e.g. "Smartphone", "Toothpaste", "Running Shoes"). Return JSON: {"detectedItem": string, "searchQuery": string}`;
-      const genResult = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: {
-          parts: [
+
+  if (apiKey && candidateProducts.length > 0) {
+    // 1. Prepare minimal, accurate catalog representation
+    const catalogSummary = candidateProducts.map((p) => ({
+      id: p.id,
+      name: p.name || '',
+      category: p.category || '',
+      brand: p.brand || '',
+      tags: Array.isArray(p.tags) ? p.tags.slice(0, 5) : []
+    }));
+
+    const prompt =
+      'You are an expert visual product recognition engine for an online shopping website.\n' +
+      'A customer uploaded a photo of a product to search for it in our store catalog.\n\n' +
+      'Store Catalog:\n' +
+      JSON.stringify(catalogSummary) +
+      '\n\n' +
+      'INSTRUCTIONS:\n' +
+      '1. Carefully examine the uploaded image (identify brand name, visible packaging text, shape, container, and product type).\n' +
+      '2. Compare the product in the image against the Store Catalog above.\n' +
+      '3. STRICT MATCHING RULES:\n' +
+      '   - Only return product IDs that are a real, genuine match for the item shown in the image (same brand/type/product or direct variant).\n' +
+      '   - If NO product in the Store Catalog matches the photo (e.g. an item not in store, or totally unrelated product), matchedProducts MUST be empty [].\n' +
+      '   - NEVER guess or return unrelated products!\n' +
+      '4. Assign a matchPercentage between 50 and 99 for any matched item based on visual confidence.\n\n' +
+      'Return ONLY valid JSON matching this schema:\n' +
+      '{\n' +
+      '  "detectedItem": "concise description of the product in the image",\n' +
+      '  "searchQuerySuggestion": "best search query",\n' +
+      '  "confidenceKeywords": ["keyword1", "keyword2", "keyword3"],\n' +
+      '  "matchedProducts": [\n' +
+      '    {"id": "product_id_from_catalog", "matchPercentage": number}\n' +
+      '  ]\n' +
+      '}';
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+    });
+
+    const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite'];
+    for (const modelName of candidateModels) {
+      try {
+        const genResult = await ai.models.generateContent({
+          model: modelName,
+          contents: [
             {
-              inlineData: {
-                data: cleanBase64,
-                mimeType: input.mimeType || 'image/jpeg'
-              }
-            },
-            { text: aiPrompt }
-          ]
-        },
-        config: {
-          responseMimeType: 'application/json'
+              parts: [
+                {
+                  inlineData: {
+                    data: cleanBase64,
+                    mimeType: input.mimeType || 'image/jpeg'
+                  }
+                },
+                { text: prompt }
+              ]
+            }
+          ],
+          config: {
+            responseMimeType: 'application/json'
+          }
+        });
+
+        const rawText = genResult.text?.trim() || '{}';
+        const parsed = JSON.parse(rawText);
+
+        if (parsed.detectedItem) {
+          detectedItem = parsed.detectedItem;
         }
-      });
-      const parsed = JSON.parse(genResult.text?.trim() || '{}');
-      if (parsed.detectedItem) {
-        detectedItem = parsed.detectedItem;
+        if (parsed.searchQuerySuggestion) {
+          searchQuerySuggestion = parsed.searchQuerySuggestion;
+        }
+        if (Array.isArray(parsed.confidenceKeywords)) {
+          confidenceKeywords = parsed.confidenceKeywords.filter((k: any) => typeof k === 'string');
+        }
+
+        const validProductMap = new Map(candidateProducts.map((p) => [p.id, p]));
+        if (Array.isArray(parsed.matchedProducts)) {
+          // Sort by matchPercentage descending
+          const sorted = [...parsed.matchedProducts]
+            .filter((m: any) => m && m.id && validProductMap.has(m.id))
+            .sort((a: any, b: any) => (b.matchPercentage || 0) - (a.matchPercentage || 0));
+
+          for (const item of sorted) {
+            if (!matchedProductIds.includes(item.id)) {
+              matchedProductIds.push(item.id);
+              const score = Math.max(50, Math.min(99, Number(item.matchPercentage) || 85));
+              matchedProductsWithScores.push({
+                id: item.id,
+                similarity: Number((score / 100).toFixed(4)),
+                matchPercentage: score
+              });
+            }
+          }
+        }
+
+        // Successfully generated with Gemini
+        return {
+          matchedProductIds,
+          matchedProductsWithScores,
+          detectedItem: detectedItem || (matchedProductIds.length > 0 ? (validProductMap.get(matchedProductIds[0])?.name || '') : 'পণ্য'),
+          confidenceKeywords: confidenceKeywords.length > 0 ? confidenceKeywords : (detectedItem ? [detectedItem] : []),
+          searchQuerySuggestion: searchQuerySuggestion || detectedItem
+        };
+      } catch (err: any) {
+        console.warn(`[VisualSearch] Model ${modelName} failed, trying next:`, err?.message || err);
       }
-      if (parsed.searchQuery) {
-        searchQuerySuggestion = parsed.searchQuery;
-      }
-    } catch (_) {
-      // Ignored: visual vector similarity is our primary ground truth
     }
   }
 
-  // If no specific item detected, fallback to clean filename or top product name
+  // Fallback: If Gemini is unavailable, use strict token & keyword overlap
   if (!detectedItem && fileName) {
     detectedItem = fileName.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-    if (!searchQuerySuggestion) searchQuerySuggestion = detectedItem;
+    searchQuerySuggestion = detectedItem;
   }
 
-  const matchedProductIds = matchedList.map((m) => m.id);
-  const matchedProductsWithScores: MatchedProductScore[] = matchedList.map((m) => ({
-    id: m.id,
-    similarity: Number(m.similarity.toFixed(4)),
-    matchPercentage: m.matchPercentage
-  }));
+  if (detectedItem && candidateProducts.length > 0) {
+    const searchTerms = detectedItem
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length > 2);
+
+    if (searchTerms.length > 0) {
+      for (const prod of candidateProducts) {
+        const prodText = `${prod.name || ''} ${prod.brand || ''} ${prod.category || ''}`.toLowerCase();
+        const matchedTerms = searchTerms.filter((term) => prodText.includes(term));
+        const overlapRatio = matchedTerms.length / searchTerms.length;
+
+        // Strict threshold: only match if at least 60% of terms are contained
+        if (overlapRatio >= 0.6) {
+          const matchPct = Math.round(50 + overlapRatio * 45);
+          matchedProductIds.push(prod.id);
+          matchedProductsWithScores.push({
+            id: prod.id,
+            similarity: Number((matchPct / 100).toFixed(4)),
+            matchPercentage: matchPct
+          });
+        }
+      }
+    }
+  }
 
   return {
     matchedProductIds,
     matchedProductsWithScores,
-    detectedItem: detectedItem || (topProduct ? topProduct.name : 'পণ্য'),
-    confidenceKeywords,
+    detectedItem: detectedItem || 'পণ্য',
+    confidenceKeywords: confidenceKeywords.length > 0 ? confidenceKeywords : (detectedItem ? [detectedItem] : []),
     searchQuerySuggestion: searchQuerySuggestion || detectedItem
   };
 }

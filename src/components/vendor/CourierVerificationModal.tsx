@@ -122,10 +122,10 @@ export default function CourierVerificationModal({
   const isRejected = order?.courierVerificationStatus === 'Rejected';
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-[120] bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+5.5rem)] sm:pb-4 overscroll-contain">
+      <div className="bg-white w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[calc(100dvh-6rem)] sm:max-h-[90vh] overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200">
         {/* Modal Header */}
-        <div className="bg-gradient-to-r from-slate-900 to-slate-800 p-4 sm:p-5 text-white flex items-center justify-between">
+        <div className="shrink-0 bg-gradient-to-r from-slate-900 to-slate-800 p-3.5 sm:p-5 text-white flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${
               isVerified ? 'bg-emerald-500/20 border-emerald-400/30 text-emerald-300' :
@@ -170,7 +170,7 @@ export default function CourierVerificationModal({
 
         {/* 1. LOCKED VIEW: PENDING ADMIN REVIEW (Strict Rule 2) */}
         {isPendingReview ? (
-          <div className="p-6 space-y-5 text-center">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 text-center overscroll-contain">
             <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-600 border border-amber-200 flex items-center justify-center mx-auto shadow-inner">
               <Clock className="w-8 h-8 animate-pulse" />
             </div>
@@ -228,7 +228,7 @@ export default function CourierVerificationModal({
           </div>
         ) : isVerified ? (
           /* 2. LOCKED VIEW: VERIFIED / ACCEPTED (Strict Rule 4) */
-          <div className="p-6 space-y-5 text-center">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 text-center overscroll-contain">
             <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-600 border border-emerald-200 flex items-center justify-center mx-auto shadow-inner">
               <CheckCircle2 className="w-8 h-8" />
             </div>
@@ -284,7 +284,9 @@ export default function CourierVerificationModal({
           </div>
         ) : (
           /* 3. ACTIVE SUBMISSION FORM (Fresh or Re-submitting after Rejection - Strict Rule 5) */
-          <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 sm:space-y-5">
+          <form onSubmit={handleSubmit} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {/* Scrollable Form Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 overscroll-contain">
             {/* If previously rejected, show clear rejection reason banner */}
             {isRejected && (
               <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl space-y-1.5">
@@ -448,20 +450,22 @@ export default function CourierVerificationModal({
               </span>
             </div>
 
-            {/* Form Actions */}
-            <div className="pt-2 flex items-center justify-end gap-3 border-t border-slate-100">
+            </div>
+
+            {/* Form Actions - Always visible, sticky/fixed at bottom of modal */}
+            <div className="shrink-0 bg-white/95 backdrop-blur-md px-4 sm:px-6 py-3 sm:py-3.5 border-t border-slate-200/90 flex items-center justify-end gap-2.5 sm:gap-3 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
               <button
                 type="button"
                 onClick={onClose}
                 disabled={isSubmitting}
-                className="px-4 py-2.5 text-xs sm:text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                className="px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
               >
                 বাতিল করুন
               </button>
               <button
                 type="submit"
                 disabled={isSubmitting || !acknowledged}
-                className="px-5 py-2.5 bg-primary-main hover:bg-sky-600 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-primary-main hover:bg-sky-600 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-all flex items-center gap-1.5 sm:gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {isSubmitting ? (
                   <>

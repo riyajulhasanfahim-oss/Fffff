@@ -6,6 +6,9 @@ import { Product } from '../ui/ProductCard';
 import { searchFirestoreProducts, addSearchHistoryToFirestore } from '../../services/firestoreService';
 import { fetchAllMarketplaceProducts } from '../../services/productService';
 import { searchProductsByImage } from '../../utils/searchEngine';
+import { getCachedProductMetrics, subscribeToProductMetrics } from '../../services/productMetricsService';
+import { getCachedProductReviews } from '../../services/reviewService';
+import { useLanguage } from '../common/LanguageProvider';
 import { auth } from '../../lib/firebase';
 import toast from 'react-hot-toast';
 
@@ -19,16 +22,26 @@ interface ProfessionalSearchProps {
 }
 
 export default function ProfessionalSearch({ placeholder = 'Search in RJ WORLD BD...', className = '' }: ProfessionalSearchProps) {
+  const { language } = useLanguage();
   const [query, setQuery] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [liveSuggestions, setLiveSuggestions] = useState<Product[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [, setMetricsVersion] = useState(0);
   
   const searchRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<any>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    // Keep live metrics up to date for search suggestions
+    const unsub = subscribeToProductMetrics(() => {
+      setMetricsVersion(v => v + 1);
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -336,26 +349,45 @@ export default function ProfessionalSearch({ placeholder = 'Search in RJ WORLD B
               ) : (
                 <div className="py-2">
                   {liveSuggestions.length > 0 ? (
-                    liveSuggestions.map((product) => (
-                      <button 
-                        key={product.id}
-                        type="button"
-                        onClick={() => handleProductClick(product)}
-                        className="w-full text-left px-4 py-3 hover:bg-slate-50 flex items-center gap-4 transition-colors border-b border-slate-50 last:border-0 cursor-pointer"
-                      >
-                        <img referrerPolicy="no-referrer" src={product.image} alt={product.name} className="w-12 h-12 object-cover rounded-md" />
-                        <div className="flex-1">
-                          <h4 className="text-sm font-medium text-slate-800 line-clamp-1">{product.name}</h4>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-sm font-bold text-primary-main">৳{product.price}</span>
-                            {product.discount && product.discount > 0 && (
-                              <span className="text-xs text-rose-500 bg-rose-50 px-1 rounded">-{product.discount}%</span>
-                            )}
-                            <span className="text-xs text-amber-500 ml-auto flex items-center">⭐ {product.rating}</span>
+                    liveSuggestions.map((product) => {
+                      const prodMetrics = getCachedProductMetrics(product.id) || (product.originalProductId ? getCachedProductMetrics(product.originalProductId) : null);
+                      const cachedRevs = getCachedProductReviews(product.id);
+                      const revCount = cachedRevs.length > 0 
+                        ? cachedRevs.length 
+                        : (prodMetrics?.reviewsCount ?? Number(product.reviewsCount ?? product.reviews ?? 0));
+                      const prodRating = cachedRevs.length > 0
+                        ? Number((cachedRevs.reduce((acc, r) => acc + (Number(r.rating) || 5), 0) / cachedRevs.length).toFixed(1))
+                        : (prodMetrics?.rating ?? (revCount > 0 ? Number(product.rating || 0) : 0));
+
+                      return (
+                        <button 
+                          key={product.id}
+                          type="button"
+                          onClick={() => handleProductClick(product)}
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 flex items-center gap-4 transition-colors border-b border-slate-50 last:border-0 cursor-pointer"
+                        >
+                          <img referrerPolicy="no-referrer" src={product.image} alt={product.name} className="w-12 h-12 object-cover rounded-md" />
+                          <div className="flex-1">
+                            <h4 className="text-sm font-medium text-slate-800 line-clamp-1">{product.name}</h4>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-sm font-bold text-primary-main">৳{product.price}</span>
+                              {product.discount && product.discount > 0 && (
+                                <span className="text-xs text-rose-500 bg-rose-50 px-1 rounded">-{product.discount}%</span>
+                              )}
+                              {revCount > 0 && prodRating > 0 ? (
+                                <span className="text-xs text-amber-500 ml-auto flex items-center gap-1 font-semibold">
+                                  ⭐ {prodRating.toFixed(1)} <span className="text-slate-400 font-normal">({revCount})</span>
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-slate-400 ml-auto font-normal">
+                                  {language === 'bn' ? 'রিভিউ নেই' : 'No reviews'}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </button>
-                    ))
+                        </button>
+                      );
+                    })
                   ) : (
                     <div className="p-4 text-center text-sm text-slate-500">
                       No matching products found. Try a different keyword.
