@@ -504,7 +504,7 @@ export default function ResellerApplication() {
         return;
       } else {
         setLoading(false);
-        let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+        let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
         if (result.rejectionReason === 'amount_mismatch') {
           errorMsg = result.message || `পেমেন্ট এমাউন্ট সঠিক নয়! প্রত্যাশিত: ৳${registrationFeeAmount.toFixed(2)}।`;
         } else if (result.rejectionReason === 'method_mismatch') {
@@ -519,7 +519,7 @@ export default function ResellerApplication() {
       }
     } catch (error: any) {
       console.error('Error registering reseller:', error);
-      let errNotice = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+      let errNotice = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
       if (error.code === 'auth/email-already-in-use') {
         errNotice = 'Email is already registered. Please login to apply as reseller.';
       }

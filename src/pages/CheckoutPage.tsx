@@ -1664,7 +1664,7 @@ export default function CheckoutPage() {
           verifiedAt: result.verifiedAt || Date.now()
         });
       } else {
-        let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+        let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
         if (result.rejectionReason === 'amount_mismatch') {
           errorMsg = result.message || `পেমেন্ট এমাউন্ট সঠিক নয়! প্রত্যাশিত: ৳${expectedAmount.toFixed(2)}।`;
         } else if (result.rejectionReason === 'method_mismatch') {
@@ -1679,7 +1679,7 @@ export default function CheckoutPage() {
       }
     } catch (err: any) {
       console.error('Payment verification error:', err);
-      const errNotice = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+      const errNotice = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
       setPaymentErrorMessage(errNotice);
       toast.error(errNotice, { duration: 5000 });
     } finally {

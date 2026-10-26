@@ -3838,7 +3838,7 @@ app.use((req, res, next) => {
         success: false,
         status: 'pending',
         rejectionReason: 'record_not_found',
-        message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন',
+        message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন',
         diagnostic: {
           transactionId: cleanTrx,
           searchedPath: 'payments',

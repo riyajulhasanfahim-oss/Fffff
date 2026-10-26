@@ -179,7 +179,7 @@ export default function ShareholderPaymentPage() {
             success: false,
             status: 'pending',
             rejectionReason: 'transaction_not_found',
-            message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন'
+            message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন'
           });
         }, 4000);
       });
@@ -226,7 +226,7 @@ export default function ShareholderPaymentPage() {
         return;
       } else {
         setSubmitting(false);
-        let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+        let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
         if (result.rejectionReason === 'amount_mismatch') {
           errorMsg = result.message || `পেমেন্ট এমাউন্ট সঠিক নয়! প্রত্যাশিত: ৳${payableAmount.toFixed(2)}।`;
         } else if (result.rejectionReason === 'method_mismatch') {
@@ -241,7 +241,7 @@ export default function ShareholderPaymentPage() {
       }
     } catch (error: any) {
       console.error('Error verifying shareholder payment:', error);
-      const defaultErr = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+      const defaultErr = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
       const errNotice = (error?.message && !error.message.toLowerCase().includes('timed out')) 
         ? error.message 
         : defaultErr;

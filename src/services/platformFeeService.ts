@@ -917,7 +917,7 @@ export async function payVendorPlatformFeeWithTrxId(
     if (!cleanTrxId || cleanTrxId.length < 3) {
       return { 
         success: false, 
-        message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন' 
+        message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন' 
       };
     }
 
@@ -966,7 +966,7 @@ export async function payVendorPlatformFeeWithTrxId(
         verifiedPayment: result
       };
     } else {
-      let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+      let errorMsg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
       if (result.rejectionReason === 'amount_mismatch') {
         errorMsg = result.message || `পেমেন্ট এমাউন্ট সঠিক নয়! প্রত্যাশিত: ৳${targetAmount.toFixed(2)}।`;
       } else if (result.rejectionReason === 'method_mismatch') {
@@ -985,7 +985,7 @@ export async function payVendorPlatformFeeWithTrxId(
     console.error('Error paying platform fee:', error);
     return { 
       success: false, 
-      message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন' 
+      message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন' 
     };
   }
 }

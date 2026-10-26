@@ -104,7 +104,7 @@ export default function VendorPlatformFee() {
       }
     } catch (err: any) {
       console.error('Error verifying platform fee payment:', err);
-      const msg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+      const msg = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
       setErrorMessage(msg);
       toast.error(msg, { duration: 5000 });
     } finally {
