@@ -127,11 +127,18 @@ function parseFirestorePaymentItem(id: string, data: any): FirestorePaymentRecor
  * Single Source of Truth
  */
 async function queryFirestorePaymentsNode(cleanTrxId: string): Promise<FirestorePaymentRecord | null> {
+  const withTimeout = <T>(p: Promise<T>, ms = 1500): Promise<T | null> => {
+    return Promise.race([
+      p,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))
+    ]);
+  };
+
   try {
     // 1. Direct document fetch by ID (SMS Reader writes document with docId == cleanTrxId)
     const directDocRef = doc(db, 'payments', cleanTrxId);
-    const directDoc = await getDoc(directDocRef);
-    if (directDoc.exists()) {
+    const directDoc = await withTimeout(getDoc(directDocRef), 1500);
+    if (directDoc && directDoc.exists()) {
       const data = directDoc.data();
       const rawTrx = data.transactionId || data.trxId || directDoc.id;
       const itemTrx = String(rawTrx).trim().replace(/^#/, '').replace(/\s+/g, '').toUpperCase();
@@ -145,8 +152,8 @@ async function queryFirestorePaymentsNode(cleanTrxId: string): Promise<Firestore
       collection(db, 'payments'),
       where('transactionId', '==', cleanTrxId)
     );
-    const qSnap = await getDocs(q);
-    if (!qSnap.empty) {
+    const qSnap = await withTimeout(getDocs(q), 1500);
+    if (qSnap && !qSnap.empty) {
       const firstDoc = qSnap.docs[0];
       return parseFirestorePaymentItem(firstDoc.id, firstDoc.data());
     }
@@ -651,6 +658,24 @@ export async function verifyPaymentAutomatic(
         status: 'rejected',
         message: serverResData.message || 'Payment verification failed. Please check your Transaction ID.',
         rejectionReason: serverResData.rejectionReason || 'amount_mismatch'
+      };
+    }
+
+    // If server confirms record does not exist in Firestore payments collection, fail fast with Bengali message
+    if (!firestoreRecord && serverResData?.rejectionReason === 'record_not_found') {
+      console.warn(`[VERIFY] Payment record not found in Firestore for TrxID: ${cleanTrxId}`);
+      console.log('[VERIFY] Final response sent');
+      return {
+        success: false,
+        status: 'pending',
+        rejectionReason: 'record_not_found',
+        message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন',
+        diagnostic: {
+          transactionId: cleanTrxId,
+          expectedMethod: reqMethod,
+          expectedAmount,
+          invoiceId: req.invoiceId
+        }
       };
     }
 

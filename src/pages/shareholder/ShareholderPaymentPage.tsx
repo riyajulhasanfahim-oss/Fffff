@@ -172,11 +172,16 @@ export default function ShareholderPaymentPage() {
     setTransactionId(cleanTrx);
 
     try {
-      // Call Automatic Payment Verification with 8-second safety timeout (matching Reseller Registration)
-      const timeoutPromise = new Promise<VerificationResult>((_, reject) => {
+      // Automatic Payment Verification with safety fallback (matching Reseller Registration)
+      const timeoutPromise = new Promise<VerificationResult>((resolve) => {
         setTimeout(() => {
-          reject(new Error('Payment verification timed out. Please try again.'));
-        }, 8000);
+          resolve({
+            success: false,
+            status: 'pending',
+            rejectionReason: 'transaction_not_found',
+            message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন'
+          });
+        }, 4000);
       });
 
       const result = await Promise.race([
@@ -228,7 +233,7 @@ export default function ShareholderPaymentPage() {
           errorMsg = result.message || 'পেমেন্ট মেথড সঠিক নয়! সঠিক পেমেন্ট মেথড ব্যবহার করুন।';
         } else if (result.rejectionReason === 'duplicate_transaction') {
           errorMsg = result.message || 'এই ট্রানজেকশন আইডি ইতিমধ্যে ব্যবহৃত হয়েছে!';
-        } else if (result.message) {
+        } else if (result.message && !result.message.toLowerCase().includes('timed out')) {
           errorMsg = result.message;
         }
         setPaymentErrorMessage(errorMsg);
@@ -236,7 +241,10 @@ export default function ShareholderPaymentPage() {
       }
     } catch (error: any) {
       console.error('Error verifying shareholder payment:', error);
-      const errNotice = error.message || 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+      const defaultErr = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন';
+      const errNotice = (error?.message && !error.message.toLowerCase().includes('timed out')) 
+        ? error.message 
+        : defaultErr;
       setPaymentErrorMessage(errNotice);
       toast.error(errNotice, { duration: 5000 });
     } finally {
