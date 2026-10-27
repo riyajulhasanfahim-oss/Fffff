@@ -4815,6 +4815,20 @@ app.use((req, res, next) => {
           }
         }
       }
+
+      // Merge disk payments into applications
+      const diskPayments = readLocalSharePayments();
+      for (const [id, val] of Object.entries<any>(diskPayments)) {
+        if (!seenAppIds.has(id)) {
+          applications.push({ id, ...val });
+          seenAppIds.add(id);
+        } else {
+          const idx = applications.findIndex(a => a.id === id);
+          if (idx !== -1) {
+            applications[idx] = { ...applications[idx], ...val };
+          }
+        }
+      }
       applications.sort((a, b) => (b.submissionTimestamp || b.createdAt || 0) - (a.submissionTimestamp || a.createdAt || 0));
 
       // 2. Suspended Accounts

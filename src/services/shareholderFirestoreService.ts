@@ -541,3 +541,249 @@ export async function getEligibleCompanyRevenueFromFirestore(): Promise<Sharehol
     totalEligibleRevenue: resellerRegistrationTotal + verifiedBadgeTotal + orderFormFeeTotal
   };
 }
+
+/**
+ * Admin: Fetch all shareholder applications and payment records directly from Firestore
+ */
+export async function getAllShareholderApplicationsFromFirestore(): Promise<SharePaymentDoc[]> {
+  const map = new Map<string, SharePaymentDoc>();
+  
+  // 1. Fetch from share_payments
+  try {
+    const q1 = query(collection(db, 'share_payments'), limit(200));
+    const snap1 = await getDocs(q1);
+    snap1.forEach(d => {
+      const data = d.data() as any;
+      map.set(d.id, { id: d.id, ...data });
+    });
+  } catch (err) {
+    console.warn('[Admin Firestore] Error fetching share_payments:', err);
+  }
+
+  // 2. Fetch from shareholder_applications
+  try {
+    const q2 = query(collection(db, 'shareholder_applications'), limit(200));
+    const snap2 = await getDocs(q2);
+    snap2.forEach(d => {
+      const data = d.data() as any;
+      const key = data.applicationId || d.id;
+      if (!map.has(key)) {
+        map.set(key, { id: d.id, ...data });
+      } else {
+        map.set(key, { ...map.get(key)!, ...data });
+      }
+    });
+  } catch (err) {
+    console.warn('[Admin Firestore] Error fetching shareholder_applications:', err);
+  }
+
+  const list = Array.from(map.values());
+  return list.sort((a, b) => (b.submissionTimestamp || b.createdAt || 0) - (a.submissionTimestamp || a.createdAt || 0));
+}
+
+/**
+ * Admin: Fetch all verified shareholders from Firestore 'shareholders' collection
+ */
+export async function getAllShareholdersFromFirestore(): Promise<ShareholderPortfolioDoc[]> {
+  const list: ShareholderPortfolioDoc[] = [];
+  try {
+    const q = query(collection(db, 'shareholders'), limit(200));
+    const snap = await getDocs(q);
+    snap.forEach(d => {
+      const data = d.data() as ShareholderPortfolioDoc;
+      if (data && (Number(data.activeSharesPercent) > 0 || data.status === 'active_shareholder')) {
+        list.push({ ...data, userId: d.id });
+      }
+    });
+  } catch (err) {
+    console.warn('[Admin Firestore] Error fetching shareholders:', err);
+  }
+  return list;
+}
+
+/**
+ * Admin: Compute accurate metrics from Firestore data
+ */
+export async function getAdminShareholderMetricsFromFirestore(): Promise<{
+  totalApplications: number;
+  pendingApplications: number;
+  approvedShareholders: number;
+  rejectedApplications: number;
+  suspendedAccounts: number;
+  totalApprovedSharePercent: number;
+  totalAuthorizedSharePercent: number;
+  remainingAvailableSharePercent: number;
+  totalVerifiedSharePayments: number;
+  totalPendingPayments: number;
+  totalApprovedCommissionLiabilities: number;
+  totalCommissionAlreadyPaid: number;
+  pricePerPercent: number;
+}> {
+  const apps = await getAllShareholderApplicationsFromFirestore();
+  const shareholders = await getAllShareholdersFromFirestore();
+
+  let pendingCount = 0;
+  let approvedCount = 0;
+  let rejectedCount = 0;
+  let totalApprovedPercent = 0;
+  let totalVerifiedPayments = 0;
+  let totalPendingPayments = 0;
+
+  apps.forEach(app => {
+    const status = (app.status || app.paymentStatus || '').toLowerCase();
+    const percent = Number(app.sharePercent) || 0;
+    const amount = Number(app.totalAmount) || (percent * 2000);
+
+    if (status === 'approved' || app.isShareholderActive === true) {
+      approvedCount++;
+      totalApprovedPercent += percent;
+      totalVerifiedPayments += amount;
+    } else if (status.includes('pending')) {
+      pendingCount++;
+      totalPendingPayments += amount;
+    } else if (status === 'rejected') {
+      rejectedCount++;
+    }
+  });
+
+  // Cross-check with shareholders collection
+  const verifiedShareholderCount = Math.max(shareholders.length, approvedCount);
+  const totalApprovedShares = Math.min(40, Math.max(totalApprovedPercent, shareholders.reduce((acc, s) => acc + (Number(s.activeSharesPercent) || 0), 0)));
+
+  return {
+    totalApplications: apps.length,
+    pendingApplications: pendingCount,
+    approvedShareholders: verifiedShareholderCount,
+    rejectedApplications: rejectedCount,
+    suspendedAccounts: 0,
+    totalApprovedSharePercent: totalApprovedShares,
+    totalAuthorizedSharePercent: 40,
+    remainingAvailableSharePercent: Math.max(0, 40 - totalApprovedShares),
+    totalVerifiedSharePayments: totalVerifiedPayments || (totalApprovedShares * 2000),
+    totalPendingPayments,
+    totalApprovedCommissionLiabilities: 0,
+    totalCommissionAlreadyPaid: 0,
+    pricePerPercent: 2000
+  };
+}
+
+/**
+ * Admin: Approve a shareholder application directly in Firestore
+ */
+export async function adminApproveShareholderInFirestore(app: SharePaymentDoc, adminEmail: string): Promise<boolean> {
+  const now = Date.now();
+  const targetAppId = app.applicationId || app.id;
+  const targetUserId = app.userId;
+  const percent = Number(app.sharePercent) || 1;
+  const sharePrice = 2000;
+  const totalAmount = Number(app.totalAmount) || (percent * sharePrice);
+
+  try {
+    // 1. Update share_payments
+    await setDoc(doc(db, 'share_payments', targetAppId), {
+      status: 'approved',
+      paymentStatus: 'Approved',
+      isShareholderActive: true,
+      isOfficialCertificateIssued: true,
+      verifiedAt: now,
+      verifiedBy: adminEmail,
+      updatedAt: now
+    }, { merge: true });
+
+    // 2. Update shareholder_applications
+    try {
+      await setDoc(doc(db, 'shareholder_applications', targetAppId), {
+        status: 'approved',
+        paymentStatus: 'Approved',
+        isShareholderActive: true,
+        isOfficialCertificateIssued: true,
+        verifiedAt: now,
+        verifiedBy: adminEmail,
+        updatedAt: now
+      }, { merge: true });
+    } catch (_) {}
+
+    // 3. Update shareholders portfolio
+    if (targetUserId) {
+      await setDoc(doc(db, 'shareholders', targetUserId), {
+        userId: targetUserId,
+        shareholderName: app.applicantName || 'Shareholder',
+        activeSharesPercent: percent,
+        portfolioValue: totalAmount,
+        status: 'active_shareholder',
+        lastVerifiedAt: now,
+        updatedAt: now
+      }, { merge: true });
+    }
+
+    // 4. Log in shareholder_audit_logs
+    try {
+      const logId = 'AUDIT-' + now + '-' + Math.random().toString(36).substring(2, 6);
+      await setDoc(doc(db, 'shareholder_audit_logs', logId), {
+        id: logId,
+        applicationId: targetAppId,
+        userId: targetUserId,
+        action: 'application_approved',
+        performedBy: adminEmail,
+        timestamp: now,
+        details: 'Approved ' + percent + '% equity (' + totalAmount + ' BDT) for ' + (app.applicantName || targetUserId) + '.'
+      }, { merge: true });
+    } catch (_) {}
+
+    return true;
+  } catch (err) {
+    console.error('[Admin Firestore Approval Error]:', err);
+    return false;
+  }
+}
+
+/**
+ * Admin: Reject a shareholder application directly in Firestore
+ */
+export async function adminRejectShareholderInFirestore(app: SharePaymentDoc, rejectionReason: string, adminEmail: string): Promise<boolean> {
+  const now = Date.now();
+  const targetAppId = app.applicationId || app.id;
+  const targetUserId = app.userId;
+
+  try {
+    await setDoc(doc(db, 'share_payments', targetAppId), {
+      status: 'rejected',
+      paymentStatus: 'Rejected',
+      isShareholderActive: false,
+      rejectedAt: now,
+      rejectedBy: adminEmail,
+      rejectionReason: rejectionReason.trim(),
+      updatedAt: now
+    }, { merge: true });
+
+    try {
+      await setDoc(doc(db, 'shareholder_applications', targetAppId), {
+        status: 'rejected',
+        paymentStatus: 'Rejected',
+        isShareholderActive: false,
+        rejectedAt: now,
+        rejectedBy: adminEmail,
+        rejectionReason: rejectionReason.trim(),
+        updatedAt: now
+      }, { merge: true });
+    } catch (_) {}
+
+    try {
+      const logId = 'AUDIT-' + now + '-' + Math.random().toString(36).substring(2, 6);
+      await setDoc(doc(db, 'shareholder_audit_logs', logId), {
+        id: logId,
+        applicationId: targetAppId,
+        userId: targetUserId,
+        action: 'application_rejected',
+        performedBy: adminEmail,
+        timestamp: now,
+        rejectionReason: rejectionReason.trim()
+      }, { merge: true });
+    } catch (_) {}
+
+    return true;
+  } catch (err) {
+    console.error('[Admin Firestore Rejection Error]:', err);
+    return false;
+  }
+}

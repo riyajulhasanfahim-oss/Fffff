@@ -57,7 +57,8 @@ export default function AdminShareholderManagement() {
   const { user } = useAuth();
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'applications' | 'availability' | 'commissions' | 'ledger' | 'withdrawals' | 'audit'>('applications');
+  const [activeTab, setActiveTab] = useState<'applications' | 'shareholders' | 'availability' | 'commissions' | 'ledger' | 'withdrawals' | 'audit'>('applications');
+  const [verifiedShareholders, setVerifiedShareholders] = useState<any[]>([]);
 
   // Datasets
   const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -479,6 +480,17 @@ export default function AdminShareholderManagement() {
     );
   }
 
+  // Filter verified shareholders
+  const filteredShareholders = verifiedShareholders.filter((sh) => {
+    const q = searchTerm.toLowerCase();
+    return (
+      (sh.shareholderName || '').toLowerCase().includes(q) ||
+      (sh.userId || '').toLowerCase().includes(q) ||
+      (sh.phone || '').includes(q) ||
+      (sh.email || '').toLowerCase().includes(q)
+    );
+  });
+
   // Filter applications
   const filteredApps = applications.filter((app) => {
     const matchesSearch = 
@@ -625,12 +637,21 @@ export default function AdminShareholderManagement() {
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('shareholders')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+            activeTab === 'shareholders' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          2. Verified Shareholders ({verifiedShareholders.length})
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('availability')}
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
             activeTab === 'availability' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          2. Share Availability & Price Pool
+          3. Share Availability & Price Pool
         </button>
         <button
           type="button"
@@ -639,7 +660,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'commissions' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          3. Commission Sharing Agreements
+          4. Commission Sharing Agreements
         </button>
         <button
           type="button"
@@ -648,7 +669,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'ledger' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          4. Auditable Financial Ledger ({ledgerEntries.length})
+          5. Auditable Financial Ledger ({ledgerEntries.length})
         </button>
         <button
           type="button"
@@ -657,7 +678,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'withdrawals' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          5. Withdrawal Requests ({withdrawals.length})
+          6. Withdrawal Requests ({withdrawals.length})
         </button>
         <button
           type="button"
@@ -666,7 +687,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'audit' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          6. Governance Audit Logs ({auditLogs.length})
+          7. Governance Audit Logs ({auditLogs.length})
         </button>
       </div>
 
@@ -743,6 +764,9 @@ export default function AdminShareholderManagement() {
                         <div className="text-[11px] text-slate-500 font-mono">
                           {app.phone || app.payerMobile || app.email}
                         </div>
+                        {app.userId && (
+                          <div className="text-[10px] text-slate-400 font-mono">UID: {app.userId}</div>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-bold text-primary-main">
                         {app.sharePercent}% ({app.shareUnits || app.sharePercent} Units)
@@ -1347,6 +1371,10 @@ export default function AdminShareholderManagement() {
 
             <div className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">User UID</span>
+                  <div className="font-mono text-slate-700 text-xs mt-0.5 font-bold">{selectedAppDetail.userId || 'N/A'}</div>
+                </div>
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Applicant Name</span>
                   <div className="font-bold text-slate-900 text-sm mt-0.5">
