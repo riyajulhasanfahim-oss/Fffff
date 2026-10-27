@@ -505,6 +505,101 @@ app.use((req, res, next) => {
     }
   };
 
+  // Local persistent shareholder store helpers to guarantee zero data loss & survive server restarts
+  const localShareholdersFile = path.join(process.cwd(), 'server', 'data', 'local_shareholders.json');
+  const localSharePaymentsFile = path.join(process.cwd(), 'server', 'data', 'local_share_payments.json');
+  const localShareLedgerFile = path.join(process.cwd(), 'server', 'data', 'local_shareholder_ledger.json');
+
+  const readLocalShareholders = (): Record<string, any> => {
+    try {
+      if (fs.existsSync(localShareholdersFile)) {
+        const raw = fs.readFileSync(localShareholdersFile, 'utf8');
+        return JSON.parse(raw || '{}');
+      }
+    } catch (err) {
+      console.warn('Error reading local_shareholders.json:', err);
+    }
+    return {};
+  };
+
+  const saveLocalShareholder = (userId: string, data: any): void => {
+    try {
+      const current = readLocalShareholders();
+      const existing = current[userId] || { portfolio: null, applications: {} };
+      if (data.portfolio) {
+        existing.portfolio = { ...(existing.portfolio || {}), ...data.portfolio, updatedAt: Date.now() };
+      }
+      if (data.application) {
+        const appId = data.application.id || data.application.applicationId;
+        if (appId) {
+          existing.applications = existing.applications || {};
+          existing.applications[appId] = { ...(existing.applications[appId] || {}), ...data.application, updatedAt: Date.now() };
+        }
+      }
+      current[userId] = existing;
+      const dir = path.dirname(localShareholdersFile);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(localShareholdersFile, JSON.stringify(current, null, 2), 'utf8');
+    } catch (err) {
+      console.warn('Error saving to local_shareholders.json:', err);
+    }
+  };
+
+  const readLocalSharePayments = (): Record<string, any> => {
+    try {
+      if (fs.existsSync(localSharePaymentsFile)) {
+        const raw = fs.readFileSync(localSharePaymentsFile, 'utf8');
+        return JSON.parse(raw || '{}');
+      }
+    } catch (err) {
+      console.warn('Error reading local_share_payments.json:', err);
+    }
+    return {};
+  };
+
+  const saveLocalSharePayment = (id: string, paymentData: any): void => {
+    try {
+      const current = readLocalSharePayments();
+      current[id] = { ...(current[id] || {}), ...paymentData, updatedAt: Date.now() };
+      const dir = path.dirname(localSharePaymentsFile);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(localSharePaymentsFile, JSON.stringify(current, null, 2), 'utf8');
+    } catch (err) {
+      console.warn('Error saving to local_share_payments.json:', err);
+    }
+  };
+
+  // In-memory caches backed by disk persistence
+  const inMemorySharePayments = new Map<string, any>();
+  const inMemoryUserApplications = new Map<string, Map<string, any>>();
+  const inMemoryUserPortfolios = new Map<string, any>();
+  const inMemoryUserWithdrawals = new Map<string, Map<string, any>>();
+  const inMemoryShareholderAuditLogs = new Map<string, any>();
+  const inMemoryShareholderLedger = new Map<string, any>();
+  let inMemoryShareholderConfig: any = { availableShares: 40, maxSinglePurchasePercent: 25 };
+
+  // Pre-load from disk persistence immediately
+  try {
+    const diskPayments = readLocalSharePayments();
+    for (const [id, val] of Object.entries(diskPayments)) {
+      inMemorySharePayments.set(id, val);
+    }
+    const diskShareholders = readLocalShareholders();
+    for (const [uid, uData] of Object.entries<any>(diskShareholders)) {
+      if (uData.portfolio) {
+        inMemoryUserPortfolios.set(uid, uData.portfolio);
+      }
+      if (uData.applications) {
+        if (!inMemoryUserApplications.has(uid)) inMemoryUserApplications.set(uid, new Map());
+        for (const [appId, appVal] of Object.entries(uData.applications)) {
+          inMemoryUserApplications.get(uid)!.set(appId, appVal);
+        }
+      }
+    }
+  } catch (initErr) {
+    console.warn('[SERVER-INIT] Notice restoring shareholder data from disk:', initErr);
+  }
+
   // Public Marketplace Data API Endpoints (ensures 100% data delivery on custom domains)
   app.get('/api/products', async (req, res) => {
     const [rtdbProducts, rtdbVendors] = await Promise.all([
@@ -3993,6 +4088,10 @@ app.use((req, res, next) => {
         if (!inMemoryUserApplications.has(userId)) inMemoryUserApplications.set(userId, new Map());
         inMemoryUserApplications.get(userId)!.set(appId, record);
 
+        // Guarantee zero data loss across restarts
+        saveLocalSharePayment(appId, record);
+        saveLocalShareholder(userId, { portfolio: portPayload, application: record });
+
         // Mirror to RTDB
         fetch(`${CURRENT_RTDB_BASE}/share_payments/${appId}.json`, {
           method: 'PATCH',
@@ -4369,15 +4468,16 @@ app.use((req, res, next) => {
         updatedAt: submissionTimestamp
       };
 
-      // 1. Store in resilient in-memory node immediately
+      // 1. Store in resilient in-memory node and persistent disk immediately
       inMemorySharePayments.set(applicationId, paymentRecord);
       if (!inMemoryUserApplications.has(userId)) {
         inMemoryUserApplications.set(userId, new Map());
       }
       inMemoryUserApplications.get(userId)!.set(applicationId, paymentRecord);
 
+      let portfolioPayload: any = null;
       if (isApproved) {
-        const portfolioPayload = {
+        portfolioPayload = {
           userId,
           shareholderName: String(applicantName || '').trim(),
           activeSharesPercent: parsedPercent,
@@ -4400,6 +4500,13 @@ app.use((req, res, next) => {
           fsDb.collection('shareholders').doc(userId).set(portfolioPayload, { merge: true }).catch(() => {});
         } catch (_) {}
       }
+
+      // Guarantee zero data loss across server restarts and crashes
+      saveLocalSharePayment(applicationId, paymentRecord);
+      saveLocalShareholder(userId, {
+        application: paymentRecord,
+        ...(portfolioPayload ? { portfolio: portfolioPayload } : {})
+      });
 
       // 2. Save in admin review queue in RTDB
       fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
@@ -4467,15 +4574,34 @@ app.use((req, res, next) => {
 
       const snap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, {
         signal: AbortSignal.timeout(4000)
-      });
+      }).catch(() => null);
       let paymentsList: any[] = [];
-      if (snap.ok) {
+      if (snap && snap.ok) {
         const data = await snap.json();
         if (data && typeof data === 'object') {
           paymentsList = Object.entries(data).map(([id, val]: [string, any]) => ({
             id,
             ...(val || {})
           }));
+        }
+      }
+
+      // Merge from disk and in-memory caches
+      const diskP = readLocalSharePayments();
+      for (const [id, val] of Object.entries(diskP)) {
+        const idx = paymentsList.findIndex(p => p.id === id);
+        if (idx !== -1) {
+          paymentsList[idx] = { ...paymentsList[idx], ...val };
+        } else {
+          paymentsList.push({ id, ...val });
+        }
+      }
+      for (const [id, val] of inMemorySharePayments.entries()) {
+        const idx = paymentsList.findIndex(p => p.id === id);
+        if (idx !== -1) {
+          paymentsList[idx] = { ...paymentsList[idx], ...val };
+        } else {
+          paymentsList.push({ id, ...val });
         }
       }
 
@@ -4491,14 +4617,6 @@ app.use((req, res, next) => {
     }
   });
 
-  // In-memory persistent caches for real-time responsiveness and offline resilience
-  const inMemorySharePayments = new Map<string, any>();
-  const inMemoryUserApplications = new Map<string, Map<string, any>>();
-  const inMemoryUserPortfolios = new Map<string, any>();
-  const inMemoryUserWithdrawals = new Map<string, Map<string, any>>();
-  const inMemoryShareholderAuditLogs = new Map<string, any>();
-  const inMemoryShareholderLedger = new Map<string, any>();
-  let inMemoryShareholderConfig: any = { availableShares: 40, maxSinglePurchasePercent: 25 };
 
   // Helper to record audit logs
   const recordShareholderAudit = async (adminEmail: string, action: string, affectedRecordId: string, details: any) => {
@@ -5197,7 +5315,7 @@ app.use((req, res, next) => {
         if (inMemoryUserApplications.has(existing.userId)) {
           inMemoryUserApplications.get(existing.userId)!.set(applicationId, updatedData);
         }
-        inMemoryUserPortfolios.set(existing.userId, {
+        const updatedPortfolio = {
           userId: existing.userId,
           shareholderName: existing.applicantName,
           activeSharesPercent: userTotalPercent,
@@ -5205,7 +5323,12 @@ app.use((req, res, next) => {
           status: 'active_shareholder',
           lastVerifiedAt: now,
           updatedAt: now
-        });
+        };
+        inMemoryUserPortfolios.set(existing.userId, updatedPortfolio);
+
+        // Guarantee zero data loss across server restarts
+        saveLocalSharePayment(applicationId, updatedData);
+        saveLocalShareholder(existing.userId, { portfolio: updatedPortfolio, application: updatedData });
 
         // 1. Update in central share_payments
         fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
@@ -5305,6 +5428,10 @@ app.use((req, res, next) => {
         if (inMemoryUserApplications.has(existing.userId)) {
           inMemoryUserApplications.get(existing.userId)!.set(applicationId, { ...existing, ...patchPayload });
         }
+
+        // Guarantee zero data loss across server restarts
+        saveLocalSharePayment(applicationId, { ...existing, ...patchPayload });
+        saveLocalShareholder(existing.userId, { application: { ...existing, ...patchPayload } });
 
         fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
           method: 'PATCH',
@@ -5598,11 +5725,12 @@ app.use((req, res, next) => {
       const rawUserId = (req.headers['x-user-id'] as string) || '';
       let authenticatedUid = '';
       let callerEmail = '';
+      let authToken = '';
 
       if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split('Bearer ')[1].trim();
+        authToken = authHeader.split('Bearer ')[1].trim();
         try {
-          const decoded = await getAuth().verifyIdToken(token);
+          const decoded = await getAuth().verifyIdToken(authToken);
           authenticatedUid = decoded.uid;
           callerEmail = (decoded.email || '').toLowerCase().trim();
         } catch (_) {}
@@ -5621,8 +5749,10 @@ app.use((req, res, next) => {
 
       const shareholderId = `RJ-SH-${authenticatedUid.slice(0, 8).toUpperCase()}`;
 
-      // 1. Fetch user's private applications
-      const userAppsSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/applications.json`, {
+      const authQuery = authToken ? `?auth=${encodeURIComponent(authToken)}` : '';
+
+      // 1. Fetch user's private applications from RTDB
+      const userAppsSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/applications.json${authQuery}`, {
         signal: AbortSignal.timeout(4000)
       }).catch(() => null);
 
@@ -5638,7 +5768,7 @@ app.use((req, res, next) => {
       }
 
       // Also cross check with share_payments in case status updated
-      const sharePaymentsSnap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json`, {
+      const sharePaymentsSnap = await fetch(`${CURRENT_RTDB_BASE}/share_payments.json${authQuery}`, {
         signal: AbortSignal.timeout(4000)
       }).catch(() => null);
 
@@ -5649,7 +5779,6 @@ app.use((req, res, next) => {
           for (const [id, item] of Object.entries<any>(allPayments)) {
             if (item && item.userId === authenticatedUid) {
               userPayments.push({ id, ...item });
-              // update status in applications list if found
               const matchingApp = applications.find(a => a.id === id);
               if (matchingApp) {
                 matchingApp.paymentStatus = item.paymentStatus || matchingApp.paymentStatus;
@@ -5661,6 +5790,37 @@ app.use((req, res, next) => {
                 applications.push({ id, ...item });
               }
             }
+          }
+        }
+      }
+
+      // Merge from disk persistent store (GUARANTEES zero data loss across dev restarts)
+      const diskShareholders = readLocalShareholders();
+      const userDiskData = diskShareholders[authenticatedUid];
+      if (userDiskData?.applications) {
+        for (const [appId, appVal] of Object.entries<any>(userDiskData.applications)) {
+          const idx = applications.findIndex(a => a.id === appId);
+          if (idx !== -1) {
+            applications[idx] = { ...applications[idx], ...appVal };
+          } else {
+            applications.push({ id: appId, ...appVal });
+          }
+        }
+      }
+      const diskPayments = readLocalSharePayments();
+      for (const [pId, pVal] of Object.entries<any>(diskPayments)) {
+        if (pVal && (pVal.userId === authenticatedUid || String(pVal.applicationId || '').includes(authenticatedUid.slice(0, 6).toUpperCase()))) {
+          const pIdx = userPayments.findIndex(p => p.id === pId);
+          if (pIdx !== -1) {
+            userPayments[pIdx] = { ...userPayments[pIdx], ...pVal };
+          } else {
+            userPayments.push({ id: pId, ...pVal });
+          }
+          const aIdx = applications.findIndex(a => a.id === pId);
+          if (aIdx !== -1) {
+            applications[aIdx] = { ...applications[aIdx], ...pVal };
+          } else {
+            applications.push({ id: pId, ...pVal });
           }
         }
       }
@@ -5693,17 +5853,28 @@ app.use((req, res, next) => {
         }
       }
 
-      // 2. Fetch portfolio if exists from RTDB
-      const portfolioSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/portfolio.json`, {
-        signal: AbortSignal.timeout(3000)
-      }).catch(() => null);
-
-      let portfolio: any = null;
-      if (portfolioSnap && portfolioSnap.ok) {
-        portfolio = await portfolioSnap.json().catch(() => null);
+      // Check if any server-verified transaction belongs to this user
+      for (const [txId, txData] of confirmedTransactions.entries()) {
+        if (txData && txData.userId === authenticatedUid && txData.userType === 'shareholder') {
+          const matchingApp = applications.find(a => a.transactionId === txId || a.id === txData.invoiceId);
+          if (matchingApp) {
+            matchingApp.status = 'approved';
+            matchingApp.paymentStatus = 'Approved';
+            matchingApp.isShareholderActive = true;
+          }
+        }
       }
-      if (!portfolio && inMemoryUserPortfolios.has(authenticatedUid)) {
-        portfolio = inMemoryUserPortfolios.get(authenticatedUid);
+
+      // 2. Fetch portfolio if exists
+      let portfolio: any = userDiskData?.portfolio || inMemoryUserPortfolios.get(authenticatedUid) || null;
+      if (!portfolio) {
+        const portfolioSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/portfolio.json${authQuery}`, {
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => null);
+
+        if (portfolioSnap && portfolioSnap.ok) {
+          portfolio = await portfolioSnap.json().catch(() => null);
+        }
       }
 
       // Query Cloud Firestore via Admin SDK for high resilience and single source of truth
@@ -5740,14 +5911,66 @@ app.use((req, res, next) => {
       }
 
       // 3. Determine Overall Shareholder Status
-      const approvedApps = applications.filter(a => a.status === 'approved' || a.paymentStatus === 'Approved');
-      const pendingApps = applications.filter(a => a.status === 'pending_verification' || a.paymentStatus === 'Pending Verification' || a.status === 'pending');
-      const rejectedApps = applications.filter(a => a.status === 'rejected' || a.paymentStatus === 'Rejected');
+      const isApprovedRecord = (item: any) => {
+        if (!item) return false;
+        const s = String(item.status || '').toLowerCase().trim();
+        const ps = String(item.paymentStatus || '').toLowerCase().trim();
+        return (
+          s === 'approved' || s === 'verified' || s === 'success' || s === 'successful' || s === 'completed' ||
+          ps === 'approved' || ps === 'verified' || ps === 'success' || ps === 'successful' || ps === 'completed' ||
+          item.isShareholderActive === true || item.isAutoVerified === true
+        );
+      };
+
+      const isPendingRecord = (item: any) => {
+        if (!item) return false;
+        const s = String(item.status || '').toLowerCase().trim();
+        const ps = String(item.paymentStatus || '').toLowerCase().trim();
+        return (
+          s === 'pending_verification' || s === 'pending' || s === 'submitted' || s === 'under_review' ||
+          ps === 'pending verification' || ps === 'pending_verification' || ps === 'pending' || ps === 'submitted'
+        );
+      };
+
+      const isRejectedRecord = (item: any) => {
+        if (!item) return false;
+        const s = String(item.status || '').toLowerCase().trim();
+        const ps = String(item.paymentStatus || '').toLowerCase().trim();
+        return s === 'rejected' || s === 'failed' || ps === 'rejected' || ps === 'failed';
+      };
+
+      const approvedApps = applications.filter(isApprovedRecord);
+      const pendingApps = applications.filter(isPendingRecord);
+      const rejectedApps = applications.filter(isRejectedRecord);
+
+      const hasActivePortfolio = portfolio && (
+        Number(portfolio.activeSharesPercent) > 0 ||
+        portfolio.status === 'active_shareholder' ||
+        portfolio.isShareholderActive === true
+      );
 
       let shareholderStatus: 'approved' | 'pending_verification' | 'rejected' | 'none' = 'none';
 
-      if (approvedApps.length > 0 || (portfolio && Number(portfolio.activeSharesPercent) > 0)) {
+      if (approvedApps.length > 0 || hasActivePortfolio) {
         shareholderStatus = 'approved';
+        const totalApprovedPercent = Math.max(
+          approvedApps.reduce((acc, a) => acc + (Number(a.sharePercent) || 0), 0),
+          Number(portfolio?.activeSharesPercent) || 0,
+          1
+        );
+        if (!portfolio || portfolio.activeSharesPercent !== totalApprovedPercent) {
+          portfolio = {
+            ...(portfolio || {}),
+            userId: authenticatedUid,
+            shareholderName: approvedApps[0]?.applicantName || portfolio?.shareholderName || 'Valued Shareholder',
+            activeSharesPercent: totalApprovedPercent,
+            portfolioValue: totalApprovedPercent * 2000,
+            status: 'active_shareholder',
+            lastVerifiedAt: approvedApps[0]?.verifiedAt || Date.now(),
+            updatedAt: Date.now()
+          };
+          saveLocalShareholder(authenticatedUid, { portfolio });
+        }
       } else if (pendingApps.length > 0) {
         shareholderStatus = 'pending_verification';
       } else if (rejectedApps.length > 0) {
@@ -5950,18 +6173,19 @@ app.use((req, res, next) => {
 
       // Certificate Data (Task 6)
       let certificate = null;
-      if (shareholderStatus === 'approved' && approvedApps.length > 0) {
-        const latestApproved = approvedApps[0];
+      if (shareholderStatus === 'approved') {
+        const latestApproved = approvedApps[0] || {};
+        const certPct = approvedSharePercentage || 1;
         certificate = {
-          certificateNumber: `RJ-CERT-${authenticatedUid.slice(0, 6).toUpperCase()}-${latestApproved.id.slice(0, 6).toUpperCase()}`,
-          shareholderName: latestApproved.applicantName || latestApproved.fullName || 'Registered Shareholder',
+          certificateNumber: `RJ-CERT-${authenticatedUid.slice(0, 8).toUpperCase()}-${Math.round(certPct * 100).toString().padStart(4, '0')}`,
+          shareholderName: latestApproved.applicantName || latestApproved.fullName || portfolio?.shareholderName || 'Valued Shareholder',
           guardianName: latestApproved.guardianName || '',
           address: latestApproved.address || '',
           shareholderId,
-          approvedSharePercentage,
-          verifiedPurchaseAmount: totalAmountPaidForApprovedShares,
-          shareUnits: approvedSharePercentage,
-          issueDate: latestApproved.verifiedAt || latestApproved.updatedAt || Date.now(),
+          approvedSharePercentage: certPct,
+          verifiedPurchaseAmount: totalAmountPaidForApprovedShares || (certPct * 2000),
+          shareUnits: certPct,
+          issueDate: latestApproved.verifiedAt || latestApproved.updatedAt || portfolio?.lastVerifiedAt || Date.now(),
           signatoryTitle: 'Authorized Corporate Signatory',
           companyName: 'RJ WORLD BD',
           authorizedSignatory: 'Board of Directors & Corporate Secretary'

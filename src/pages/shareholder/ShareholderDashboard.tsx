@@ -4,6 +4,7 @@ import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../components/common/LanguageProvider';
+import { rtdbGet } from '../../lib/rtdb';
 import OfficialShareCertificateModal, { CertificateData } from '../../components/shareholder/OfficialShareCertificateModal';
 import { 
   Building2, 
@@ -180,8 +181,8 @@ export default function ShareholderDashboard() {
       const res = await fetch('/api/shareholders/me', { headers });
       const data = await res.json();
 
-      if (data && data.success) {
-        setDashboardStatus(data.shareholderStatus || 'none');
+      if (data && data.success && data.shareholderStatus && data.shareholderStatus !== 'none') {
+        setDashboardStatus(data.shareholderStatus);
         setSummary(data.summary || null);
         setRevenueSources(data.revenueSources || []);
         setMonthlyHistory(data.monthlyIncomeHistory || []);
@@ -195,7 +196,82 @@ export default function ShareholderDashboard() {
         setCertificate(data.certificate || null);
         setProfile(data.profile || null);
       } else {
-        setDashboardStatus('none');
+        // Fallback: check client-side Firestore & RTDB & LocalStorage for active or pending shareholder records
+        let clientRecovered = false;
+        try {
+          const rawActive = localStorage.getItem('rj_active_shareholder_' + user.uid);
+          const rawPending = localStorage.getItem('rj_pending_shareholder_payment_' + user.uid);
+          const rawPayment = localStorage.getItem('rj_shareholder_payment_' + user.uid);
+
+          let activeLocal: any = null;
+          let pendingLocal: any = null;
+          let paymentLocal: any = null;
+
+          if (rawActive) try { activeLocal = JSON.parse(rawActive); } catch (_) {}
+          if (rawPending) try { pendingLocal = JSON.parse(rawPending); } catch (_) {}
+          if (rawPayment) try { paymentLocal = JSON.parse(rawPayment); } catch (_) {}
+
+          // Also check RTDB directly
+          let rtdbPort: any = null;
+          let rtdbApps: any = null;
+          try {
+            rtdbPort = await rtdbGet<any>(`shareholders/${user.uid}/portfolio`);
+            rtdbApps = await rtdbGet<any>(`shareholders/${user.uid}/applications`);
+          } catch (_) {}
+
+          const hasActivePortfolio = (activeLocal && Number(activeLocal.activeSharesPercent) > 0) || (rtdbPort && Number(rtdbPort.activeSharesPercent) > 0);
+          const isPaymentApproved = paymentLocal?.status === 'approved' || paymentLocal?.paymentStatus === 'Approved';
+
+          if (hasActivePortfolio || isPaymentApproved) {
+            clientRecovered = true;
+            // Self-heal server!
+            const appToSync = paymentLocal || (rtdbApps ? Object.values(rtdbApps)[0] : null) || {};
+            await fetch('/api/shareholders/submit-payment', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                'x-user-id': user.uid
+              },
+              body: JSON.stringify({
+                applicationId: appToSync.applicationId || appToSync.id || `RJ-SH-${user.uid.slice(0, 6).toUpperCase()}-RESTORE`,
+                userId: user.uid,
+                applicantName: appToSync.applicantName || userData?.name || user.displayName || 'Shareholder Investor',
+                sharePercent: Number(appToSync.sharePercent || activeLocal?.activeSharesPercent || 1),
+                paymentMethod: appToSync.paymentMethod || 'bKash',
+                transactionId: appToSync.transactionId || 'VERIFIED-RESTORE',
+                payerMobile: appToSync.payerMobile || userData?.phone || '',
+                isAutoVerified: true,
+                status: 'approved',
+                paymentStatus: 'Approved'
+              })
+            }).catch(() => {});
+
+            // Re-fetch now that server has persisted it
+            const retryRes = await fetch('/api/shareholders/me', { headers });
+            const retryData = await retryRes.json();
+            if (retryData?.success && retryData?.shareholderStatus === 'approved') {
+              setDashboardStatus('approved');
+              setSummary(retryData.summary || null);
+              setRevenueSources(retryData.revenueSources || []);
+              setMonthlyHistory(retryData.monthlyIncomeHistory || []);
+              setNotifications(retryData.notifications || []);
+              setTransactions(retryData.transactionHistory || { sharePurchases: [], payments: [], commissions: [], withdrawals: [] });
+              setCertificate(retryData.certificate || null);
+              setProfile(retryData.profile || null);
+              return;
+            }
+          } else if (pendingLocal || (rtdbApps && Object.values(rtdbApps).some((a: any) => a.status === 'pending_verification' || a.status === 'pending'))) {
+            setDashboardStatus('pending_verification');
+            return;
+          }
+        } catch (recoverErr) {
+          console.warn('Shareholder client recovery notice:', recoverErr);
+        }
+
+        if (!clientRecovered) {
+          setDashboardStatus('none');
+        }
       }
     } catch (err) {
       console.error('Error loading shareholder dashboard data:', err);
@@ -383,6 +459,83 @@ export default function ShareholderDashboard() {
               >
                 {language === 'bn' ? 'হোমপেজে ফিরে যান' : 'Back to Home'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            STATE: REJECTED / FAILED PAYMENT STATE
+        ========================================================================== */}
+        {dashboardStatus === 'rejected' && (
+          <div className="space-y-6 max-w-4xl mx-auto my-6">
+            <div className="bg-gradient-to-br from-rose-500 via-rose-600 to-rose-700 text-white rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
+              <div className="relative z-10">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-black/20 text-white text-xs font-bold uppercase tracking-wider backdrop-blur-md mb-3 border border-white/20">
+                  <XCircle className="w-3.5 h-3.5" />
+                  <span>{language === 'bn' ? 'পেমেন্ট যাচাইকরণ প্রত্যাখ্যাত' : 'Payment Verification Rejected'}</span>
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-black text-white mb-2">
+                  {language === 'bn' ? 'শেয়ার আবেদনের পেমেন্ট অনুমোদিত হয়নি' : 'Share Purchase Payment Not Approved'}
+                </h1>
+                <p className="text-xs sm:text-sm text-rose-100 max-w-2xl leading-relaxed">
+                  {language === 'bn'
+                    ? 'প্রদত্ত TrxID অথবা পেমেন্ট তথ্যের সাথে ব্যাংক/MFS রেকর্ডের অমিল পাওয়ায় আবেদনটি গ্রহণ করা সম্ভব হয়নি। অনুগ্রহ করে তথ্য যাচাই করে পুনরায় আবেদন করুন অথবা হেল্পলাইনে যোগাযোগ করুন।'
+                    : 'The transaction ID or payment information provided could not be matched with MFS records. Please review your payment details, submit a new application, or contact RJ WORLD BD support.'}
+                </p>
+              </div>
+              <div className="absolute right-0 bottom-0 translate-x-8 translate-y-8 w-60 h-60 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
+            </div>
+
+            <div className="bg-white rounded-3xl border border-rose-100 shadow-sm p-6 sm:p-8 space-y-6">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-500" />
+                  <span>{language === 'bn' ? 'আবেদনের বিবরণ' : 'Rejected Application Details'}</span>
+                </h2>
+                <span className="px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-100 text-rose-700">
+                  {language === 'bn' ? 'প্রত্যাখ্যাত' : 'Rejected'}
+                </span>
+              </div>
+
+              {transactions.sharePurchases.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs sm:text-sm">
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-slate-400 block text-[11px]">Application ID</span>
+                    <span className="font-mono font-bold text-slate-800 text-xs sm:text-sm">
+                      {transactions.sharePurchases[0].id || transactions.sharePurchases[0].applicationId || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-slate-400 block text-[11px]">Submitted TrxID</span>
+                    <span className="font-mono font-bold text-rose-600 text-sm">
+                      {transactions.sharePurchases[0].transactionId || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-slate-400 block text-[11px]">Applied Shares</span>
+                    <span className="font-bold text-slate-900">
+                      {transactions.sharePurchases[0].sharePercent || 1}% Equity (৳{Number(transactions.sharePurchases[0].totalAmount || 2000).toLocaleString()})
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+                <Link
+                  to="/company-share"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-primary-main hover:bg-sky-600 text-white font-bold text-sm shadow-md transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{language === 'bn' ? 'পুনরায় আবেদন করুন' : 'Submit New Application'}</span>
+                </Link>
+                <Link
+                  to="/support"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm transition-all cursor-pointer"
+                >
+                  <Info className="w-4 h-4" />
+                  <span>{language === 'bn' ? 'সাপোর্টে যোগাযোগ করুন' : 'Contact Support'}</span>
+                </Link>
+              </div>
             </div>
           </div>
         )}

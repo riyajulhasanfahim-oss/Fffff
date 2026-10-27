@@ -306,6 +306,32 @@ export default function ShareholderPaymentPage() {
 
       // Case A: Payment matches SMS reader immediately and is genuinely verified!
       if (verifyResult.status === 'verified') {
+        // Cache verified state in localStorage for instantaneous client recovery
+        try {
+          const verifiedPortfolio = {
+            userId: user.uid,
+            shareholderName: applicantFullName,
+            activeSharesPercent: application?.sharePercent || 1,
+            portfolioValue: (application?.sharePercent || 1) * 2000,
+            status: 'active_shareholder',
+            lastVerifiedAt: Date.now(),
+            updatedAt: Date.now()
+          };
+          localStorage.setItem('rj_active_shareholder_' + user.uid, JSON.stringify(verifiedPortfolio));
+          localStorage.setItem('rj_shareholder_payment_' + user.uid, JSON.stringify({
+            applicationId: targetAppId,
+            userId: user.uid,
+            applicantName: applicantFullName,
+            sharePercent: application?.sharePercent || 1,
+            paymentMethod: formattedMethod,
+            transactionId: cleanTrx,
+            status: 'approved',
+            paymentStatus: 'Approved',
+            verifiedAt: Date.now()
+          }));
+          localStorage.removeItem('rj_pending_shareholder_payment_' + user.uid);
+        } catch (_) {}
+
         // Sync to backend /api/shareholders/submit-payment with approved status
         await fetch('/api/shareholders/submit-payment', {
           method: 'POST',
@@ -430,14 +456,18 @@ export default function ShareholderPaymentPage() {
       setShowPaymentSelectionModal(false);
       setSubmitting(false);
 
-      setPendingPaymentInfo({
+      const pendingObj = {
         applicationId: targetAppId,
         transactionId: cleanTrx,
         paymentMethod: formattedMethod,
         amount: payableAmount,
         payerMobile: payerMobile || userData?.phone || '',
         submittedAt: Date.now()
-      });
+      };
+      try {
+        localStorage.setItem('rj_pending_shareholder_payment_' + user.uid, JSON.stringify(pendingObj));
+      } catch (_) {}
+      setPendingPaymentInfo(pendingObj);
 
       toast.success(
         language === 'bn' 
