@@ -147,6 +147,54 @@ export default function AdminShareholderManagement() {
     try {
       setActionLoading(true);
       const token = await user.getIdToken().catch(() => '');
+
+      // Direct Firestore update as Single Source of Truth
+      const targetAppId = app.applicationId || app.id;
+      const targetUserId = app.userId;
+      try {
+        const { db } = await import('../../lib/firebase');
+        const { doc, setDoc } = await import('firebase/firestore');
+        const now = Date.now();
+        await Promise.allSettled([
+          setDoc(doc(db, 'share_payments', targetAppId), {
+            paymentStatus: 'Approved',
+            status: 'approved',
+            verifiedAt: now,
+            verifiedBy: user.email || 'admin',
+            isShareholderActive: true,
+            isOfficialCertificateIssued: true,
+            updatedAt: now
+          }, { merge: true }),
+          setDoc(doc(db, 'shareholders', targetUserId), {
+            userId: targetUserId,
+            shareholderName: app.applicantName,
+            activeSharesPercent: app.sharePercent,
+            portfolioValue: app.sharePercent * 2000,
+            status: 'active_shareholder',
+            lastVerifiedAt: now,
+            updatedAt: now
+          }, { merge: true }),
+          setDoc(doc(db, 'shareholder_certificates', `RJ-CERT-${targetUserId.slice(0, 8).toUpperCase()}-${String(app.sharePercent * 100).padStart(4, '0')}`), {
+            certificateNumber: `RJ-CERT-${targetUserId.slice(0, 8).toUpperCase()}-${String(app.sharePercent * 100).padStart(4, '0')}`,
+            shareholderId: `RJ-SH-${targetUserId.slice(0, 8).toUpperCase()}`,
+            userId: targetUserId,
+            fullName: app.applicantName,
+            approvedSharePercentage: app.sharePercent,
+            totalAmountPaid: app.totalAmount || (app.sharePercent * 2000),
+            shareUnits: app.sharePercent,
+            pricePerShare: 2000,
+            transactionId: app.transactionId,
+            issueDate: now,
+            status: 'Official Active Certificate',
+            officialSeal: 'RJ WORLD BD Corporate Equity Registry',
+            authorizedSignature: 'Executive Board of Directors',
+            createdAt: now
+          }, { merge: true })
+        ]);
+      } catch (fsErr) {
+        console.warn('[Admin Approve Firestore Note]:', fsErr);
+      }
+
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'x-admin-email': user.email || ''
@@ -184,6 +232,24 @@ export default function AdminShareholderManagement() {
     try {
       setActionLoading(true);
       const token = await user.getIdToken().catch(() => '');
+
+      // Direct Firestore update on rejection
+      const targetAppId = rejectModalApp.applicationId || rejectModalApp.id;
+      try {
+        const { db } = await import('../../lib/firebase');
+        const { doc, setDoc } = await import('firebase/firestore');
+        const now = Date.now();
+        await setDoc(doc(db, 'share_payments', targetAppId), {
+          paymentStatus: 'Rejected',
+          status: 'rejected',
+          rejectionReason: rejectionReason.trim(),
+          rejectedAt: now,
+          rejectedBy: user.email || 'admin',
+          isShareholderActive: false,
+          updatedAt: now
+        }, { merge: true });
+      } catch (_) {}
+
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'x-admin-email': user.email || ''

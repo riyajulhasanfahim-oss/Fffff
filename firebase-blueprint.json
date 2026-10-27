@@ -209,6 +209,84 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "Shareholder": {
+      "title": "Shareholder",
+      "description": "Verified company equity ownership profile and portfolio",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "shareholderName": { "type": "string" },
+        "activeSharesPercent": { "type": "number" },
+        "portfolioValue": { "type": "number" },
+        "status": { "type": "string" },
+        "lastVerifiedAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["userId", "shareholderName", "activeSharesPercent", "status", "updatedAt"]
+    },
+    "SharePayment": {
+      "title": "Share Payment",
+      "description": "Shareholder investment application and payment verification record",
+      "type": "object",
+      "properties": {
+        "applicationId": { "type": "string" },
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "applicantName": { "type": "string" },
+        "guardianName": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "sharePercent": { "type": "number" },
+        "sharePrice": { "type": "number" },
+        "shareUnits": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "transactionId": { "type": "string" },
+        "payerMobile": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "status": { "type": "string" },
+        "isShareholderActive": { "type": "boolean" },
+        "isOfficialCertificateIssued": { "type": "boolean" },
+        "verifiedAt": { "type": "number" },
+        "verifiedBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["applicationId", "userId", "sharePercent", "totalAmount", "paymentMethod", "transactionId", "status", "createdAt"]
+    },
+    "ShareCertificate": {
+      "title": "Share Certificate",
+      "description": "Official corporate shareholder certificate record",
+      "type": "object",
+      "properties": {
+        "certificateNumber": { "type": "string" },
+        "shareholderId": { "type": "string" },
+        "userId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "approvedSharePercentage": { "type": "number" },
+        "totalAmountPaid": { "type": "number" },
+        "issueDate": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["certificateNumber", "shareholderId", "userId", "approvedSharePercentage", "totalAmountPaid", "issueDate"]
+    },
+    "ShareholderWithdrawal": {
+      "title": "Shareholder Withdrawal",
+      "description": "Shareholder benefit withdrawal request and payout record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "accountNumber": { "type": "string" },
+        "status": { "type": "string" },
+        "requestedAt": { "type": "number" },
+        "processedAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "amount", "paymentMethod", "accountNumber", "status", "requestedAt"]
     }
   },
   "firestore": {
@@ -297,6 +375,38 @@
     "payments/{paymentId}": {
       "schema": { "$ref": "#/entities/PaymentVerification" },
       "description": "Secure payment verification records for manual and SMS-assisted payment processing with automatic 10-day TTL deletion via expiresAt timestamp"
+    },
+    "shareholders/{userId}": {
+      "schema": { "$ref": "#/entities/Shareholder" },
+      "description": "Shareholder portfolios and verified equity ownership profiles"
+    },
+    "share_payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/SharePayment" },
+      "description": "Shareholder payment verification records and applications"
+    },
+    "shareholder_applications/{applicationId}": {
+      "schema": { "$ref": "#/entities/SharePayment" },
+      "description": "Shareholder equity investment applications"
+    },
+    "shareholder_certificates/{certificateId}": {
+      "schema": { "$ref": "#/entities/ShareCertificate" },
+      "description": "Official company shareholder certificates"
+    },
+    "shareholder_withdrawals/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/ShareholderWithdrawal" },
+      "description": "Shareholder dividend and benefit withdrawal requests"
+    },
+    "shareholder_ledger/{ledgerId}": {
+      "description": "Immutable shareholder equity and capital investment ledger"
+    },
+    "shareholder_audit_logs/{logId}": {
+      "description": "Audit trail of shareholder administrative actions"
+    },
+    "shareholder_revenue_records/{recordId}": {
+      "description": "Monthly eligible company revenue records for shareholder profit calculation"
+    },
+    "shareholder_revenue_pools/{poolId}": {
+      "description": "Configured shareholder revenue pool categories"
     }
   }
 }

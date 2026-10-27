@@ -594,27 +594,71 @@ service cloud.firestore {
     match /share_payments/{paymentId} {
       allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid || isUserAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isUserAdmin();
+      allow update: if isUserAdmin() || (
+        isSignedIn() && 
+        (resource == null || resource.data.userId == request.auth.uid) && 
+        request.resource.data.userId == request.auth.uid
+      );
+      allow delete: if isUserAdmin();
+    }
+
+    match /shareholder_applications/{applicationId} {
+      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid || isUserAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isUserAdmin() || (
+        isSignedIn() && 
+        (resource == null || resource.data.userId == request.auth.uid) && 
+        request.resource.data.userId == request.auth.uid
+      );
+      allow delete: if isUserAdmin();
     }
 
     match /shareholders/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
-      allow write: if isUserAdmin();
+      allow create, update: if isUserAdmin() || (
+        isSignedIn() && request.auth.uid == userId
+      );
+      allow delete: if isUserAdmin();
 
       match /{document=**} {
         allow read: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
-        allow write: if isUserAdmin();
+        allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == userId);
       }
+    }
+
+    match /shareholder_certificates/{certificateId} {
+      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid || isUserAdmin());
+      allow write: if isUserAdmin() || (
+        isSignedIn() && 
+        (resource == null || resource.data.userId == request.auth.uid) && 
+        request.resource.data.userId == request.auth.uid
+      );
+    }
+
+    match /shareholder_withdrawals/{withdrawalId} {
+      allow read: if isUserAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isUserAdmin();
+    }
+
+    match /shareholder_revenue_records/{recordId} {
+      allow read: if isSignedIn();
+      allow write: if isUserAdmin();
+    }
+
+    match /shareholder_revenue_pools/{poolId} {
+      allow read: if isSignedIn();
+      allow write: if isUserAdmin();
     }
 
     match /shareholder_audit_logs/{logId} {
       allow read: if isUserAdmin();
-      allow write: if isUserAdmin();
+      allow write: if isUserAdmin() || isSignedIn();
     }
 
     match /shareholder_ledger/{ledgerId} {
-      allow read: if isUserAdmin();
-      allow write: if isUserAdmin();
+      allow read: if isUserAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow write: if isUserAdmin() || isSignedIn();
     }
 
     match /system_config/{configId} {

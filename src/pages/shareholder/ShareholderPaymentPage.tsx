@@ -306,33 +306,28 @@ export default function ShareholderPaymentPage() {
 
       // Case A: Payment matches SMS reader immediately and is genuinely verified!
       if (verifyResult.status === 'verified') {
-        // Cache verified state in localStorage for instantaneous client recovery
+        // 1. Authoritative Persistence: Save directly to Cloud Firestore as Single Source of Truth
         try {
-          const verifiedPortfolio = {
+          const { activateVerifiedShareholderInFirestore } = await import('../../services/shareholderFirestoreService');
+          await activateVerifiedShareholderInFirestore({
             userId: user.uid,
-            shareholderName: applicantFullName,
-            activeSharesPercent: application?.sharePercent || 1,
-            portfolioValue: (application?.sharePercent || 1) * 2000,
-            status: 'active_shareholder',
-            lastVerifiedAt: Date.now(),
-            updatedAt: Date.now()
-          };
-          localStorage.setItem('rj_active_shareholder_' + user.uid, JSON.stringify(verifiedPortfolio));
-          localStorage.setItem('rj_shareholder_payment_' + user.uid, JSON.stringify({
             applicationId: targetAppId,
-            userId: user.uid,
             applicantName: applicantFullName,
             sharePercent: application?.sharePercent || 1,
+            totalAmount: payableAmount,
             paymentMethod: formattedMethod,
             transactionId: cleanTrx,
-            status: 'approved',
-            paymentStatus: 'Approved',
-            verifiedAt: Date.now()
-          }));
-          localStorage.removeItem('rj_pending_shareholder_payment_' + user.uid);
-        } catch (_) {}
+            payerMobile: payerMobile || userData?.phone || '',
+            email: application?.email || user.email || '',
+            phone: application?.phone || payerMobile || userData?.phone || '',
+            guardianName: application?.guardianName || '',
+            address: application?.address || ''
+          });
+        } catch (fsErr) {
+          console.warn('[ShareholderPayment] Direct Firestore write notice:', fsErr);
+        }
 
-        // Sync to backend /api/shareholders/submit-payment with approved status
+        // 2. Sync to backend /api/shareholders/submit-payment with approved status
         await fetch('/api/shareholders/submit-payment', {
           method: 'POST',
           headers: {
@@ -413,7 +408,37 @@ export default function ShareholderPaymentPage() {
       }
 
       // Case C: Asynchronous payment submission (SMS reader hasn't received SMS yet or admin review pending)
-      // Save pending application properly without throwing false rejection
+      // Save pending application directly to Cloud Firestore as Single Source of Truth
+      try {
+        const { saveShareholderApplicationToFirestore } = await import('../../services/shareholderFirestoreService');
+        await saveShareholderApplicationToFirestore({
+          id: targetAppId,
+          applicationId: targetAppId,
+          userId: user.uid,
+          applicantName: applicantFullName,
+          guardianName: application?.guardianName || '',
+          address: application?.address || '',
+          phone: application?.phone || payerMobile || userData?.phone || '',
+          email: application?.email || user.email || '',
+          sharePercent: application?.sharePercent || 1,
+          sharePrice: 2000,
+          shareUnits: application?.sharePercent || 1,
+          totalAmount: payableAmount,
+          paymentMethod: formattedMethod,
+          transactionId: cleanTrx,
+          payerMobile: payerMobile || userData?.phone || '',
+          submissionTimestamp: Date.now(),
+          paymentStatus: 'Pending Verification',
+          status: 'pending_verification',
+          isShareholderActive: false,
+          isOfficialCertificateIssued: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      } catch (fsErr) {
+        console.warn('[ShareholderPayment] Firestore pending application write notice:', fsErr);
+      }
+
       const submitRes = await fetch('/api/shareholders/submit-payment', {
         method: 'POST',
         headers: {

@@ -448,19 +448,28 @@ async function executeBusinessActionSafely(
           localStorage.setItem('rj_has_active_shareholder_' + shareholderUserId, 'true');
         } catch (_) {}
 
-        // 1. Cloud Firestore: Save to 'shareholders' and 'share_payments' collections
+        // 1. Cloud Firestore: Authoritative Single Source of Truth
         try {
-          const { db } = await import('../lib/firebase');
-          const { doc, setDoc } = await import('firebase/firestore');
-          await Promise.allSettled([
-            setDoc(doc(db, 'shareholders', shareholderUserId), portfolioPayload, { merge: true }),
-            setDoc(doc(db, 'share_payments', applicationId), shareholderRecord, { merge: true })
-          ]);
+          const { activateVerifiedShareholderInFirestore } = await import('./shareholderFirestoreService');
+          await activateVerifiedShareholderInFirestore({
+            userId: shareholderUserId,
+            applicationId,
+            applicantName,
+            sharePercent,
+            totalAmount,
+            paymentMethod: normalizeMethod(req.paymentMethod),
+            transactionId: cleanTrxId,
+            payerMobile: senderNumber || req.contextData?.payerMobile || '',
+            email: req.contextData?.email || '',
+            phone: req.contextData?.phone || senderNumber || '',
+            guardianName: req.contextData?.guardianName || '',
+            address: req.contextData?.address || ''
+          });
         } catch (fsErr) {
           console.warn('[VERIFY] Shareholder Firestore write notice:', fsErr);
         }
 
-        // 2. Realtime Database: Save to shareholders and share_payments
+        // 2. Realtime Database: Mirror to shareholders and share_payments
         try {
           await Promise.allSettled([
             rtdbUpdate(`shareholders/${shareholderUserId}/portfolio`, portfolioPayload),
@@ -498,8 +507,8 @@ async function executeBusinessActionSafely(
     return true;
   })();
 
-  // Safe timeout guard on business action writes
-  const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 1200));
+  // Safe timeout guard on business action writes (4 seconds to allow Firestore persistence)
+  const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 4000));
   return Promise.race([businessPromise, timeoutPromise]);
 }
 

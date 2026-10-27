@@ -5794,22 +5794,24 @@ app.use((req, res, next) => {
         }
       }
 
-      // Merge from disk persistent store (GUARANTEES zero data loss across dev restarts)
+      // Merge from disk persistent store (strictly partitioned by authenticatedUid)
       const diskShareholders = readLocalShareholders();
       const userDiskData = diskShareholders[authenticatedUid];
       if (userDiskData?.applications) {
         for (const [appId, appVal] of Object.entries<any>(userDiskData.applications)) {
-          const idx = applications.findIndex(a => a.id === appId);
-          if (idx !== -1) {
-            applications[idx] = { ...applications[idx], ...appVal };
-          } else {
-            applications.push({ id: appId, ...appVal });
+          if (appVal?.userId === authenticatedUid) {
+            const idx = applications.findIndex(a => a.id === appId);
+            if (idx !== -1) {
+              applications[idx] = { ...applications[idx], ...appVal };
+            } else {
+              applications.push({ id: appId, ...appVal });
+            }
           }
         }
       }
       const diskPayments = readLocalSharePayments();
       for (const [pId, pVal] of Object.entries<any>(diskPayments)) {
-        if (pVal && (pVal.userId === authenticatedUid || String(pVal.applicationId || '').includes(authenticatedUid.slice(0, 6).toUpperCase()))) {
+        if (pVal && pVal.userId === authenticatedUid) {
           const pIdx = userPayments.findIndex(p => p.id === pId);
           if (pIdx !== -1) {
             userPayments[pIdx] = { ...userPayments[pIdx], ...pVal };

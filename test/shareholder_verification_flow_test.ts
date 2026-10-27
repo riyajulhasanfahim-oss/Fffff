@@ -7,12 +7,14 @@ async function runTests() {
   let passed = 0;
   let failed = 0;
 
-  const testUserA = `usrA${Date.now()}`;
-  const testUserB = `usrB${Date.now()}`;
-  const testTrxId1 = `BL${Math.floor(100000 + Math.random() * 900000)}XYZ`;
-  const testTrxId2 = `BL${Math.floor(100000 + Math.random() * 900000)}XYZ`;
-  const testAppId1 = `RJ-SH-${testUserA.slice(0, 8).toUpperCase()}-TEST1`;
-  const testAppId2 = `RJ-SH-${testUserA.slice(0, 8).toUpperCase()}-TEST2`;
+  const randA = Math.random().toString(36).substring(2, 8).toUpperCase();
+  const randB = Math.random().toString(36).substring(2, 8).toUpperCase();
+  const testUserA = `usrA_${Date.now()}_${randA}`;
+  const testUserB = `usrB_${Date.now()}_${randB}`;
+  const testTrxId1 = `BL${Math.floor(100000 + Math.random() * 900000)}X${randA}`;
+  const testTrxId2 = `BL${Math.floor(100000 + Math.random() * 900000)}Y${randB}`;
+  const testAppId1 = `RJ-SH-${randA}-TEST1`;
+  const testAppId2 = `RJ-SH-${randA}-TEST2`;
 
   // Test 1: Config endpoint returns share settings
   try {
@@ -125,7 +127,7 @@ async function runTests() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        applicationId: `RJ-SH-${testUserB.slice(0, 8).toUpperCase()}-APPROVED`,
+        applicationId: `RJ-SH-${randB}-APPROVED`,
         userId: testUserB,
         applicantName: 'Verified Shareholder Two',
         email: 'verified2@test.com',
