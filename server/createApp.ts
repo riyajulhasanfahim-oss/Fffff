@@ -3951,9 +3951,24 @@ app.use((req, res, next) => {
 
       if (userType === 'shareholder' && userId) {
         const appId = invoiceId || `RJ-SH-${userId.slice(0, 6).toUpperCase()}-${now}`;
+        let sharePercent = Number(req.body?.sharePercent || 1);
+        let applicantName = String(req.body?.applicantName || req.body?.fullName || 'Shareholder Investor').trim();
+
+        const existingApp = inMemorySharePayments.get(appId) || (inMemoryUserApplications.get(userId)?.get(appId));
+        if (existingApp) {
+          if (existingApp.sharePercent) sharePercent = Number(existingApp.sharePercent);
+          if (existingApp.applicantName) applicantName = existingApp.applicantName;
+        }
+
         const record = {
           applicationId: appId,
+          id: appId,
           userId,
+          applicantName,
+          sharePercent,
+          sharePrice: 2000,
+          shareUnits: sharePercent,
+          totalAmount: sharePercent * 2000,
           paymentStatus: 'Approved',
           status: 'approved',
           transactionId: cleanTrx,
@@ -3962,12 +3977,52 @@ app.use((req, res, next) => {
           isShareholderActive: true,
           updatedAt: now
         };
+
+        const portPayload = {
+          userId,
+          shareholderName: applicantName,
+          activeSharesPercent: sharePercent,
+          portfolioValue: sharePercent * 2000,
+          status: 'active_shareholder',
+          lastVerifiedAt: now,
+          updatedAt: now
+        };
+
         inMemorySharePayments.set(appId, record);
+        inMemoryUserPortfolios.set(userId, portPayload);
+        if (!inMemoryUserApplications.has(userId)) inMemoryUserApplications.set(userId, new Map());
+        inMemoryUserApplications.get(userId)!.set(appId, record);
+
+        // Mirror to RTDB
         fetch(`${CURRENT_RTDB_BASE}/share_payments/${appId}.json`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(record)
+          body: JSON.stringify(record),
+          signal: AbortSignal.timeout(3000)
         }).catch(() => {});
+        fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/portfolio.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(portPayload),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+        fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/applications/${appId}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(record),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+
+        // Mirror to Firestore via Admin SDK
+        try {
+          const fsDb = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
+          await Promise.allSettled([
+            fsDb.collection('shareholders').doc(userId).set(portPayload, { merge: true }),
+            fsDb.collection('share_payments').doc(appId).set(record, { merge: true })
+          ]);
+        } catch (fsErr) {
+          console.warn('[CONFIRM-COMPLETION] Shareholder Firestore sync notice:', fsErr);
+        }
       }
 
       return res.json({
@@ -4283,8 +4338,11 @@ app.use((req, res, next) => {
         }
       }
 
+      const isApproved = req.body?.isAutoVerified === true || req.body?.status === 'approved' || req.body?.paymentStatus === 'Approved';
+
       const paymentRecord = {
         applicationId,
+        id: applicationId,
         userId,
         applicantName: String(applicantName || '').trim(),
         guardianName: String(guardianName || '').trim(),
@@ -4300,10 +4358,12 @@ app.use((req, res, next) => {
         payerMobile: cleanPayerMobile,
         screenshotUrl: typeof screenshotUrl === 'string' ? screenshotUrl : '',
         submissionTimestamp,
-        paymentStatus: 'Pending Verification',
-        status: 'pending_verification',
-        isShareholderActive: false,
-        isOfficialCertificateIssued: false,
+        paymentStatus: isApproved ? 'Approved' : 'Pending Verification',
+        status: isApproved ? 'approved' : 'pending_verification',
+        isShareholderActive: isApproved,
+        isOfficialCertificateIssued: isApproved,
+        verifiedAt: isApproved ? submissionTimestamp : null,
+        verifiedBy: isApproved ? 'automatic_verification' : null,
         notes: String(notes || '').trim(),
         createdAt: submissionTimestamp,
         updatedAt: submissionTimestamp
@@ -4315,6 +4375,31 @@ app.use((req, res, next) => {
         inMemoryUserApplications.set(userId, new Map());
       }
       inMemoryUserApplications.get(userId)!.set(applicationId, paymentRecord);
+
+      if (isApproved) {
+        const portfolioPayload = {
+          userId,
+          shareholderName: String(applicantName || '').trim(),
+          activeSharesPercent: parsedPercent,
+          portfolioValue: parsedPercent * sharePrice,
+          status: 'active_shareholder',
+          lastVerifiedAt: submissionTimestamp,
+          updatedAt: submissionTimestamp
+        };
+        inMemoryUserPortfolios.set(userId, portfolioPayload);
+
+        fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/portfolio.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(portfolioPayload),
+          signal: AbortSignal.timeout(3000)
+        }).catch(() => {});
+
+        try {
+          const fsDb = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
+          fsDb.collection('shareholders').doc(userId).set(portfolioPayload, { merge: true }).catch(() => {});
+        } catch (_) {}
+      }
 
       // 2. Save in admin review queue in RTDB
       fetch(`${CURRENT_RTDB_BASE}/share_payments/${applicationId}.json`, {
@@ -4332,9 +4417,21 @@ app.use((req, res, next) => {
         signal: AbortSignal.timeout(3000)
       }).catch(() => {});
 
+      // 4. Save in Cloud Firestore share_payments collection via Admin SDK
+      try {
+        const fsDb = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
+        fsDb.collection('share_payments').doc(applicationId).set(paymentRecord, { merge: true }).catch(() => {});
+      } catch (fsErr) {
+        console.warn('[Shareholder Submit Payment] Firestore write notice:', fsErr);
+      }
+
       return res.json({
         success: true,
-        message: 'Your payment details have been submitted successfully. Your application will remain pending until an authorized administrator verifies your payment.',
+        status: paymentRecord.status,
+        isApproved,
+        message: isApproved 
+          ? 'Payment verified and shareholder equity activated successfully.' 
+          : 'Your payment details have been submitted successfully. Your application will remain pending until an authorized administrator verifies your payment.',
         paymentRecord
       });
     } catch (err: any) {
@@ -5596,7 +5693,7 @@ app.use((req, res, next) => {
         }
       }
 
-      // 2. Fetch portfolio if exists
+      // 2. Fetch portfolio if exists from RTDB
       const portfolioSnap = await fetch(`${CURRENT_RTDB_BASE}/shareholders/${authenticatedUid}/portfolio.json`, {
         signal: AbortSignal.timeout(3000)
       }).catch(() => null);
@@ -5607,6 +5704,39 @@ app.use((req, res, next) => {
       }
       if (!portfolio && inMemoryUserPortfolios.has(authenticatedUid)) {
         portfolio = inMemoryUserPortfolios.get(authenticatedUid);
+      }
+
+      // Query Cloud Firestore via Admin SDK for high resilience and single source of truth
+      try {
+        const fsDb = getFirestore(CURRENT_FIRESTORE_DATABASE_ID);
+        const shDoc = await fsDb.collection('shareholders').doc(authenticatedUid).get();
+        if (shDoc.exists) {
+          const fsData = shDoc.data();
+          if (fsData) {
+            portfolio = { ...(portfolio || {}), ...fsData };
+          }
+        }
+
+        const paySnap = await fsDb.collection('share_payments').where('userId', '==', authenticatedUid).get();
+        if (!paySnap.empty) {
+          paySnap.forEach(docSnap => {
+            const pData = { id: docSnap.id, ...docSnap.data() };
+            const existingPIdx = userPayments.findIndex(p => p.id === pData.id);
+            if (existingPIdx !== -1) {
+              userPayments[existingPIdx] = { ...userPayments[existingPIdx], ...pData };
+            } else {
+              userPayments.push(pData);
+            }
+            const existingAIdx = applications.findIndex(a => a.id === pData.id);
+            if (existingAIdx !== -1) {
+              applications[existingAIdx] = { ...applications[existingAIdx], ...pData };
+            } else {
+              applications.push(pData);
+            }
+          });
+        }
+      } catch (fsErr) {
+        console.warn('[Get Shareholder Me] Firestore lookup notice:', fsErr);
       }
 
       // 3. Determine Overall Shareholder Status
@@ -5838,6 +5968,87 @@ app.use((req, res, next) => {
         };
       }
 
+      // Notifications (Task 2 H)
+      const notifications: any[] = [];
+      if (approvedApps.length > 0) {
+        const latestApproved = approvedApps[0];
+        notifications.push({
+          id: `NOTIF-ALLOC-${latestApproved.id}`,
+          type: 'share_allocation',
+          title: 'Share Allocation Active',
+          titleBn: 'শেয়ার বরাদ্দ সক্রিয়',
+          message: `Your equity allocation of ${approvedSharePercentage}% shares (${approvedSharePercentage} units) has been officially verified and active in corporate records.`,
+          messageBn: `আপনার ${approvedSharePercentage}% কোম্পানি শেয়ার (${approvedSharePercentage} ইউনিট) সফলভাবে যাচাই ও সক্রিয় হয়েছে।`,
+          timestamp: latestApproved.verifiedAt || latestApproved.updatedAt || Date.now(),
+          status: 'unread'
+        });
+        notifications.push({
+          id: `NOTIF-CERT-${latestApproved.id}`,
+          type: 'certificate_available',
+          title: 'Official Share Certificate Ready',
+          titleBn: 'অফিসিয়াল শেয়ার সার্টিফিকেট প্রস্তুত',
+          message: 'Your official RJ WORLD BD share ownership certificate has been issued and is available to view and print.',
+          messageBn: 'আপনার অফিসিয়াল আরজে ওয়ার্ল্ড বিডি শেয়ার সার্টিফিকেট তৈরি হয়েছে এবং প্রিন্ট করার জন্য প্রস্তুত।',
+          timestamp: latestApproved.verifiedAt || latestApproved.updatedAt || Date.now(),
+          status: 'unread'
+        });
+      }
+      if (pendingApps.length > 0) {
+        const latestPending = pendingApps[0];
+        notifications.push({
+          id: `NOTIF-PEND-${latestPending.id}`,
+          type: 'payment_pending',
+          title: 'Payment Verification in Progress',
+          titleBn: 'পেমেন্ট যাচাইকরণ চলমান',
+          message: `Payment TrxID ${latestPending.transactionId || ''} for application ${latestPending.id} is queued for SMS reader and administrator verification.`,
+          messageBn: `আপনার অ্যাপ্লিকেশন ${latestPending.id}-এর পেমেন্ট TrxID ${latestPending.transactionId || ''} যাচাইকরণের অপেক্ষায় রয়েছে।`,
+          timestamp: latestPending.submissionTimestamp || latestPending.createdAt || Date.now(),
+          status: 'unread'
+        });
+      }
+      if (rejectedApps.length > 0) {
+        const latestRejected = rejectedApps[0];
+        notifications.push({
+          id: `NOTIF-REJ-${latestRejected.id}`,
+          type: 'payment_rejected',
+          title: 'Payment Verification Notice',
+          titleBn: 'পেমেন্ট যাচাইকরণ নোটিশ',
+          message: latestRejected.rejectionReason || 'Submitted payment could not be verified. Please contact WhatsApp support.',
+          messageBn: latestRejected.rejectionReason || 'প্রদত্ত পেমেন্ট তথ্য যাচাই করা সম্ভব হয়নি। অনুগ্রহ করে হোয়াটসঅ্যাপ সাপোর্টে যোগাযোগ করুন।',
+          timestamp: latestRejected.rejectedAt || latestRejected.updatedAt || Date.now(),
+          status: 'unread'
+        });
+      }
+      for (const w of withdrawalsList) {
+        notifications.push({
+          id: `NOTIF-WDR-${w.id}`,
+          type: 'withdrawal_update',
+          title: `Withdrawal ${String(w.status || 'UPDATE').toUpperCase()}`,
+          titleBn: `উত্তোলন আপডেট (${w.status || ''})`,
+          message: `Withdrawal request of ৳${Number(w.amount || 0).toLocaleString()} via ${w.paymentMethod || 'bKash'} (${w.accountNumber || ''}) is ${w.status || 'pending'}.`,
+          messageBn: `৳${Number(w.amount || 0).toLocaleString()} উত্তোলনের আবেদনটি (${w.paymentMethod || 'bKash'}) বর্তমানে ${w.status || 'পেন্ডিং'} অবস্থায় রয়েছে।`,
+          timestamp: w.updatedAt || w.requestedAt || Date.now(),
+          status: 'unread'
+        });
+      }
+
+      const primaryApp = approvedApps[0] || pendingApps[0] || applications[0] || {};
+      const accountCreationDate = primaryApp.verifiedAt || primaryApp.createdAt || (portfolio ? portfolio.lastVerifiedAt : null) || Date.now();
+      const paymentVerificationStatus = shareholderStatus === 'approved' 
+        ? 'Verified' 
+        : shareholderStatus === 'pending_verification' 
+          ? 'Pending Verification' 
+          : shareholderStatus === 'rejected' 
+            ? 'Rejected' 
+            : 'Unpaid';
+      const shareholderAccountStatus = shareholderStatus === 'approved' 
+        ? 'Active Shareholder' 
+        : shareholderStatus === 'pending_verification' 
+          ? 'Pending Verification' 
+          : shareholderStatus === 'rejected' 
+            ? 'Application Rejected' 
+            : 'Inactive';
+
       return res.json({
         success: true,
         authenticatedUid,
@@ -5870,13 +6081,20 @@ app.use((req, res, next) => {
           withdrawals: withdrawalsList
         },
         certificate,
+        notifications,
         profile: {
           userId: authenticatedUid,
-          email: callerEmail || applications[0]?.email || '',
-          phone: applications[0]?.phone || applications[0]?.payerMobile || '',
-          applicantName: applications[0]?.applicantName || applications[0]?.fullName || '',
-          guardianName: applications[0]?.guardianName || '',
-          address: applications[0]?.address || ''
+          fullName: primaryApp.applicantName || primaryApp.fullName || portfolio?.shareholderName || 'Registered Shareholder',
+          applicantName: primaryApp.applicantName || primaryApp.fullName || portfolio?.shareholderName || 'Registered Shareholder',
+          email: primaryApp.email || callerEmail || '',
+          shareholderId,
+          accountCreationDate,
+          applicationId: primaryApp.id || primaryApp.applicationId || 'N/A',
+          paymentVerificationStatus,
+          shareholderAccountStatus,
+          phone: primaryApp.phone || primaryApp.payerMobile || '',
+          guardianName: primaryApp.guardianName || '',
+          address: primaryApp.address || ''
         }
       });
     } catch (err: any) {
