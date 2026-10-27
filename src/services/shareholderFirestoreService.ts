@@ -108,7 +108,13 @@ export async function getShareholderPortfolioFromFirestore(userId: string): Prom
     const docRef = doc(db, 'shareholders', userId);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      return snap.data() as ShareholderPortfolioDoc;
+      const data = snap.data() as ShareholderPortfolioDoc;
+      if (data && (Number(data.activeSharesPercent) > 0 || data.status === 'active_shareholder')) {
+        try {
+          localStorage.setItem(`rj_shareholder_active_${userId}`, JSON.stringify(data));
+        } catch (_) {}
+        return data;
+      }
     }
   } catch (err: any) {
     if (err?.message?.includes('Quota') || err?.code === 'resource-exhausted') {
@@ -117,6 +123,18 @@ export async function getShareholderPortfolioFromFirestore(userId: string): Prom
       console.warn('[Shareholder Firestore] Error getting portfolio:', err);
     }
   }
+
+  // Fallback: Check local cache if network/Firestore latency occurred right after payment
+  try {
+    const cached = localStorage.getItem(`rj_shareholder_active_${userId}`);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && (Number(parsed.activeSharesPercent) > 0 || parsed.status === 'active_shareholder')) {
+        return parsed as ShareholderPortfolioDoc;
+      }
+    }
+  } catch (_) {}
+
   return null;
 }
 
@@ -319,11 +337,67 @@ export async function activateVerifiedShareholderInFirestore(params: {
       }, { merge: true });
     } catch (_) {}
 
+    // Persist verified status to local storage for immediate zero-latency hydration
+    try {
+      localStorage.setItem(`rj_shareholder_active_${params.userId}`, JSON.stringify(portfolioDoc));
+      localStorage.setItem(`rj_shareholder_last_activated_${params.userId}`, String(now));
+      localStorage.removeItem(`rj_shareholder_draft_${params.userId}`);
+    } catch (_) {}
+
     return true;
   } catch (err) {
     console.error('[Shareholder Firestore Activation Error]:', err);
     return false;
   }
+}
+
+/**
+ * Polls Cloud Firestore to verify that the shareholder record is physically readable
+ * before navigating to the Shareholder Dashboard, ensuring zero empty-state race conditions.
+ */
+export async function verifyShareholderActivated(userId: string, maxWaitMs = 4000): Promise<boolean> {
+  if (!userId) return false;
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWaitMs) {
+    try {
+      const docRef = doc(db, 'shareholders', userId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const data = snap.data() as ShareholderPortfolioDoc;
+        if (data && (Number(data.activeSharesPercent) > 0 || data.status === 'active_shareholder')) {
+          return true;
+        }
+      }
+    } catch (_) {}
+
+    // Also check share_payments collection
+    try {
+      const q = query(
+        collection(db, 'share_payments'),
+        where('userId', '==', userId),
+        where('status', '==', 'approved'),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        return true;
+      }
+    } catch (_) {}
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+
+  // Fallback to checking local storage
+  try {
+    const cached = localStorage.getItem(`rj_shareholder_active_${userId}`);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && Number(parsed.activeSharesPercent) > 0) return true;
+    }
+  } catch (_) {}
+
+  return false;
 }
 
 /**

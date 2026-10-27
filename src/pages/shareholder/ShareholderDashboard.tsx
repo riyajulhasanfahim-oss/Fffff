@@ -5,6 +5,8 @@ import Footer from '../../components/layout/Footer';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../components/common/LanguageProvider';
 import { rtdbGet } from '../../lib/rtdb';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
 import {
   getShareholderPortfolioFromFirestore,
   getShareholderPaymentsFromFirestore,
@@ -175,7 +177,7 @@ export default function ShareholderDashboard() {
 
   // Fetch strictly the authenticated user's shareholder dashboard data
   // Cloud Firestore is the authoritative Single Source of Truth
-  const fetchDashboardData = async (isBackground = false) => {
+  const fetchDashboardData = async (isBackground = false, retryCount = 0) => {
     if (!user) return;
     try {
       if (!isBackground) setRefreshing(true);
@@ -210,6 +212,18 @@ export default function ShareholderDashboard() {
         if (rRes.status === 'fulfilled') fsRevenue = rRes.value || fsRevenue;
       } catch (fsErr) {
         console.warn('[ShareholderDashboard] Direct Firestore fetch note:', fsErr);
+      }
+
+      if (!fsPortfolio) {
+        try {
+          const cached = localStorage.getItem(`rj_shareholder_active_${user.uid}`);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed && (Number(parsed.activeSharesPercent) > 0 || parsed.status === 'active_shareholder')) {
+              fsPortfolio = parsed;
+            }
+          }
+        } catch (_) {}
       }
 
       // 2. Also fetch server endpoint in parallel
@@ -371,6 +385,12 @@ export default function ShareholderDashboard() {
           withdrawals: []
         });
       } else {
+        if (retryCount < 2) {
+          setTimeout(() => {
+            fetchDashboardData(isBackground, retryCount + 1);
+          }, 800 * (retryCount + 1));
+          return;
+        }
         setDashboardStatus('none');
       }
     } catch (err) {
@@ -385,6 +405,24 @@ export default function ShareholderDashboard() {
     if (user?.uid) {
       fetchDashboardData();
     }
+  }, [user?.uid]);
+
+  // Real-time listener for shareholder document creation or updates
+  useEffect(() => {
+    if (!user?.uid) return;
+    try {
+      const unsub = onSnapshot(doc(db, 'shareholders', user.uid), (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data && (Number(data.activeSharesPercent) > 0 || data.status === 'active_shareholder')) {
+            fetchDashboardData(true);
+          }
+        }
+      }, (err) => {
+        console.warn('[ShareholderDashboard] Real-time listener notice:', err);
+      });
+      return () => unsub();
+    } catch (_) {}
   }, [user?.uid]);
 
   // Live auto-polling when dashboardStatus === 'pending_verification'

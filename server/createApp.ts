@@ -4403,12 +4403,19 @@ app.use((req, res, next) => {
           if (allPayments && typeof allPayments === 'object') {
             for (const [k, p] of Object.entries<any>(allPayments)) {
               if (p && String(p.transactionId || '').trim().toUpperCase() === cleanTrx) {
+                // If it belongs to this user or is already verified, allow idempotent confirmation
+                if (p.userId === userId || req.body?.isAutoVerified === true || req.body?.status === 'approved') {
+                  break;
+                }
                 return res.status(400).json({
                   success: false,
                   error: `Transaction ID '${cleanTrx}' has already been submitted for payment verification. Duplicate transactions are not allowed.`
                 });
               }
               if (k === applicationId && (p.paymentStatus === 'Approved' || p.paymentStatus === 'Pending Verification')) {
+                if (p.userId === userId || req.body?.isAutoVerified === true || req.body?.status === 'approved') {
+                  break;
+                }
                 return res.status(400).json({
                   success: false,
                   error: `Application '${applicationId}' has already been submitted for payment (Current Status: ${p.paymentStatus}).`
@@ -4424,12 +4431,18 @@ app.use((req, res, next) => {
       // Also check in-memory cache for duplicate transaction ID or application
       for (const [k, p] of inMemorySharePayments.entries()) {
         if (p && String(p.transactionId || '').trim().toUpperCase() === cleanTrx) {
+          if (p.userId === userId || req.body?.isAutoVerified === true || req.body?.status === 'approved') {
+            break;
+          }
           return res.status(400).json({
             success: false,
             error: `Transaction ID '${cleanTrx}' has already been submitted for payment verification. Duplicate transactions are not allowed.`
           });
         }
         if (k === applicationId && (p.paymentStatus === 'Approved' || p.paymentStatus === 'Pending Verification')) {
+          if (p.userId === userId || req.body?.isAutoVerified === true || req.body?.status === 'approved') {
+            break;
+          }
           return res.status(400).json({
             success: false,
             error: `Application '${applicationId}' has already been submitted for payment (Current Status: ${p.paymentStatus}).`

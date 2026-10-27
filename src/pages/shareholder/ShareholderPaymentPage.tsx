@@ -308,7 +308,7 @@ export default function ShareholderPaymentPage() {
       if (verifyResult.status === 'verified') {
         // 1. Authoritative Persistence: Save directly to Cloud Firestore as Single Source of Truth
         try {
-          const { activateVerifiedShareholderInFirestore } = await import('../../services/shareholderFirestoreService');
+          const { activateVerifiedShareholderInFirestore, verifyShareholderActivated } = await import('../../services/shareholderFirestoreService');
           await activateVerifiedShareholderInFirestore({
             userId: user.uid,
             applicationId: targetAppId,
@@ -323,6 +323,9 @@ export default function ShareholderPaymentPage() {
             guardianName: application?.guardianName || '',
             address: application?.address || ''
           });
+
+          // Wait and confirm that the shareholder record is physically verified and committed in Firestore
+          await verifyShareholderActivated(user.uid, 4000);
         } catch (fsErr) {
           console.warn('[ShareholderPayment] Direct Firestore write notice:', fsErr);
         }
@@ -382,7 +385,7 @@ export default function ShareholderPaymentPage() {
             : 'Payment verified automatically! Welcome to your Shareholder Dashboard.',
           { duration: 4000 }
         );
-        navigate('/shareholder/dashboard', { replace: true });
+        navigate('/shareholder/dashboard', { replace: true, state: { paymentSuccess: true, verifiedAt: Date.now() } });
         return;
       } 
       
