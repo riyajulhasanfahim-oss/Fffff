@@ -10,9 +10,79 @@ body {
   @apply bg-white text-slate-800 antialiased;
 }
 
-/* Ensure padding for bottom navigation on mobile */
-@media (max-width: 768px) {
+/* Ensure padding for bottom navigation on mobile screens only */
+@media screen and (max-width: 768px) {
   body {
     padding-bottom: env(safe-area-inset-bottom, 80px);
+  }
+}
+
+/* =========================================================================
+   DEDICATED PRINT / PDF GENERATION STYLES
+   Ensures clean, uncropped, high-quality Shareholder Certificate output.
+   Completely excludes header, footer, bottom navigation, modals, and toasts.
+   ========================================================================= */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 6mm 6mm 6mm 6mm;
+  }
+
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    min-height: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Exclude all application UI chrome, navbars, footers, headers, toasts, and bottom nav */
+  nav,
+  header,
+  footer,
+  aside,
+  .print\:hidden,
+  .no-print,
+  [role="region"],
+  [aria-live="polite"],
+  div[class*="bottom-0"] {
+    display: none !important;
+  }
+
+  /* When printing shareholder certificate, isolate certificate element */
+  body.printing-shareholder-certificate {
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  body.printing-shareholder-certificate * {
+    visibility: hidden;
+  }
+
+  body.printing-shareholder-certificate #official-shareholder-certificate,
+  body.printing-shareholder-certificate #official-shareholder-certificate * {
+    visibility: visible !important;
+  }
+
+  body.printing-shareholder-certificate #official-shareholder-certificate {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 195mm !important;
+    margin: 0 auto !important;
+    padding: 24px !important;
+    box-shadow: none !important;
+    border: 6px double #8B7355 !important;
+    background-color: #FAF8F5 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 }

@@ -156,7 +156,7 @@ export default function BottomNavigation() {
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[100] pb-[env(safe-area-inset-bottom)]">
+    <div className="fixed bottom-0 left-0 right-0 z-[100] pb-[env(safe-area-inset-bottom)] print:hidden no-print">
       <div className="bg-white/95 backdrop-blur-xl border-t border-slate-200/60 rounded-t-[16px] shadow-[0_-6px_25px_-12px_rgba(0,0,0,0.1)] relative max-w-7xl mx-auto">
           
           <div className="flex justify-between items-center h-[50px] px-1 md:px-8">
