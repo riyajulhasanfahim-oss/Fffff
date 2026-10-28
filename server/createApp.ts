@@ -4972,6 +4972,49 @@ app.use((req, res, next) => {
           }));
         }
       }
+
+      // Ingest directly from Cloud Firestore (Primary Single Source of Truth)
+      try {
+        const fsBase = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents`;
+        const [fsPaymentsRes, fsAppsRes] = await Promise.all([
+          fetch(`${fsBase}/share_payments?pageSize=300`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
+          fetch(`${fsBase}/shareholder_applications?pageSize=300`, { signal: AbortSignal.timeout(4000) }).catch(() => null)
+        ]);
+
+        const parseFsDocs = async (res: any) => {
+          if (res && res.ok) {
+            const data = await res.json().catch(() => null);
+            if (data && Array.isArray(data.documents)) {
+              for (const doc of data.documents) {
+                const docId = doc.name ? doc.name.split('/').pop() : '';
+                if (docId) {
+                  const fields: Record<string, any> = {};
+                  if (doc.fields) {
+                    for (const [k, v] of Object.entries<any>(doc.fields)) {
+                      if (v.stringValue !== undefined) fields[k] = v.stringValue;
+                      else if (v.integerValue !== undefined) fields[k] = Number(v.integerValue);
+                      else if (v.doubleValue !== undefined) fields[k] = Number(v.doubleValue);
+                      else if (v.booleanValue !== undefined) fields[k] = v.booleanValue;
+                      else if (v.timestampValue !== undefined) fields[k] = new Date(v.timestampValue).getTime();
+                    }
+                  }
+                  const targetId = fields.applicationId || fields.id || docId;
+                  const idx = applications.findIndex(a => a.id === targetId || a.applicationId === targetId || a.id === docId);
+                  if (idx !== -1) {
+                    applications[idx] = { ...applications[idx], ...fields };
+                  } else {
+                    applications.push({ id: docId, ...fields });
+                  }
+                }
+              }
+            }
+          }
+        };
+
+        await Promise.all([parseFsDocs(fsPaymentsRes), parseFsDocs(fsAppsRes)]);
+      } catch (fsErr) {
+        console.warn('[Server Firestore Ingestion Note]:', fsErr);
+      }
       // Merge in-memory payments into applications
       const seenAppIds = new Set(applications.map(a => a.id));
       for (const [id, val] of inMemorySharePayments.entries()) {
@@ -5174,7 +5217,7 @@ app.use((req, res, next) => {
         .filter(w => w.status === 'paid' || w.status === 'approved')
         .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
 
-      // Build verified shareholders list from approved applications
+      // Build verified shareholders list from approved applications & Firestore 'shareholders' collection
       const verifiedShareholders: any[] = [];
       const seenShUserIds = new Set<string>();
 
@@ -5194,6 +5237,44 @@ app.use((req, res, next) => {
           });
         }
       }
+
+      // Also ingest directly from Firestore 'shareholders' collection
+      try {
+        const fsBase = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents`;
+        const fsShRes = await fetch(`${fsBase}/shareholders?pageSize=300`, { signal: AbortSignal.timeout(4000) }).catch(() => null);
+        if (fsShRes && fsShRes.ok) {
+          const shData = await fsShRes.json().catch(() => null);
+          if (shData && Array.isArray(shData.documents)) {
+            for (const doc of shData.documents) {
+              const uId = doc.name ? doc.name.split('/').pop() : '';
+              if (uId && !seenShUserIds.has(uId)) {
+                const fields: Record<string, any> = {};
+                if (doc.fields) {
+                  for (const [k, v] of Object.entries<any>(doc.fields)) {
+                    if (v.stringValue !== undefined) fields[k] = v.stringValue;
+                    else if (v.integerValue !== undefined) fields[k] = Number(v.integerValue);
+                    else if (v.doubleValue !== undefined) fields[k] = Number(v.doubleValue);
+                    else if (v.booleanValue !== undefined) fields[k] = v.booleanValue;
+                    else if (v.timestampValue !== undefined) fields[k] = new Date(v.timestampValue).getTime();
+                  }
+                }
+                seenShUserIds.add(uId);
+                verifiedShareholders.push({
+                  userId: uId,
+                  shareholderId: fields.shareholderId || `RJ-SH-${uId.slice(0, 8).toUpperCase()}`,
+                  shareholderName: fields.shareholderName || fields.applicantName || 'Verified Shareholder',
+                  activeSharesPercent: Number(fields.activeSharesPercent || 1),
+                  portfolioValue: Number(fields.portfolioValue || (Number(fields.activeSharesPercent || 1) * 2000)),
+                  status: suspendedMap[uId] ? 'suspended' : (fields.status || 'active_shareholder'),
+                  lastVerifiedAt: fields.lastVerifiedAt || fields.verifiedAt || Date.now(),
+                  phone: fields.phone || fields.mobile || '',
+                  email: fields.email || ''
+                });
+              }
+            }
+          }
+        }
+      } catch (_) {}
 
       return res.json({
         success: true,

@@ -8,11 +8,19 @@ service cloud.firestore {
     }
 
     // STRICT ADMIN AUTHORIZATION:
-    // Only authenticated tokens with custom claim admin == true OR matching the two approved emails
+    // Only authenticated tokens with custom claim admin == true OR matching the approved emails OR user profile role == Admin
     function isUserAdmin() {
       return isSignedIn() && (
         request.auth.token.admin == true ||
-        request.auth.token.email in ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'limonshik07@gmail.com']
+        request.auth.token.email in ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'limonshik07@gmail.com'] ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Admin' ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+          )
+        )
       );
     }
 
@@ -589,7 +597,7 @@ service cloud.firestore {
 
     // Shareholder Management & Financial Ledger Security (STEP 5 - Task 8)
     match /share_payments/{paymentId} {
-      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid || isUserAdmin());
+      allow read: if isUserAdmin() || (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid));
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isUserAdmin() || (
         isSignedIn() && 
@@ -600,7 +608,7 @@ service cloud.firestore {
     }
 
     match /shareholder_applications/{applicationId} {
-      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid || isUserAdmin());
+      allow read: if isUserAdmin() || (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid));
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isUserAdmin() || (
         isSignedIn() && 
@@ -611,20 +619,20 @@ service cloud.firestore {
     }
 
     match /shareholders/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
+      allow read: if isUserAdmin() || (isSignedIn() && request.auth.uid == userId);
       allow create, update: if isUserAdmin() || (
         isSignedIn() && request.auth.uid == userId
       );
       allow delete: if isUserAdmin();
 
       match /{document=**} {
-        allow read: if isSignedIn() && (request.auth.uid == userId || isUserAdmin());
+        allow read: if isUserAdmin() || (isSignedIn() && request.auth.uid == userId);
         allow write: if isUserAdmin() || (isSignedIn() && request.auth.uid == userId);
       }
     }
 
     match /shareholder_certificates/{certificateId} {
-      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid || isUserAdmin());
+      allow read: if isUserAdmin() || (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid));
       allow write: if isUserAdmin() || (
         isSignedIn() && 
         (resource == null || resource.data.userId == request.auth.uid) && 

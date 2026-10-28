@@ -32,10 +32,13 @@ import {
   ClipboardList,
   TrendingUp,
   Percent,
-  Users
+  Users,
+  AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { isAllowedAdminEmail } from '../../constants/adminAllowlist';
+import { db } from '../../lib/firebase';
+import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { 
   getAllShareholderApplicationsFromFirestore, 
   getAllShareholdersFromFirestore,
@@ -78,6 +81,8 @@ export default function AdminShareholderManagement() {
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [appStatusFilter, setAppStatusFilter] = useState<string>('all');
+  const [shareholderStatusFilter, setShareholderStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Modals & Actions
   const [selectedAppDetail, setSelectedAppDetail] = useState<any | null>(null);
@@ -106,31 +111,165 @@ export default function AdminShareholderManagement() {
     if (!user) return;
     try {
       setRefreshing(true);
-      const token = await user.getIdToken().catch(() => '');
-      const headers: Record<string, string> = {
-        'x-admin-email': user.email || ''
-      };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      setFetchError(null);
 
-      const res = await fetch('/api/shareholders/admin/overview', { headers });
-      const data = await res.json();
+      // =========================================================================
+      // DIRECT CLOUD FIRESTORE DATA INGESTION (SINGLE SOURCE OF TRUTH)
+      // Requirements 1, 2, 3, 4: Directly queries Firestore collections
+      // =========================================================================
+      let fetchedApps: any[] = [];
+      let fetchedShareholders: any[] = [];
+      let primaryFirestoreError: any = null;
 
-      if (data && data.success) {
-        setMetrics(data.metrics || null);
-        setApplications(data.applications || []);
-        setCommissionConfig(data.commissionConfig || null);
-        setLedgerEntries(data.ledgerEntries || []);
-        setAuditLogs(data.auditLogs || []);
-        setWithdrawals(data.withdrawals || []);
-        if (data.metrics?.totalAuthorizedSharePercent) {
-          setNewAvailableShares(data.metrics.totalAuthorizedSharePercent);
-        }
-      } else {
-        toast.error(data.error || 'Failed to load shareholder overview');
+      try {
+        fetchedApps = await getAllShareholderApplicationsFromFirestore();
+      } catch (err: any) {
+        console.warn('[Firestore Service Apps Fetch]:', err);
+        primaryFirestoreError = err;
       }
+
+      try {
+        fetchedShareholders = await getAllShareholdersFromFirestore();
+      } catch (err: any) {
+        console.warn('[Firestore Service Shareholders Fetch]:', err);
+        if (!primaryFirestoreError) primaryFirestoreError = err;
+      }
+
+      // Direct Firestore queries for supporting ledger, audit logs, and configuration
+      const [ledgerSnap, auditSnap, withdrawalsSnap, configSnap, commSnap] = await Promise.all([
+        getDocs(collection(db, 'shareholder_ledger')).catch(() => null),
+        getDocs(collection(db, 'shareholder_audit_logs')).catch(() => null),
+        getDocs(collection(db, 'shareholder_withdrawals')).catch(() => null),
+        getDoc(doc(db, 'system_config', 'shareholders')).catch(() => null),
+        getDoc(doc(db, 'system_config', 'shareholder_commissions')).catch(() => null)
+      ]);
+
+      const ledgerList: any[] = [];
+      if (ledgerSnap) {
+        ledgerSnap.forEach(d => ledgerList.push({ id: d.id, ...d.data() }));
+      }
+      ledgerList.sort((a, b) => (b.timestamp || b.createdAt || 0) - (a.timestamp || a.createdAt || 0));
+
+      const auditList: any[] = [];
+      if (auditSnap) {
+        auditSnap.forEach(d => auditList.push({ id: d.id, ...d.data() }));
+      }
+      auditList.sort((a, b) => (b.timestamp || b.createdAt || 0) - (a.timestamp || a.createdAt || 0));
+
+      const withdrawalsList: any[] = [];
+      if (withdrawalsSnap) {
+        withdrawalsSnap.forEach(d => withdrawalsList.push({ id: d.id, ...d.data() }));
+      }
+      withdrawalsList.sort((a, b) => (b.requestedAt || b.createdAt || 0) - (a.requestedAt || a.createdAt || 0));
+
+      let totalAuthorizedPool = 40;
+      if (configSnap && configSnap.exists()) {
+        const c = configSnap.data();
+        if (c?.availableShares) totalAuthorizedPool = Number(c.availableShares);
+      }
+
+      let commConfigData: any = null;
+      if (commSnap && commSnap.exists()) {
+        commConfigData = commSnap.data();
+      }
+
+      // Cross-reference to ensure all approved applications appear in verified shareholders
+      const finalShareholdersMap = new Map<string, any>();
+      fetchedShareholders.forEach(sh => {
+        if (sh.userId) finalShareholdersMap.set(sh.userId, sh);
+      });
+
+      fetchedApps.forEach(app => {
+        const st = (app.status || app.paymentStatus || '').toLowerCase();
+        const isApproved = st === 'approved' || app.isShareholderActive === true;
+        if (isApproved && app.userId && !finalShareholdersMap.has(app.userId)) {
+          finalShareholdersMap.set(app.userId, {
+            userId: app.userId,
+            shareholderId: `RJ-SH-${app.userId.slice(0, 8).toUpperCase()}`,
+            shareholderName: app.applicantName || app.fullName || 'Verified Shareholder',
+            activeSharesPercent: Number(app.sharePercent || 1),
+            portfolioValue: Number(app.totalAmount || (Number(app.sharePercent || 1) * 2000)),
+            status: app.isSuspended ? 'suspended' : 'active_shareholder',
+            lastVerifiedAt: app.verifiedAt || app.updatedAt || app.submissionTimestamp || Date.now(),
+            createdAt: app.createdAt || app.submissionTimestamp || Date.now(),
+            email: app.email || '',
+            phone: app.phone || app.payerMobile || '',
+            guardianName: app.guardianName || '',
+            address: app.address || ''
+          });
+        }
+      });
+
+      const finalShareholdersList = Array.from(finalShareholdersMap.values());
+      finalShareholdersList.sort((a, b) => (b.lastVerifiedAt || b.createdAt || 0) - (a.lastVerifiedAt || a.createdAt || 0));
+
+      // Calculate Authoritative Metrics directly from real Firestore records
+      const approvedApps = fetchedApps.filter(a => (a.status || a.paymentStatus || '').toLowerCase() === 'approved' || a.isShareholderActive === true);
+      const pendingApps = fetchedApps.filter(a => {
+        const st = (a.status || a.paymentStatus || '').toLowerCase();
+        return st.includes('pending') || (!st.includes('approved') && !st.includes('rejected'));
+      });
+      const rejectedApps = fetchedApps.filter(a => (a.status || a.paymentStatus || '').toLowerCase().includes('reject'));
+      const suspendedCount = finalShareholdersList.filter(s => s.status === 'suspended').length;
+
+      const totalApprovedPercent = approvedApps.reduce((acc, a) => acc + (Number(a.sharePercent) || 0), 0);
+      const remainingAvailablePercent = Math.max(0, totalAuthorizedPool - totalApprovedPercent);
+      const verifiedPaymentsTotal = totalApprovedPercent * 2000;
+      const pendingPaymentsTotal = pendingApps.reduce((acc, a) => acc + (Number(a.totalAmount) || (Number(a.sharePercent || 1) * 2000)), 0);
+      const commissionPaidTotal = withdrawalsList.filter(w => (w.status || '').toLowerCase() === 'paid').reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+
+      const computedMetrics: Metrics = {
+        totalApplications: fetchedApps.length,
+        pendingApplications: pendingApps.length,
+        approvedShareholders: Math.max(finalShareholdersList.length, approvedApps.length),
+        rejectedApplications: rejectedApps.length,
+        suspendedAccounts: suspendedCount,
+        totalApprovedSharePercent: totalApprovedPercent,
+        totalAuthorizedSharePercent: totalAuthorizedPool,
+        remainingAvailableSharePercent: remainingAvailablePercent,
+        totalVerifiedSharePayments: verifiedPaymentsTotal,
+        totalPendingPayments: pendingPaymentsTotal,
+        totalApprovedCommissionLiabilities: 0,
+        totalCommissionAlreadyPaid: commissionPaidTotal,
+        pricePerPercent: 2000
+      };
+
+      setApplications(fetchedApps);
+      setVerifiedShareholders(finalShareholdersList);
+      setMetrics(computedMetrics);
+      setLedgerEntries(ledgerList);
+      setAuditLogs(auditList);
+      setWithdrawals(withdrawalsList);
+      setNewAvailableShares(totalAuthorizedPool);
+      if (commConfigData) setCommissionConfig(commConfigData);
+
+      // If Firestore failed completely and returned 0 records due to an error, record error state
+      if (fetchedApps.length === 0 && primaryFirestoreError) {
+        const msg = primaryFirestoreError.message || 'Permission or network issue retrieving records from Cloud Firestore.';
+        setFetchError(msg);
+      }
+
+      // Supplemental background sync with server without throwing network error
+      try {
+        const token = await user.getIdToken().catch(() => '');
+        const headers: Record<string, string> = { 'x-admin-email': user.email || '' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch('/api/shareholders/admin/overview', { headers });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (data?.success) {
+            if (data.commissionConfig) setCommissionConfig(data.commissionConfig);
+          }
+        }
+      } catch (_) {
+        // Non-blocking: Firestore is authoritative
+      }
+
     } catch (err: any) {
-      console.error('Error fetching admin shareholder data:', err);
-      toast.error('Network error loading administrative records.');
+      console.error('Error fetching admin shareholder data from Cloud Firestore:', err);
+      const msg = err.message || 'Error fetching shareholder records from Cloud Firestore.';
+      setFetchError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -735,11 +874,31 @@ export default function AdminShareholderManagement() {
             </div>
           </div>
 
+          {/* Firestore Error Alert for Tab 1 */}
+          {fetchError && applications.length === 0 && (
+            <div className="p-6 m-4 bg-rose-50 border border-rose-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-6 h-6 text-rose-500 shrink-0" />
+                <div>
+                  <h4 className="font-bold text-rose-900">Cloud Firestore Connection / Permission Error</h4>
+                  <p className="text-rose-700 mt-0.5">{fetchError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={fetchOverview}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl transition-all shrink-0 cursor-pointer"
+              >
+                Retry Firestore Query
+              </button>
+            </div>
+          )}
+
           {/* Applications Table */}
           <div className="overflow-x-auto">
             {filteredApps.length === 0 ? (
               <div className="p-12 text-center text-xs text-slate-500">
-                No shareholder applications found matching current criteria.
+                {fetchError ? 'Failed to retrieve applications from Cloud Firestore.' : 'No shareholder applications found matching current criteria.'}
               </div>
             ) : (
               <table className="w-full text-left text-xs">
@@ -853,7 +1012,209 @@ export default function AdminShareholderManagement() {
       )}
 
       {/* =========================================================================
-          TAB 2: SHARE AVAILABILITY & PRICE POOL (TASK 3)
+          TAB 2: VERIFIED SHAREHOLDERS REGISTRY (TASK 2 & 4)
+          Requirements 1, 2, 4: Directly renders verified shareholders from Cloud Firestore
+      ========================================================================== */}
+      {activeTab === 'shareholders' && (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+          {/* Filter Bar */}
+          <div className="p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by Shareholder Name, ID, Phone, or Email..."
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary-main"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 font-semibold">Status:</span>
+              {(['all', 'active', 'suspended'] as const).map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setShareholderStatusFilter(status)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize transition-all cursor-pointer ${
+                    shareholderStatusFilter === status 
+                      ? 'bg-slate-900 text-white shadow-2xs' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {status}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Firestore Error Alert for Tab 2 */}
+          {fetchError && verifiedShareholders.length === 0 && (
+            <div className="p-6 m-4 bg-rose-50 border border-rose-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-6 h-6 text-rose-500 shrink-0" />
+                <div>
+                  <h4 className="font-bold text-rose-900">Cloud Firestore Connection / Permission Error</h4>
+                  <p className="text-rose-700 mt-0.5">{fetchError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={fetchOverview}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl transition-all shrink-0 cursor-pointer"
+              >
+                Retry Firestore Query
+              </button>
+            </div>
+          )}
+
+          {/* Verified Shareholders Table */}
+          <div className="overflow-x-auto">
+            {filteredShareholders.length === 0 ? (
+              <div className="p-12 text-center text-xs text-slate-500">
+                {fetchError ? 'Failed to retrieve verified shareholders from Cloud Firestore.' : 'No verified shareholders found matching current criteria.'}
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-100">
+                  <tr>
+                    <th className="py-3 px-4">Shareholder ID</th>
+                    <th className="py-3 px-4">Shareholder & Contact</th>
+                    <th className="py-3 px-4">Equity Holding</th>
+                    <th className="py-3 px-4">Verified Capital</th>
+                    <th className="py-3 px-4">Account Status</th>
+                    <th className="py-3 px-4">Ratification Date</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {filteredShareholders.map((sh) => (
+                    <tr key={sh.userId} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
+                        <div className="flex items-center gap-1.5">
+                          <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>{sh.shareholderId || `RJ-SH-${sh.userId.slice(0, 8).toUpperCase()}`}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-normal block font-mono">UID: {sh.userId}</span>
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <div className="font-bold text-slate-900">{sh.shareholderName}</div>
+                        <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
+                          {sh.phone && <span>📞 {sh.phone}</span>}
+                          {sh.email && <span>✉️ {sh.email}</span>}
+                        </div>
+                        {sh.guardianName && (
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            C/O: {sh.guardianName}
+                          </div>
+                        )}
+                        {sh.address && (
+                          <div className="text-[10px] text-slate-400 mt-0.5 truncate max-w-xs">
+                            📍 {sh.address}
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black bg-sky-50 text-sky-700 border border-sky-200">
+                          {sh.activeSharesPercent}%
+                        </span>
+                        <span className="text-[10px] text-slate-500 block mt-0.5">
+                          {sh.activeSharesPercent} Equity Unit(s)
+                        </span>
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <div className="font-black text-slate-900">
+                          ৳{sh.portfolioValue?.toLocaleString()}
+                        </div>
+                        <span className="text-[10px] text-emerald-600 font-semibold block">
+                          Verified Capital
+                        </span>
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        {sh.status === 'suspended' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                            <ShieldAlert className="w-3 h-3 text-rose-600" />
+                            <span>Suspended</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>Active Shareholder</span>
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-4 text-slate-600 font-mono text-[11px]">
+                        {sh.lastVerifiedAt ? new Date(sh.lastVerifiedAt).toLocaleDateString('en-GB', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric'
+                        }) : 'N/A'}
+                      </td>
+
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const matchingApp = applications.find(a => a.userId === sh.userId);
+                              setSelectedAppDetail(matchingApp || {
+                                applicationId: sh.shareholderId,
+                                id: sh.shareholderId,
+                                userId: sh.userId,
+                                applicantName: sh.shareholderName,
+                                phone: sh.phone,
+                                email: sh.email,
+                                guardianName: sh.guardianName,
+                                address: sh.address,
+                                sharePercent: sh.activeSharesPercent,
+                                shareUnits: sh.activeSharesPercent,
+                                totalAmount: sh.portfolioValue,
+                                paymentStatus: 'Approved',
+                                status: 'approved',
+                                paymentMethod: 'Bank / MFS Verified',
+                                transactionId: 'VERIFIED-LEDGER-RATIFIED',
+                                submissionTimestamp: sh.lastVerifiedAt,
+                                isShareholderActive: sh.status !== 'suspended'
+                              });
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] transition-colors cursor-pointer"
+                            title="View Full Profile & Verification Details"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>Details</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSuspension(sh.userId, sh.status === 'suspended')}
+                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                              sh.status === 'suspended'
+                                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700'
+                            }`}
+                            title={sh.status === 'suspended' ? 'Reactivate Shareholder' : 'Suspend Shareholder'}
+                          >
+                            {sh.status === 'suspended' ? <UserCheck className="w-3.5 h-3.5 text-emerald-600" /> : <UserX className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 3: SHARE AVAILABILITY & PRICE POOL (TASK 3)
       ========================================================================== */}
       {activeTab === 'availability' && metrics && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

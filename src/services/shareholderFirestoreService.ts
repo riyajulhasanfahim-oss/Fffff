@@ -547,34 +547,104 @@ export async function getEligibleCompanyRevenueFromFirestore(): Promise<Sharehol
  */
 export async function getAllShareholderApplicationsFromFirestore(): Promise<SharePaymentDoc[]> {
   const map = new Map<string, SharePaymentDoc>();
+  let fetchError: Error | null = null;
   
   // 1. Fetch from share_payments
   try {
-    const q1 = query(collection(db, 'share_payments'), limit(200));
+    const q1 = query(collection(db, 'share_payments'), limit(300));
     const snap1 = await getDocs(q1);
     snap1.forEach(d => {
       const data = d.data() as any;
-      map.set(d.id, { id: d.id, ...data });
+      const appId = data.applicationId || data.id || d.id;
+      map.set(appId, {
+        id: d.id,
+        applicationId: appId,
+        userId: data.userId || '',
+        applicantName: data.applicantName || data.fullName || data.name || 'Valued Applicant',
+        guardianName: data.guardianName || '',
+        address: data.address || '',
+        phone: data.phone || data.mobile || data.payerMobile || '',
+        email: data.email || '',
+        sharePercent: Number(data.sharePercent || data.approvedSharePercentage || 1),
+        sharePrice: Number(data.sharePrice || 2000),
+        shareUnits: Number(data.shareUnits || data.sharePercent || 1),
+        totalAmount: Number(data.totalAmount || data.verifiedPurchaseAmount || (Number(data.sharePercent || 1) * 2000)),
+        paymentMethod: data.paymentMethod || 'Manual',
+        transactionId: data.transactionId || 'N/A',
+        payerMobile: data.payerMobile || data.phone || '',
+        screenshotUrl: data.screenshotUrl || '',
+        submissionTimestamp: Number(data.submissionTimestamp || data.createdAt || Date.now()),
+        paymentStatus: data.paymentStatus || (data.status === 'approved' ? 'Approved' : data.status === 'rejected' ? 'Rejected' : 'Pending Verification'),
+        status: data.status || (data.paymentStatus === 'Approved' ? 'approved' : data.paymentStatus === 'Rejected' ? 'rejected' : 'pending_verification'),
+        isShareholderActive: Boolean(data.isShareholderActive || data.status === 'approved' || data.paymentStatus === 'Approved'),
+        isOfficialCertificateIssued: Boolean(data.isOfficialCertificateIssued || data.status === 'approved' || data.paymentStatus === 'Approved'),
+        verifiedAt: data.verifiedAt || null,
+        verifiedBy: data.verifiedBy || null,
+        rejectedAt: data.rejectedAt || null,
+        rejectedBy: data.rejectedBy || null,
+        rejectionReason: data.rejectionReason || null,
+        notes: data.notes || '',
+        createdAt: Number(data.createdAt || data.submissionTimestamp || Date.now()),
+        updatedAt: Number(data.updatedAt || Date.now())
+      });
     });
-  } catch (err) {
+  } catch (err: any) {
     console.warn('[Admin Firestore] Error fetching share_payments:', err);
+    fetchError = err;
   }
 
   // 2. Fetch from shareholder_applications
   try {
-    const q2 = query(collection(db, 'shareholder_applications'), limit(200));
+    const q2 = query(collection(db, 'shareholder_applications'), limit(300));
     const snap2 = await getDocs(q2);
     snap2.forEach(d => {
       const data = d.data() as any;
-      const key = data.applicationId || d.id;
+      const key = data.applicationId || data.id || d.id;
       if (!map.has(key)) {
-        map.set(key, { id: d.id, ...data });
+        map.set(key, {
+          id: d.id,
+          applicationId: key,
+          userId: data.userId || '',
+          applicantName: data.applicantName || data.fullName || data.name || 'Valued Applicant',
+          guardianName: data.guardianName || '',
+          address: data.address || '',
+          phone: data.phone || data.mobile || data.payerMobile || '',
+          email: data.email || '',
+          sharePercent: Number(data.sharePercent || data.approvedSharePercentage || 1),
+          sharePrice: Number(data.sharePrice || 2000),
+          shareUnits: Number(data.shareUnits || data.sharePercent || 1),
+          totalAmount: Number(data.totalAmount || data.verifiedPurchaseAmount || (Number(data.sharePercent || 1) * 2000)),
+          paymentMethod: data.paymentMethod || 'Manual',
+          transactionId: data.transactionId || 'N/A',
+          payerMobile: data.payerMobile || data.phone || '',
+          screenshotUrl: data.screenshotUrl || '',
+          submissionTimestamp: Number(data.submissionTimestamp || data.createdAt || Date.now()),
+          paymentStatus: data.paymentStatus || (data.status === 'approved' ? 'Approved' : data.status === 'rejected' ? 'Rejected' : 'Pending Verification'),
+          status: data.status || (data.paymentStatus === 'Approved' ? 'approved' : data.paymentStatus === 'Rejected' ? 'rejected' : 'pending_verification'),
+          isShareholderActive: Boolean(data.isShareholderActive || data.status === 'approved' || data.paymentStatus === 'Approved'),
+          isOfficialCertificateIssued: Boolean(data.isOfficialCertificateIssued || data.status === 'approved' || data.paymentStatus === 'Approved'),
+          verifiedAt: data.verifiedAt || null,
+          verifiedBy: data.verifiedBy || null,
+          rejectedAt: data.rejectedAt || null,
+          rejectedBy: data.rejectedBy || null,
+          rejectionReason: data.rejectionReason || null,
+          notes: data.notes || '',
+          createdAt: Number(data.createdAt || data.submissionTimestamp || Date.now()),
+          updatedAt: Number(data.updatedAt || Date.now())
+        });
       } else {
-        map.set(key, { ...map.get(key)!, ...data });
+        const existing = map.get(key)!;
+        map.set(key, { ...existing, ...data });
       }
     });
-  } catch (err) {
+  } catch (err: any) {
     console.warn('[Admin Firestore] Error fetching shareholder_applications:', err);
+    if (!fetchError) fetchError = err;
+  }
+
+  // If no records could be fetched and an error occurred, rethrow so admin UI displays proper error banner
+  if (map.size === 0 && fetchError) {
+    throw fetchError;
   }
 
   const list = Array.from(map.values());
@@ -586,8 +656,10 @@ export async function getAllShareholderApplicationsFromFirestore(): Promise<Shar
  */
 export async function getAllShareholdersFromFirestore(): Promise<ShareholderPortfolioDoc[]> {
   const map = new Map<string, ShareholderPortfolioDoc>();
+  let fetchError: Error | null = null;
+
   try {
-    const q = query(collection(db, 'shareholders'), limit(200));
+    const q = query(collection(db, 'shareholders'), limit(300));
     const snap = await getDocs(q);
     snap.forEach(d => {
       const data = d.data() as any;
@@ -597,45 +669,49 @@ export async function getAllShareholdersFromFirestore(): Promise<ShareholderPort
           shareholderName: data.shareholderName || data.applicantName || data.fullName || data.name || 'Verified Shareholder',
           activeSharesPercent: Number(data.activeSharesPercent || data.sharePercent || 1),
           portfolioValue: Number(data.portfolioValue || data.totalAmount || (Number(data.activeSharesPercent || data.sharePercent || 1) * 2000)),
-          status: data.status || 'active_shareholder',
+          status: data.status || (data.isSuspended ? 'suspended' : 'active_shareholder'),
           lastVerifiedAt: data.lastVerifiedAt || data.verifiedAt || data.updatedAt || Date.now(),
           createdAt: data.createdAt || Date.now(),
           email: data.email || '',
-          phone: data.phone || data.mobile || '',
+          phone: data.phone || data.mobile || data.payerMobile || '',
           guardianName: data.guardianName || '',
           address: data.address || ''
         });
       }
     });
-  } catch (err) {
+  } catch (err: any) {
     console.warn('[Admin Firestore] Error fetching shareholders:', err);
+    fetchError = err;
   }
 
   // Also cross-reference approved records in share_payments
   try {
     const qApproved = query(
       collection(db, 'share_payments'),
-      where('paymentStatus', '==', 'Approved'),
-      limit(200)
+      limit(300)
     );
     const snapApproved = await getDocs(qApproved);
     snapApproved.forEach(d => {
       const data = d.data() as any;
-      const uId = data.userId || d.id;
-      if (uId && !map.has(uId)) {
-        map.set(uId, {
-          userId: uId,
-          shareholderName: data.applicantName || data.fullName || 'Verified Shareholder',
-          activeSharesPercent: Number(data.sharePercent || 1),
-          portfolioValue: Number(data.totalAmount || (Number(data.sharePercent || 1) * 2000)),
-          status: 'active_shareholder',
-          lastVerifiedAt: data.verifiedAt || data.updatedAt || Date.now(),
-          createdAt: data.createdAt || Date.now(),
-          email: data.email || '',
-          phone: data.phone || data.payerMobile || '',
-          guardianName: data.guardianName || '',
-          address: data.address || ''
-        });
+      const st = (data.paymentStatus || data.status || '').toLowerCase();
+      const isApproved = st === 'approved' || data.isShareholderActive === true;
+      if (isApproved) {
+        const uId = data.userId || d.id;
+        if (uId && !map.has(uId)) {
+          map.set(uId, {
+            userId: uId,
+            shareholderName: data.applicantName || data.fullName || 'Verified Shareholder',
+            activeSharesPercent: Number(data.sharePercent || 1),
+            portfolioValue: Number(data.totalAmount || (Number(data.sharePercent || 1) * 2000)),
+            status: data.isSuspended ? 'suspended' : 'active_shareholder',
+            lastVerifiedAt: data.verifiedAt || data.updatedAt || data.submissionTimestamp || Date.now(),
+            createdAt: data.createdAt || data.submissionTimestamp || Date.now(),
+            email: data.email || '',
+            phone: data.phone || data.payerMobile || '',
+            guardianName: data.guardianName || '',
+            address: data.address || ''
+          });
+        }
       }
     });
   } catch (_) {}
