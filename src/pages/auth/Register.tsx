@@ -14,6 +14,7 @@ import { checkAccountStatus, getPostLoginRedirect } from '../../services/account
 import { executeResellerWalletTransaction, isResellerAccount } from '../../services/resellerWalletService';
 import { ResellerTransactionType } from '../../types/resellerWallet';
 import { isAllowedAdminEmail } from '../../constants/adminAllowlist';
+import { lookupReferralCode, processReferralRewards } from '../../services/resellerReferralService';
 
 export default function Register() {
   const { t } = useTranslation();
@@ -127,57 +128,25 @@ export default function Register() {
         let sponsorId = '';
         const cleanRef = referralCode.trim().toUpperCase();
         
-        // 1. Direct code lookup in RTDB
-        const directCode = await rtdbGet<any>(`referral_codes/${cleanRef}`);
-        if (directCode && directCode.userId) {
-          sponsorId = directCode.userId;
+        // 1. Standard referral lookup across RTDB & Firestore
+        const lookup = await lookupReferralCode(cleanRef);
+        if (lookup.valid && lookup.userId && lookup.userId !== user.uid) {
+          sponsorId = lookup.userId;
         }
 
-        // 2. Search all referral codes in RTDB
+        // 2. Fallback direct code lookup in RTDB if lookup was not valid
         if (!sponsorId) {
-          const allRefCodes = await rtdbGet<Record<string, any>>('referral_codes');
-          if (allRefCodes && typeof allRefCodes === 'object') {
-            for (const [key, val] of Object.entries(allRefCodes)) {
-              if (val && (val.code === cleanRef || String(key).toUpperCase() === cleanRef)) {
-                sponsorId = val.userId || key;
-                break;
-              }
-            }
+          const directCode = await rtdbGet<any>(`referral_codes/${cleanRef}`);
+          if (directCode && directCode.userId && directCode.userId !== user.uid) {
+            sponsorId = directCode.userId;
           }
         }
 
-        // 3. Search MLM members in RTDB
-        if (!sponsorId) {
-          const mlmMembers = await rtdbGet<Record<string, any>>('mlm_members');
-          if (mlmMembers && typeof mlmMembers === 'object') {
-            for (const [key, val] of Object.entries(mlmMembers)) {
-              if (val && (val.id === cleanRef || String(key).toUpperCase() === cleanRef)) {
-                sponsorId = val.id || key;
-                break;
-              }
-            }
-          }
-        }
-
-        // 4. Search users in RTDB
-        if (!sponsorId) {
-          const allUsers = await rtdbGet<Record<string, any>>('users');
-          if (allUsers && typeof allUsers === 'object') {
-            for (const [key, val] of Object.entries(allUsers)) {
-              if (key.toUpperCase().startsWith(cleanRef) || val?.uid?.toUpperCase()?.startsWith(cleanRef)) {
-                sponsorId = val?.uid || key;
-                break;
-              }
-            }
-          }
-        }
-
-        if (sponsorId) {
+        if (sponsorId && sponsorId !== user.uid) {
           const sponsorPayload = {
             sponsorId: sponsorId,
             referredBy: sponsorId,
             referralCodeUsed: cleanRef,
-            isMLMMember: true,
             updatedAt: Date.now()
           };
           // Link sponsor in Firestore & RTDB user record
@@ -186,98 +155,17 @@ export default function Register() {
             rtdbUpdate(`users/${user.uid}`, sponsorPayload)
           ]);
 
-          // Save MLM membership in RTDB
-          await rtdbSet(`mlm_members/${user.uid}`, {
-            id: user.uid,
-            name: cleanName,
-            sponsorId: sponsorId,
-            parentId: sponsorId,
-            level: 1,
-            status: 'Active',
-            joinDate: now,
-            personalSales: 0,
-            teamSales: 0,
-            rank: 'Starter'
-          });
-
-          // Distribute commissions in RTDB
+          // Credit referral rewards: exactly ৳50 to new customer and ৳200 to referrer (atomic & duplicate-safe)
           try {
-            const addCommission = async (beneficiaryId: string, amount: number, levelDesc: string) => {
-              if (!beneficiaryId) return;
-              
-              const isResellerUser = await isResellerAccount(beneficiaryId);
-              if (!isResellerUser) return;
-
-              await rtdbPush('reseller_transactions', {
-                resellerId: beneficiaryId,
-                orderId: 'INVITE-' + user.uid,
-                customerName: cleanName,
-                productName: 'Friend Invite Commission (' + levelDesc + ')',
-                amount: amount,
-                status: 'Approved',
-                createdAt: now,
-                isReferral: true
-              });
-              
-              await executeResellerWalletTransaction({
-                resellerId: beneficiaryId,
-                userId: beneficiaryId,
-                orderId: 'INVITE-' + user.uid,
-                amount,
-                type: ResellerTransactionType.PROFIT_RELEASED,
-                status: 'Approved',
-                description: `Friend Invite Commission (${levelDesc})`,
-                metadata: {
-                  customerName: cleanName,
-                  levelDesc
-                }
-              });
-
-              await rtdbTransaction(`reseller_wallet/${beneficiaryId}`, (curr) => {
-                if (!curr) return curr;
-                return {
-                  ...curr,
-                  teamMembers: Number(curr.teamMembers || 0) + 1,
-                  updatedAt: now
-                };
-              });
-            };
-
-            const l1Member = await rtdbGet<any>(`mlm_members/${sponsorId}`);
-            if (l1Member) {
-              await addCommission(sponsorId, 150, 'Level 1');
-              if (l1Member.sponsorId) {
-                const l2Member = await rtdbGet<any>(`mlm_members/${l1Member.sponsorId}`);
-                if (l2Member) {
-                  await addCommission(l1Member.sponsorId, 100, 'Level 2');
-                  if (l2Member.sponsorId) {
-                    await addCommission(l2Member.sponsorId, 50, 'Level 3');
-                  }
-                }
-              }
-            } else {
-              await addCommission(sponsorId, 150, 'Direct Referral');
-            }
-          } catch (commErr) {
-            console.error('Commission distribution failed:', commErr);
-          }
-          
-          // Bonus for the new user for using referral code in RTDB
-          try {
-            await rtdbSet(`user_wallet/${user.uid}`, {
-              walletBalance: 0,
-              pendingCommission: 0,
-              approvedCommission: 0,
-              totalSales: 0,
-              totalOrders: 0,
-              createdAt: now,
-              updatedAt: now,
-              lockedBonus: 50,
-              bonusEligibleSales: 0,
-              bonusClaimed: false
+            await processReferralRewards({
+              referrerId: sponsorId,
+              newUserId: user.uid,
+              newUserName: cleanName,
+              newUserEmail: userEmail,
+              newUserRole: 'Customer'
             });
-          } catch (bonusErr) {
-            console.error('Bonus distribution failed:', bonusErr);
+          } catch (refErr) {
+            console.error('[Register] Error processing referral rewards:', refErr);
           }
         }
       } catch (sponsorErr) {

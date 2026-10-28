@@ -387,7 +387,7 @@ export interface ProcessReferralParams {
   newUserId: string;
   newUserName: string;
   newUserEmail?: string;
-  newUserRole: 'Reseller' | 'Vendor';
+  newUserRole: 'Reseller' | 'Vendor' | 'Customer' | string;
 }
 
 export interface ProcessReferralResult {
@@ -399,7 +399,7 @@ export interface ProcessReferralResult {
 }
 
 /**
- * Atomically processes both referral bonuses upon verified Vendor or Reseller account creation:
+ * Atomically processes both referral bonuses upon verified Customer, Vendor or Reseller account creation:
  * 1. Exactly ৳50 credited to the new registrant's wallet.
  * 2. Exactly ৳200 credited to the referrer's wallet.
  * Fully idempotent: prevents any duplicate bonus from page refreshes, retries, or re-registrations.
@@ -408,7 +408,7 @@ export interface ProcessReferralResult {
 export async function processReferralRewards(
   params: ProcessReferralParams
 ): Promise<ProcessReferralResult> {
-  const { referrerId, newUserId, newUserName, newUserEmail, newUserRole } = params;
+  const { referrerId, newUserId, newUserName, newUserEmail, newUserRole = 'Customer' } = params;
 
   if (!referrerId || !newUserId) {
     return { success: false, newUserBonus: 0, referrerBonus: 0, message: 'Invalid referrer or user ID' };
@@ -456,16 +456,18 @@ export async function processReferralRewards(
     }
 
     // 1. Idempotency Check: check if already credited across RTDB or Firestore
-    const [existingReferral, existingLog, existingFsLog] = await Promise.all([
+    const [existingReferral, existingLog, existingFsLog, existingUser] = await Promise.all([
       rtdbGet<any>(recordPath).catch(() => null),
       rtdbGet<any>(logPath).catch(() => null),
-      getDoc(doc(db, 'referral_rewards_log', newUserId)).catch(() => null)
+      getDoc(doc(db, 'referral_rewards_log', newUserId)).catch(() => null),
+      rtdbGet<any>(`users/${newUserId}`).catch(() => null)
     ]);
 
     const isAlreadyCompleted = 
       (existingReferral && existingReferral.status === 'Completed') ||
       (existingLog && existingLog.status === 'Completed') ||
-      (existingFsLog && existingFsLog.exists() && existingFsLog.data()?.status === 'Completed');
+      (existingFsLog && existingFsLog.exists() && existingFsLog.data()?.status === 'Completed') ||
+      (existingUser && Number(existingUser.referralBonusCredited || 0) >= NEW_USER_REFERRAL_BONUS);
 
     if (isAlreadyCompleted) {
       console.warn(`[ReferralService] Referral for new user ${newUserId} already processed.`);
@@ -497,17 +499,82 @@ export async function processReferralRewards(
     ]);
 
     // 2. CREDIT ৳50 TO NEW USER'S WALLET
-    if (newUserRole === 'Vendor') {
+    if (newUserRole === 'Customer') {
+      const prevBal = Number(existingUser?.balance ?? existingUser?.wallet ?? existingUser?.walletBalance ?? 0);
+      const alreadyBonus = Number(existingUser?.referralBonusEarned || 0);
+      const newBal = alreadyBonus >= NEW_USER_REFERRAL_BONUS ? prevBal : (prevBal === NEW_USER_REFERRAL_BONUS ? NEW_USER_REFERRAL_BONUS : (prevBal + NEW_USER_REFERRAL_BONUS));
+
+      const bonusTxPayload = {
+        userId: newUserId,
+        orderId: bonusOrderId,
+        type: 'Bonus',
+        amount: NEW_USER_REFERRAL_BONUS,
+        status: 'Completed',
+        description: '🎁 রেফারেল কোড ব্যবহারের জন্য একাউন্ট খোলার বোনাস (৳৫০)',
+        createdAt: now,
+        isReferral: true
+      };
+
+      await Promise.allSettled([
+        rtdbUpdate(`users/${newUserId}`, {
+          wallet: newBal,
+          balance: newBal,
+          walletBalance: newBal,
+          referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+          referralBonusCredited: NEW_USER_REFERRAL_BONUS,
+          referredBy: referrerId,
+          updatedAt: now
+        }),
+        setDoc(doc(db, 'users', newUserId), {
+          wallet: newBal,
+          balance: newBal,
+          walletBalance: newBal,
+          referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+          referralBonusCredited: NEW_USER_REFERRAL_BONUS,
+          referredBy: referrerId,
+          updatedAt: now
+        }, { merge: true }),
+        rtdbUpdate(`user_wallet/${newUserId}`, {
+          walletBalance: newBal,
+          bonusClaimed: true,
+          lockedBonus: 0,
+          updatedAt: now
+        }),
+        setDoc(doc(db, 'user_wallet', newUserId), {
+          walletBalance: newBal,
+          bonusClaimed: true,
+          lockedBonus: 0,
+          updatedAt: now
+        }, { merge: true }),
+        rtdbPush('wallet_transactions', bonusTxPayload)
+      ]);
+    } else if (newUserRole === 'Vendor') {
       const vendorWallet = await getOrCreateVendorWallet(newUserId);
       const prevBal = Number(vendorWallet?.balance || 0);
       const prevLifetime = Number(vendorWallet?.lifetimeEarnings || 0);
-      const newBal = prevBal + NEW_USER_REFERRAL_BONUS;
-      const newLifetime = prevLifetime + NEW_USER_REFERRAL_BONUS;
+      const alreadyBonus = Number(vendorWallet?.referralBonusEarned || 0);
+
+      let newBal = prevBal;
+      let newLifetime = prevLifetime;
+      if (alreadyBonus < NEW_USER_REFERRAL_BONUS) {
+        if (prevBal === 0) {
+          newBal = NEW_USER_REFERRAL_BONUS;
+          newLifetime = Math.max(prevLifetime, NEW_USER_REFERRAL_BONUS);
+        } else if (prevBal === NEW_USER_REFERRAL_BONUS && !vendorWallet?.totalSales) {
+          newBal = NEW_USER_REFERRAL_BONUS;
+          newLifetime = Math.max(prevLifetime, NEW_USER_REFERRAL_BONUS);
+        } else {
+          newBal = prevBal + NEW_USER_REFERRAL_BONUS;
+          newLifetime = prevLifetime + NEW_USER_REFERRAL_BONUS;
+        }
+      }
 
       // Update RTDB vendor wallet
       await rtdbUpdate(`vendor_wallet/${newUserId}`, {
         balance: newBal,
+        walletBalance: newBal,
         lifetimeEarnings: newLifetime,
+        referralBonusEarned: NEW_USER_REFERRAL_BONUS,
         vendorId: newUserId,
         updatedAt: now
       });
@@ -518,7 +585,9 @@ export async function processReferralRewards(
           id: newUserId,
           vendorId: newUserId,
           balance: newBal,
+          walletBalance: newBal,
           lifetimeEarnings: newLifetime,
+          referralBonusEarned: NEW_USER_REFERRAL_BONUS,
           updatedAt: now
         }, { merge: true });
       } catch (_) {}
@@ -536,12 +605,6 @@ export async function processReferralRewards(
         isReferral: true
       };
       await rtdbPush('wallet_transactions', bonusTxPayload);
-      try {
-        await setDoc(doc(db, 'vendor_wallet_transactions', `TXN-${bonusOrderId}`), {
-          id: `TXN-${bonusOrderId}`,
-          ...bonusTxPayload
-        }, { merge: true });
-      } catch (_) {}
 
       // Update user records in RTDB and Firestore
       const userUpdates = {
@@ -549,31 +612,69 @@ export async function processReferralRewards(
         balance: newBal,
         walletBalance: newBal,
         referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+        referralBonusCredited: NEW_USER_REFERRAL_BONUS,
+        referredBy: referrerId,
         updatedAt: now
       };
       await Promise.allSettled([
         rtdbUpdate(`users/${newUserId}`, userUpdates),
         setDoc(doc(db, 'users', newUserId), userUpdates, { merge: true }),
-        rtdbUpdate(`user_wallet/${newUserId}`, { walletBalance: newBal, updatedAt: now }),
-        setDoc(doc(db, 'user_wallet', newUserId), { walletBalance: newBal, updatedAt: now }, { merge: true })
+        rtdbUpdate(`user_wallet/${newUserId}`, { walletBalance: newBal, bonusClaimed: true, lockedBonus: 0, updatedAt: now }),
+        setDoc(doc(db, 'user_wallet', newUserId), { walletBalance: newBal, bonusClaimed: true, lockedBonus: 0, updatedAt: now }, { merge: true })
       ]);
     } else {
       // Reseller gets ৳50 in reseller wallet
-      await executeResellerWalletTransaction({
-        resellerId: newUserId,
-        userId: newUserId,
-        orderId: bonusOrderId,
-        amount: NEW_USER_REFERRAL_BONUS,
-        type: ResellerTransactionType.PROFIT_RELEASED,
-        status: 'Approved',
-        description: '🎁 রেফারেল কোড ব্যবহারের জন্য একাউন্ট খোলার বোনাস (৳৫০)',
-        idempotencyKey: `signup_ref_bonus_${newUserId}`,
-        metadata: {
-          bonusType: 'reseller_referral_signup',
-          newUserId,
-          referrerId
+      const prevRW = await rtdbGet<any>(`reseller_wallet/${newUserId}`).catch(() => null);
+      const prevAvail = Number(prevRW?.availableBalance ?? prevRW?.walletBalance ?? 0);
+      const prevTotal = Number(prevRW?.totalBalance || prevAvail);
+      const prevReleased = Number(prevRW?.releasedProfit ?? prevRW?.lifetimeCommission ?? 0);
+      const alreadyBonus = Number(prevRW?.referralBonusEarned || 0);
+
+      let newAvail = prevAvail;
+      let newTotal = prevTotal;
+      let newReleased = prevReleased;
+      if (alreadyBonus < NEW_USER_REFERRAL_BONUS) {
+        if (prevAvail === 0) {
+          newAvail = NEW_USER_REFERRAL_BONUS;
+          newTotal = Math.max(prevTotal, NEW_USER_REFERRAL_BONUS);
+          newReleased = Math.max(prevReleased, NEW_USER_REFERRAL_BONUS);
+        } else if (prevAvail === NEW_USER_REFERRAL_BONUS && !prevRW?.totalSales) {
+          newAvail = NEW_USER_REFERRAL_BONUS;
+          newTotal = Math.max(prevTotal, NEW_USER_REFERRAL_BONUS);
+          newReleased = Math.max(prevReleased, NEW_USER_REFERRAL_BONUS);
+        } else {
+          newAvail = prevAvail + NEW_USER_REFERRAL_BONUS;
+          newTotal = prevTotal + NEW_USER_REFERRAL_BONUS;
+          newReleased = prevReleased + NEW_USER_REFERRAL_BONUS;
         }
+      }
+
+      await rtdbUpdate(`reseller_wallet/${newUserId}`, {
+        resellerId: newUserId,
+        availableBalance: newAvail,
+        walletBalance: newAvail,
+        totalBalance: newTotal,
+        releasedProfit: newReleased,
+        approvedCommission: newAvail,
+        lifetimeCommission: newReleased,
+        referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+        updatedAt: now
       });
+
+      // Sync Firestore reseller_wallet
+      try {
+        await setDoc(doc(db, 'reseller_wallet', newUserId), {
+          id: newUserId,
+          resellerId: newUserId,
+          availableBalance: newAvail,
+          walletBalance: newAvail,
+          totalBalance: newTotal,
+          releasedProfit: newReleased,
+          approvedCommission: newAvail,
+          referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+          updatedAt: now
+        }, { merge: true });
+      } catch (_) {}
 
       await rtdbPush('reseller_transactions', {
         resellerId: newUserId,
@@ -586,33 +687,22 @@ export async function processReferralRewards(
         isReferral: true
       });
 
-      // Sync Firestore reseller_wallet
-      try {
-        await setDoc(doc(db, 'reseller_wallet', newUserId), {
-          id: newUserId,
-          resellerId: newUserId,
-          availableBalance: NEW_USER_REFERRAL_BONUS,
-          walletBalance: NEW_USER_REFERRAL_BONUS,
-          approvedCommission: NEW_USER_REFERRAL_BONUS,
-          releasedProfit: NEW_USER_REFERRAL_BONUS,
-          updatedAt: now
-        }, { merge: true });
-      } catch (_) {}
-
       // Update user records in RTDB and Firestore
       const userUpdates = {
-        wallet: NEW_USER_REFERRAL_BONUS,
-        balance: NEW_USER_REFERRAL_BONUS,
-        walletBalance: NEW_USER_REFERRAL_BONUS,
-        resellerBalance: NEW_USER_REFERRAL_BONUS,
+        wallet: newAvail,
+        balance: newAvail,
+        walletBalance: newAvail,
+        resellerBalance: newAvail,
         referralBonusEarned: NEW_USER_REFERRAL_BONUS,
+        referralBonusCredited: NEW_USER_REFERRAL_BONUS,
+        referredBy: referrerId,
         updatedAt: now
       };
       await Promise.allSettled([
         rtdbUpdate(`users/${newUserId}`, userUpdates),
         setDoc(doc(db, 'users', newUserId), userUpdates, { merge: true }),
-        rtdbUpdate(`user_wallet/${newUserId}`, { walletBalance: NEW_USER_REFERRAL_BONUS, updatedAt: now }),
-        setDoc(doc(db, 'user_wallet', newUserId), { walletBalance: NEW_USER_REFERRAL_BONUS, updatedAt: now }, { merge: true })
+        rtdbUpdate(`user_wallet/${newUserId}`, { walletBalance: newAvail, bonusClaimed: true, lockedBonus: 0, updatedAt: now }),
+        setDoc(doc(db, 'user_wallet', newUserId), { walletBalance: newAvail, bonusClaimed: true, lockedBonus: 0, updatedAt: now }, { merge: true })
       ]);
     }
 

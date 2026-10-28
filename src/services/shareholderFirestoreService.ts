@@ -585,20 +585,62 @@ export async function getAllShareholderApplicationsFromFirestore(): Promise<Shar
  * Admin: Fetch all verified shareholders from Firestore 'shareholders' collection
  */
 export async function getAllShareholdersFromFirestore(): Promise<ShareholderPortfolioDoc[]> {
-  const list: ShareholderPortfolioDoc[] = [];
+  const map = new Map<string, ShareholderPortfolioDoc>();
   try {
     const q = query(collection(db, 'shareholders'), limit(200));
     const snap = await getDocs(q);
     snap.forEach(d => {
-      const data = d.data() as ShareholderPortfolioDoc;
-      if (data && (Number(data.activeSharesPercent) > 0 || data.status === 'active_shareholder')) {
-        list.push({ ...data, userId: d.id });
+      const data = d.data() as any;
+      if (data) {
+        map.set(d.id, {
+          userId: d.id,
+          shareholderName: data.shareholderName || data.applicantName || data.fullName || data.name || 'Verified Shareholder',
+          activeSharesPercent: Number(data.activeSharesPercent || data.sharePercent || 1),
+          portfolioValue: Number(data.portfolioValue || data.totalAmount || (Number(data.activeSharesPercent || data.sharePercent || 1) * 2000)),
+          status: data.status || 'active_shareholder',
+          lastVerifiedAt: data.lastVerifiedAt || data.verifiedAt || data.updatedAt || Date.now(),
+          createdAt: data.createdAt || Date.now(),
+          email: data.email || '',
+          phone: data.phone || data.mobile || '',
+          guardianName: data.guardianName || '',
+          address: data.address || ''
+        });
       }
     });
   } catch (err) {
     console.warn('[Admin Firestore] Error fetching shareholders:', err);
   }
-  return list;
+
+  // Also cross-reference approved records in share_payments
+  try {
+    const qApproved = query(
+      collection(db, 'share_payments'),
+      where('paymentStatus', '==', 'Approved'),
+      limit(200)
+    );
+    const snapApproved = await getDocs(qApproved);
+    snapApproved.forEach(d => {
+      const data = d.data() as any;
+      const uId = data.userId || d.id;
+      if (uId && !map.has(uId)) {
+        map.set(uId, {
+          userId: uId,
+          shareholderName: data.applicantName || data.fullName || 'Verified Shareholder',
+          activeSharesPercent: Number(data.sharePercent || 1),
+          portfolioValue: Number(data.totalAmount || (Number(data.sharePercent || 1) * 2000)),
+          status: 'active_shareholder',
+          lastVerifiedAt: data.verifiedAt || data.updatedAt || Date.now(),
+          createdAt: data.createdAt || Date.now(),
+          email: data.email || '',
+          phone: data.phone || data.payerMobile || '',
+          guardianName: data.guardianName || '',
+          address: data.address || ''
+        });
+      }
+    });
+  } catch (_) {}
+
+  return Array.from(map.values());
 }
 
 /**

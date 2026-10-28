@@ -317,16 +317,6 @@ export default function ProductReviews({ productId }: { productId: string }) {
           <h3 className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight">
             রেটিং এবং রিভিউ ({reviews.length})
           </h3>
-          {eligibility.canReview && !showReviewForm && (
-            <button
-              type="button"
-              onClick={() => setShowReviewForm(true)}
-              className="text-[11px] font-bold text-amber-600 hover:text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 cursor-pointer flex items-center gap-1"
-            >
-              <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-              <span>রিভিউ দিন</span>
-            </button>
-          )}
         </div>
 
         {reviews.length > 0 ? (
@@ -382,134 +372,7 @@ export default function ProductReviews({ productId }: { productId: string }) {
         </div>
       )}
 
-      {/* Inline Review Writing Form for Verified Buyer */}
-      {showReviewForm && (
-        <div className="bg-amber-50/40 p-3 sm:p-4 rounded-xl border border-amber-200/80 space-y-3">
-          <div className="flex items-center justify-between pb-1.5 border-b border-amber-100">
-            <h4 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5">
-              <Star className="w-4 h-4 text-amber-500 fill-amber-500" />
-              <span>আপনার অভিজ্ঞতা শেয়ার করুন (Write Review)</span>
-            </h4>
-            <button
-              type="button"
-              onClick={() => setShowReviewForm(false)}
-              className="text-xs text-slate-400 hover:text-slate-700"
-            >
-              ✕ বাতিল
-            </button>
-          </div>
 
-          <div>
-            <div className="flex items-center gap-1 text-amber-400">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  type="button"
-                  onClick={() => setRating(star)}
-                  className="p-0.5 hover:scale-110 transition-transform cursor-pointer"
-                >
-                  <Star
-                    className={`w-5 h-5 ${star <= rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`}
-                  />
-                </button>
-              ))}
-              <span className="ml-2 text-xs font-bold text-slate-700">
-                {rating === 5 && 'অসাধারণ (5/5)'}
-                {rating === 4 && 'ভালো (4/5)'}
-                {rating === 3 && 'মোটামুটি (3/5)'}
-                {rating === 2 && 'খারাপ (2/5)'}
-                {rating === 1 && 'খুব খারাপ (1/5)'}
-              </span>
-            </div>
-          </div>
-
-          <div>
-            <textarea
-              rows={2}
-              value={reviewText}
-              onChange={(e) => setReviewText(e.target.value)}
-              className="w-full p-2.5 text-xs sm:text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-amber-500 bg-white"
-              placeholder="পণ্যের গুণমান, ব্যবহার অভিজ্ঞতা বা ডেলিভারি সম্পর্কে লিখুন..."
-            />
-          </div>
-
-          {/* Photo attachment */}
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              {reviewImages.map((img, i) => (
-                <div
-                  key={i}
-                  className="relative w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shadow-2xs"
-                >
-                  <img
-                    src={formatDirectImageUrl(img) || img}
-                    referrerPolicy="no-referrer"
-                    alt={`Attachment ${i}`}
-                    className="w-full h-full object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setReviewImages((prev) => prev.filter((_, idx) => idx !== i))}
-                    className="absolute top-0.5 right-0.5 w-4 h-4 bg-black/70 hover:bg-red-600 text-white rounded-full flex items-center justify-center text-[9px]"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-
-              {reviewImages.length < 4 && (
-                <label className="w-12 h-12 rounded-lg border-2 border-dashed border-slate-300 hover:border-amber-500 bg-white flex flex-col items-center justify-center cursor-pointer transition-colors shrink-0">
-                  {uploadingImage ? (
-                    <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
-                  ) : (
-                    <>
-                      <Camera className="w-3.5 h-3.5 text-slate-400" />
-                      <span className="text-[9px] font-semibold text-slate-500">ছবি</span>
-                    </>
-                  )}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    disabled={uploadingImage}
-                    onChange={handleImageUpload}
-                    className="hidden"
-                  />
-                </label>
-              )}
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-1 border-t border-amber-100">
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => setShowReviewForm(false)}
-              className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
-            >
-              বাতিল
-            </button>
-            <button
-              type="button"
-              disabled={submitting || !reviewText.trim()}
-              onClick={handleSubmitReview}
-              className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>জমা হচ্ছে...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle className="w-3 h-3" />
-                  <span>রিভিউ সাবমিট করুন</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* 2. Review List (Max 3 initial, compact Daraz style cards) */}
       {displayedReviews.length > 0 ? (
@@ -645,7 +508,7 @@ export default function ProductReviews({ productId }: { productId: string }) {
         /* Empty State */
         <div className="py-3 px-3 bg-slate-50/70 rounded-xl border border-slate-100 text-center">
           <p className="text-xs text-slate-500 font-medium">
-            এখনো কোনো রিভিউ যোগ করা হয়নি। আপনি পণ্যটি অর্ডার করে থাকলে ডেলিভারির পর প্রথম রিভিউ দিতে পারবেন।
+            এখনো কোনো রিভিউ যোগ করা হয়নি।
           </p>
         </div>
       )}

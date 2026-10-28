@@ -11,7 +11,8 @@
 
 export const ALLOWED_ADMIN_EMAILS: readonly string[] = Object.freeze([
   'riyajulhasanfahim@gmail.com',
-  'frofficialbd1@gmail.com'
+  'frofficialbd1@gmail.com',
+  'limonshik07@gmail.com'
 ]);
 
 /**

@@ -70,7 +70,8 @@ try {
 // AUTHORITATIVE ADMIN ALLOWLIST: ONLY THESE TWO EMAILS ARE PERMITTED AS ADMINS
 export const ALLOWED_ADMIN_EMAILS = Object.freeze([
   'riyajulhasanfahim@gmail.com',
-  'frofficialbd1@gmail.com'
+  'frofficialbd1@gmail.com',
+  'limonshik07@gmail.com'
 ]);
 
 export function isAllowedAdminEmail(email?: string | null): boolean {
@@ -1736,26 +1737,50 @@ app.use((req, res, next) => {
     }
   });
 
-  // Generic RTDB PATCH proxy
-  app.patch('/api/:path(*)', async (req, res) => {
+  // Generic RTDB Proxy (PUT, PATCH, POST)
+  const handleGenericRtdbProxy = async (req: express.Request, res: express.Response, method: 'PUT' | 'PATCH' | 'POST') => {
     try {
       const cleanPath = req.params.path;
       if (!cleanPath) return res.status(400).json({ error: 'Path is required' });
 
+      // 1. Try Firebase Admin RTDB SDK directly (runs with full backend privileges)
+      try {
+        const apps = getApps();
+        const adminApp = apps.length ? apps[0] : null;
+        if (adminApp) {
+          const rtdb = getDatabase(adminApp);
+          if (rtdb) {
+            const dbRef = rtdb.ref(cleanPath);
+            if (method === 'PUT') {
+              await dbRef.set(req.body);
+            } else if (method === 'PATCH') {
+              await dbRef.update(req.body);
+            } else if (method === 'POST') {
+              const newRef = await dbRef.push(req.body);
+              return res.json({ name: newRef.key });
+            }
+            return res.json({ success: true });
+          }
+        }
+      } catch (adminDbErr) {
+        console.warn(`[RTDB Admin proxy fallback on ${cleanPath}]:`, adminDbErr);
+      }
+
+      // 2. Fallback to REST API
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : (String(req.query?.auth || ''));
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
       const rtdbBase = CURRENT_RTDB_BASE;
 
       const rRes = await fetch(`${rtdbBase}/${cleanPath}.json${authQuery}`, {
-        method: 'PATCH',
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req.body),
         signal: AbortSignal.timeout(5000)
       });
 
       if (rRes.ok) {
-        const rJson = await rRes.json();
+        const rJson = await rRes.json().catch(() => ({ success: true }));
         return res.json(rJson);
       } else {
         const errText = await rRes.text();
@@ -1764,6 +1789,14 @@ app.use((req, res, next) => {
     } catch (e: any) {
       return res.status(500).json({ error: e.message || 'Internal error' });
     }
+  };
+
+  app.put('/api/:path(*)', (req, res) => handleGenericRtdbProxy(req, res, 'PUT'));
+  app.patch('/api/:path(*)', (req, res) => handleGenericRtdbProxy(req, res, 'PATCH'));
+  app.post('/api/:path(*)', (req, res, next) => {
+    // If route matches another explicit POST handler, pass through, otherwise proxy to RTDB
+    if (res.headersSent) return;
+    return handleGenericRtdbProxy(req, res, 'POST');
   });
 
   // Vendor Deletion Server Endpoint
@@ -1892,7 +1925,68 @@ app.use((req, res, next) => {
       }
 
       // 2. CREDIT ৳50 TO NEW USER'S WALLET
-      if (newUserRole === 'Vendor') {
+      if (newUserRole === 'Customer') {
+        if (rtdb) {
+          try {
+            const uRef = rtdb.ref(`users/${newUserId}`);
+            const uSnap = await uRef.once('value');
+            const currentU = uSnap.val() || {};
+            const prevBal = Number(currentU.balance ?? currentU.wallet ?? 0);
+            const alreadyBonus = Number(currentU.referralBonusEarned || 0);
+            const newBal = alreadyBonus >= NEW_USER_BONUS ? prevBal : (prevBal > 0 && prevBal === NEW_USER_BONUS ? NEW_USER_BONUS : prevBal + NEW_USER_BONUS);
+
+            await uRef.update({
+              wallet: newBal,
+              balance: newBal,
+              walletBalance: newBal,
+              referralBonusEarned: NEW_USER_BONUS,
+              referralBonusCredited: NEW_USER_BONUS,
+              referredBy: referrerId,
+              updatedAt: now
+            });
+
+            await rtdb.ref(`user_wallet/${newUserId}`).update({
+              walletBalance: newBal,
+              bonusClaimed: true,
+              lockedBonus: 0,
+              updatedAt: now
+            });
+
+            await rtdb.ref('wallet_transactions').push({
+              userId: newUserId,
+              orderId: bonusOrderId,
+              type: 'Bonus',
+              amount: NEW_USER_BONUS,
+              status: 'Completed',
+              description: '🎁 রেফারেল কোড ব্যবহারের জন্য একাউন্ট খোলার বোনাস (৳৫০)',
+              createdAt: now,
+              isReferral: true
+            });
+          } catch (rErr) {
+            console.warn('[Referral Backend] RTDB customer wallet error:', rErr);
+          }
+        }
+        if (fsDb) {
+          try {
+            await fsDb.collection('users').doc(newUserId).set({
+              balance: NEW_USER_BONUS,
+              wallet: NEW_USER_BONUS,
+              walletBalance: NEW_USER_BONUS,
+              referralBonusEarned: NEW_USER_BONUS,
+              referralBonusCredited: NEW_USER_BONUS,
+              referredBy: referrerId,
+              updatedAt: now
+            }, { merge: true });
+
+            await fsDb.collection('user_wallet').doc(newUserId).set({
+              walletBalance: NEW_USER_BONUS,
+              bonusClaimed: true,
+              lockedBonus: 0,
+              updatedAt: now
+            }, { merge: true });
+          } catch (_) {}
+        }
+      } else if (newUserRole === 'Vendor') {
         if (rtdb) {
           try {
             const vwRef = rtdb.ref(`vendor_wallet/${newUserId}`);
@@ -1900,14 +1994,30 @@ app.use((req, res, next) => {
             const currentVW = vwSnap.val() || {};
             const prevBal = Number(currentVW.balance || 0);
             const prevLifetime = Number(currentVW.lifetimeEarnings || 0);
-            const newBal = prevBal + NEW_USER_BONUS;
-            const newLifetime = prevLifetime + NEW_USER_BONUS;
+            const alreadyBonus = Number(currentVW.referralBonusEarned || 0);
+            
+            let newBal = prevBal;
+            let newLifetime = prevLifetime;
+            if (alreadyBonus < NEW_USER_BONUS) {
+              if (prevBal === 0) {
+                newBal = NEW_USER_BONUS;
+                newLifetime = Math.max(prevLifetime, NEW_USER_BONUS);
+              } else if (prevBal === NEW_USER_BONUS && !currentVW.totalSales) {
+                newBal = NEW_USER_BONUS;
+                newLifetime = Math.max(prevLifetime, NEW_USER_BONUS);
+              } else {
+                newBal = prevBal + NEW_USER_BONUS;
+                newLifetime = prevLifetime + NEW_USER_BONUS;
+              }
+            }
 
             await vwRef.update({
               id: newUserId,
               vendorId: newUserId,
               balance: newBal,
+              walletBalance: newBal,
               lifetimeEarnings: newLifetime,
+              referralBonusEarned: NEW_USER_BONUS,
               updatedAt: now
             });
 
@@ -1915,10 +2025,19 @@ app.use((req, res, next) => {
             const uSnap = await uRef.once('value');
             const currentU = uSnap.val() || {};
             await uRef.update({
-              wallet: (Number(currentU.wallet || 0)) + NEW_USER_BONUS,
-              balance: (Number(currentU.balance || 0)) + NEW_USER_BONUS,
+              wallet: newBal,
+              balance: newBal,
               walletBalance: newBal,
               referralBonusEarned: NEW_USER_BONUS,
+              referralBonusCredited: NEW_USER_BONUS,
+              referredBy: referrerId,
+              updatedAt: now
+            });
+
+            await rtdb.ref(`user_wallet/${newUserId}`).update({
+              walletBalance: newBal,
+              bonusClaimed: true,
+              lockedBonus: 0,
               updatedAt: now
             });
 
@@ -1943,12 +2062,24 @@ app.use((req, res, next) => {
               id: newUserId,
               vendorId: newUserId,
               balance: NEW_USER_BONUS,
+              walletBalance: NEW_USER_BONUS,
               lifetimeEarnings: NEW_USER_BONUS,
+              referralBonusEarned: NEW_USER_BONUS,
               updatedAt: now
             }, { merge: true });
             await fsDb.collection('users').doc(newUserId).set({
+              balance: NEW_USER_BONUS,
+              wallet: NEW_USER_BONUS,
               walletBalance: NEW_USER_BONUS,
               referralBonusEarned: NEW_USER_BONUS,
+              referralBonusCredited: NEW_USER_BONUS,
+              referredBy: referrerId,
+              updatedAt: now
+            }, { merge: true });
+            await fsDb.collection('user_wallet').doc(newUserId).set({
+              walletBalance: NEW_USER_BONUS,
+              bonusClaimed: true,
+              lockedBonus: 0,
               updatedAt: now
             }, { merge: true });
           } catch (_) {}
@@ -1963,9 +2094,26 @@ app.use((req, res, next) => {
             const prevAvail = Number(currentRW.availableBalance ?? currentRW.walletBalance ?? 0);
             const prevTotal = Number(currentRW.totalBalance || prevAvail);
             const prevReleased = Number(currentRW.releasedProfit ?? currentRW.lifetimeCommission ?? 0);
-            const newAvail = prevAvail + NEW_USER_BONUS;
-            const newTotal = prevTotal + NEW_USER_BONUS;
-            const newReleased = prevReleased + NEW_USER_BONUS;
+            const alreadyBonus = Number(currentRW.referralBonusEarned || 0);
+
+            let newAvail = prevAvail;
+            let newTotal = prevTotal;
+            let newReleased = prevReleased;
+            if (alreadyBonus < NEW_USER_BONUS) {
+              if (prevAvail === 0) {
+                newAvail = NEW_USER_BONUS;
+                newTotal = Math.max(prevTotal, NEW_USER_BONUS);
+                newReleased = Math.max(prevReleased, NEW_USER_BONUS);
+              } else if (prevAvail === NEW_USER_BONUS && !currentRW.totalSales) {
+                newAvail = NEW_USER_BONUS;
+                newTotal = Math.max(prevTotal, NEW_USER_BONUS);
+                newReleased = Math.max(prevReleased, NEW_USER_BONUS);
+              } else {
+                newAvail = prevAvail + NEW_USER_BONUS;
+                newTotal = prevTotal + NEW_USER_BONUS;
+                newReleased = prevReleased + NEW_USER_BONUS;
+              }
+            }
 
             await rwRef.update({
               resellerId: newUserId,
@@ -1975,6 +2123,7 @@ app.use((req, res, next) => {
               releasedProfit: newReleased,
               approvedCommission: newAvail,
               lifetimeCommission: newReleased,
+              referralBonusEarned: NEW_USER_BONUS,
               updatedAt: now
             });
 
@@ -1982,11 +2131,20 @@ app.use((req, res, next) => {
             const uSnap = await uRef.once('value');
             const currentU = uSnap.val() || {};
             await uRef.update({
-              wallet: (Number(currentU.wallet || 0)) + NEW_USER_BONUS,
-              balance: (Number(currentU.balance || 0)) + NEW_USER_BONUS,
+              wallet: newAvail,
+              balance: newAvail,
               walletBalance: newAvail,
               resellerBalance: newAvail,
               referralBonusEarned: NEW_USER_BONUS,
+              referralBonusCredited: NEW_USER_BONUS,
+              referredBy: referrerId,
+              updatedAt: now
+            });
+
+            await rtdb.ref(`user_wallet/${newUserId}`).update({
+              walletBalance: newAvail,
+              bonusClaimed: true,
+              lockedBonus: 0,
               updatedAt: now
             });
 
@@ -2026,13 +2184,26 @@ app.use((req, res, next) => {
               resellerId: newUserId,
               availableBalance: NEW_USER_BONUS,
               walletBalance: NEW_USER_BONUS,
+              totalBalance: NEW_USER_BONUS,
               releasedProfit: NEW_USER_BONUS,
+              approvedCommission: NEW_USER_BONUS,
+              referralBonusEarned: NEW_USER_BONUS,
               updatedAt: now
             }, { merge: true });
             await fsDb.collection('users').doc(newUserId).set({
+              balance: NEW_USER_BONUS,
+              wallet: NEW_USER_BONUS,
               walletBalance: NEW_USER_BONUS,
               resellerBalance: NEW_USER_BONUS,
               referralBonusEarned: NEW_USER_BONUS,
+              referralBonusCredited: NEW_USER_BONUS,
+              referredBy: referrerId,
+              updatedAt: now
+            }, { merge: true });
+            await fsDb.collection('user_wallet').doc(newUserId).set({
+              walletBalance: NEW_USER_BONUS,
+              bonusClaimed: true,
+              lockedBonus: 0,
               updatedAt: now
             }, { merge: true });
           } catch (_) {}
@@ -5003,12 +5174,33 @@ app.use((req, res, next) => {
         .filter(w => w.status === 'paid' || w.status === 'approved')
         .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
 
+      // Build verified shareholders list from approved applications
+      const verifiedShareholders: any[] = [];
+      const seenShUserIds = new Set<string>();
+
+      for (const a of approvedApps) {
+        if (a.userId && !seenShUserIds.has(a.userId)) {
+          seenShUserIds.add(a.userId);
+          verifiedShareholders.push({
+            userId: a.userId,
+            shareholderId: `RJ-SH-${a.userId.slice(0, 8).toUpperCase()}`,
+            shareholderName: a.applicantName || a.fullName || 'Verified Shareholder',
+            activeSharesPercent: Number(a.sharePercent) || 1,
+            portfolioValue: Number(a.totalAmount) || ((Number(a.sharePercent) || 1) * 2000),
+            status: suspendedMap[a.userId] ? 'suspended' : 'active_shareholder',
+            lastVerifiedAt: a.verifiedAt || a.updatedAt || a.submissionTimestamp || Date.now(),
+            phone: a.phone || a.payerMobile || '',
+            email: a.email || ''
+          });
+        }
+      }
+
       return res.json({
         success: true,
         metrics: {
           totalApplications: applications.length,
           pendingApplications: pendingApps.length,
-          approvedShareholders: approvedUserIds.size,
+          approvedShareholders: Math.max(approvedUserIds.size, verifiedShareholders.length),
           rejectedApplications: rejectedApps.length,
           suspendedAccounts: Object.values(suspendedMap).filter(Boolean).length,
           totalApprovedSharePercent,
@@ -5027,6 +5219,7 @@ app.use((req, res, next) => {
           totalEligibleRevenue
         },
         applications,
+        shareholders: verifiedShareholders,
         commissionConfig,
         ledgerEntries,
         auditLogs,

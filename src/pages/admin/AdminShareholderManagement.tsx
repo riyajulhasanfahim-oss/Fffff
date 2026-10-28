@@ -31,10 +31,17 @@ import {
   ChevronRight,
   ClipboardList,
   TrendingUp,
-  Percent
+  Percent,
+  Users
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { isAllowedAdminEmail } from '../../constants/adminAllowlist';
+import { 
+  getAllShareholderApplicationsFromFirestore, 
+  getAllShareholdersFromFirestore,
+  SharePaymentDoc,
+  ShareholderPortfolioDoc
+} from '../../services/shareholderFirestoreService';
 import toast from 'react-hot-toast';
 
 interface Metrics {

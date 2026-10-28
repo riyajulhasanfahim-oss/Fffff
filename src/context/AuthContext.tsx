@@ -173,8 +173,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: determinedRole,
           accountType: data.accountType || 'general',
           status: (data.status || 'active').toLowerCase(),
-          balance: typeof data.balance === 'number' ? data.balance : (typeof data.wallet === 'number' ? data.wallet : 0),
-          wallet: typeof data.wallet === 'number' ? data.wallet : (typeof data.balance === 'number' ? data.balance : 0),
+          balance: typeof data.balance === 'number' ? data.balance : (typeof data.wallet === 'number' ? data.wallet : (typeof data.walletBalance === 'number' ? data.walletBalance : (typeof data.resellerBalance === 'number' ? data.resellerBalance : 0))),
+          wallet: typeof data.wallet === 'number' ? data.wallet : (typeof data.balance === 'number' ? data.balance : (typeof data.walletBalance === 'number' ? data.walletBalance : (typeof data.resellerBalance === 'number' ? data.resellerBalance : 0))),
           language: data.language || 'en',
           createdAt: data.createdAt || Date.now(),
           updatedAt: data.updatedAt || Date.now(),
@@ -293,8 +293,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: determinedRole,
           accountType: data.accountType || 'general',
           status: (data.status || 'active').toLowerCase(),
-          balance: typeof data.balance === 'number' ? data.balance : (typeof data.wallet === 'number' ? data.wallet : 0),
-          wallet: typeof data.wallet === 'number' ? data.wallet : (typeof data.balance === 'number' ? data.balance : 0),
+          balance: typeof data.balance === 'number' ? data.balance : (typeof data.wallet === 'number' ? data.wallet : (typeof data.walletBalance === 'number' ? data.walletBalance : (typeof data.resellerBalance === 'number' ? data.resellerBalance : 0))),
+          wallet: typeof data.wallet === 'number' ? data.wallet : (typeof data.balance === 'number' ? data.balance : (typeof data.walletBalance === 'number' ? data.walletBalance : (typeof data.resellerBalance === 'number' ? data.resellerBalance : 0))),
           language: data.language || 'en',
           createdAt: data.createdAt || Date.now(),
           updatedAt: data.updatedAt || Date.now(),
@@ -309,6 +309,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const determinedRole = isApprovedAdmin ? 'Admin' : 'Customer';
         const userRefCode = authUser.uid.substring(0, 8).toUpperCase();
         const now = Date.now();
+        const initialBal = typeof (rtdbData as any)?.balance === 'number' 
+          ? (rtdbData as any).balance 
+          : ((rtdbData as any)?.wallet ?? (rtdbData as any)?.walletBalance ?? 0);
 
         try {
           localStorage.setItem('rj_user_role_' + authUser.uid, determinedRole);
@@ -323,8 +326,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: determinedRole,
           accountType: "general",
           status: "active",
-          balance: 0,
-          wallet: 0,
+          balance: initialBal,
+          wallet: initialBal,
           language: 'en',
           createdAt: now,
           updatedAt: now,
@@ -346,8 +349,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             role: determinedRole,
             accountType: "general",
             status: "active",
-            balance: 0,
-            wallet: 0,
+            balance: initialBal,
+            wallet: initialBal,
             referralId: userRefCode,
             createdAt: now,
             updatedAt: now,
@@ -366,7 +369,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             role: determinedRole,
             accountType: "general",
             status: "active",
-            balance: 0,
+            balance: initialBal,
             referralId: userRefCode,
             createdAt: now,
             updatedAt: now,
@@ -512,8 +515,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                       photo: fsData.photo ?? fsData.photoURL ?? prev.photo,
                       status: (fsData.status || prev.status || 'active').toLowerCase(),
                       role: isAllowedAdminEmail(authUser.email) ? 'Admin' : (fsData.role === 'Admin' ? 'Customer' : (fsData.role || prev.role)),
-                      balance: typeof fsData.balance === 'number' ? fsData.balance : prev.balance,
-                      wallet: typeof fsData.wallet === 'number' ? fsData.wallet : prev.wallet,
+                      balance: typeof fsData.balance === 'number' ? fsData.balance : (typeof fsData.wallet === 'number' ? fsData.wallet : (typeof fsData.walletBalance === 'number' ? fsData.walletBalance : prev.balance)),
+                      wallet: typeof fsData.wallet === 'number' ? fsData.wallet : (typeof fsData.balance === 'number' ? fsData.balance : (typeof fsData.walletBalance === 'number' ? fsData.walletBalance : prev.wallet)),
                     };
                   });
                 }

@@ -391,10 +391,10 @@ export default function ResellerApplication() {
         }
 
         // For non-referral standalone promo codes, promoBonus is applied.
-        // For referral signup, initial ৳50 bonus is granted.
+        // For referral signup, processReferralRewards credits exactly ৳50 atomically.
         const standalonePromoBonus = (!finalReferrerId && promoValid) ? (promoBonus > 0 ? promoBonus : 50) : 0;
-        const initialReferralBonus = finalReferrerId ? 50 : 0;
-        const initialBalance = standalonePromoBonus || initialReferralBonus;
+        const initialReferralBonus = 0; // Handled atomically by processReferralRewards
+        const initialBalance = standalonePromoBonus;
 
         const walletPayload = {
           resellerId: currentUserId,

@@ -497,121 +497,77 @@ export async function reversePlatformFeeOnOrderCancellation(
  * Re-computes and saves the accurate summary for a single vendor
  */
 export async function updateVendorPlatformFeeSummary(vendorId: string): Promise<VendorPlatformFeeSummary> {
-  // 1. Get vendor details
-  const [vendorData, userData, storeData] = await Promise.all([
-    rtdbGet<any>(`vendors/${vendorId}`).catch(() => null),
-    rtdbGet<any>(`users/${vendorId}`).catch(() => null),
-    rtdbGet<any>(`stores/${vendorId}`).catch(() => null)
-  ]);
-
-  const rawAddress = vendorData?.address || (vendorData?.district ? `${vendorData.district}${vendorData.upazila ? ', ' + vendorData.upazila : ''}` : (userData?.address || 'N/A'));
-  const address = formatAddress(rawAddress);
-  const vendorName = formatSafeString(vendorData?.ownerName || vendorData?.name || userData?.name, 'Vendor');
-  const storeName = formatSafeString(vendorData?.storeName || vendorData?.shopName || storeData?.storeName, 'Shop');
-  const mobileNumber = formatSafeString(vendorData?.mobileNumber || vendorData?.phone || userData?.phone, '');
-  const email = formatSafeString(vendorData?.email || userData?.email, '');
-
-  // 2. Fetch all fee records for this vendor
-  const allRecords = await rtdbList<PlatformFeeRecord>('platform_fee_records').catch(() => []);
-  const vendorRecords = allRecords.map(r => r.data).filter(r => r && r.vendorId === vendorId);
-
-  let totalDeliveredCodOrders = 0;
-  let totalPlatformFee = 0;
-  let paidPlatformFee = 0;
-
-  for (const rec of vendorRecords) {
-    totalDeliveredCodOrders += 1;
-    totalPlatformFee += Number(rec.feeAmount || 5);
-    if (rec.status === 'paid') {
-      paidPlatformFee += Number(rec.feeAmount || 5);
-    }
-  }
-
-  const duePlatformFee = Math.max(0, totalPlatformFee - paidPlatformFee);
-
-  const summary: VendorPlatformFeeSummary = {
-    vendorId,
-    vendorName,
-    storeName,
-    mobileNumber,
-    address,
-    email,
-    totalDeliveredCodOrders,
-    totalPlatformFee,
-    paidPlatformFee,
-    duePlatformFee,
-    lastUpdated: Date.now()
-  };
-
-  await rtdbSet(`vendor_platform_fees/${vendorId}`, summary);
-  return summary;
+  return await syncPlatformFeesForVendor(vendorId);
 }
 
 /**
  * Scans delivered COD orders for a specific vendor, backfills any missing fee records,
- * and recalculates the summary. Ensures self-healing accuracy whenever vendor accesses their fee page.
+ * and calculates the summary with 100% accuracy based on live database orders.
  */
-export async function syncPlatformFeesForVendor(vendorId: string): Promise<VendorPlatformFeeSummary> {
+export async function syncPlatformFeesForVendor(
+  vendorId: string,
+  user?: any,
+  userData?: any
+): Promise<VendorPlatformFeeSummary> {
   try {
     if (!vendorId) {
       throw new Error('Invalid vendor ID');
     }
 
-    // 1. Fetch vendor_orders and general orders
-    const [allVendorOrders, allMainOrders] = await Promise.all([
+    // 1. Gather all vendor IDs associated with this vendor
+    const vendorIds = new Set<string>();
+    vendorIds.add(String(vendorId).trim());
+    if (user?.uid) vendorIds.add(String(user.uid).trim());
+    if (userData?.vendorId) vendorIds.add(String(userData.vendorId).trim());
+    if (userData?.storeId) vendorIds.add(String(userData.storeId).trim());
+
+    try {
+      const [vDoc, sDoc] = await Promise.all([
+        rtdbGet<any>(`vendors/${vendorId}`).catch(() => null),
+        rtdbGet<any>(`stores/${vendorId}`).catch(() => null)
+      ]);
+      if (vDoc?.id) vendorIds.add(String(vDoc.id).trim());
+      if (vDoc?.vendorId) vendorIds.add(String(vDoc.vendorId).trim());
+      if (sDoc?.id) vendorIds.add(String(sDoc.id).trim());
+      if (sDoc?.storeId) vendorIds.add(String(sDoc.storeId).trim());
+    } catch (_) {}
+
+    // 2. Fetch vendor_orders, main orders, and reseller_orders
+    const [allVendorOrders, allMainOrders, allResellerOrders] = await Promise.all([
       rtdbList<any>('vendor_orders').catch(() => []),
-      rtdbList<any>('orders').catch(() => [])
+      rtdbList<any>('orders').catch(() => []),
+      rtdbList<any>('reseller_orders').catch(() => [])
     ]);
 
-    // 2. Identify delivered COD orders for this vendor
+    // 3. Identify all successfully delivered Cash on Delivery (COD) orders for this vendor
     const eligibleOrders = new Map<string, any>(); // cleanOrderId -> orderData
 
-    for (const { id, data } of allVendorOrders) {
-      if (!data) continue;
+    const checkAndAdd = (id: string, data: any) => {
+      if (!data) return;
       const vIds = extractVendorIdsFromOrder(data);
-      const isMyOrder = data.vendorId === vendorId || 
-                        data.sellerId === vendorId || 
-                        id.endsWith(`_${vendorId}`) || 
-                        vIds.includes(vendorId);
+      const isMyOrder = Array.from(vendorIds).some(vid => 
+        data.vendorId === vid || 
+        data.sellerId === vid || 
+        data.storeId === vid || 
+        data.vendorUid === vid ||
+        data.vendorUID === vid ||
+        id.endsWith(`_${vid}`) || 
+        id.startsWith(`${vid}_`) ||
+        id.includes(`_${vid}_`) ||
+        vIds.includes(vid)
+      );
+      if (!isMyOrder) return;
 
-      if (!isMyOrder) continue;
-
-      const pm = data.paymentMethod || data.payment_method;
+      const pm = data.paymentMethod || data.payment_method || data.paymentGateway;
       const codAmt = Number(data.codAmount ?? 0);
       const st = data.status || data.orderStatus || data.vendorStatus;
 
-      if (isCodPayment(pm, codAmt) && isDeliveredStatus(st)) {
-        let cleanId = String(data.mainOrderId || data.orderId || id || '').trim().replace(/^#/, '');
-        if (cleanId.endsWith(`_${vendorId}`)) {
-          cleanId = cleanId.slice(0, -(vendorId.length + 1));
-        }
-        if (cleanId.includes('_')) {
-          const parts = cleanId.split('_');
-          if (parts[0]) cleanId = parts[0];
-        }
-        if (cleanId && !eligibleOrders.has(cleanId)) {
-          eligibleOrders.set(cleanId, data);
-        }
-      }
-    }
-
-    for (const { id, data } of allMainOrders) {
-      if (!data) continue;
-      const vIds = extractVendorIdsFromOrder(data);
-      const isMyOrder = data.vendorId === vendorId || 
-                        data.sellerId === vendorId || 
-                        vIds.includes(vendorId);
-
-      if (!isMyOrder) continue;
-
-      const pm = data.paymentMethod || data.payment_method;
-      const codAmt = Number(data.codAmount ?? 0);
-      const st = data.status || data.orderStatus;
-
-      if (isCodPayment(pm, codAmt) && isDeliveredStatus(st)) {
+      if (isCodPayment(pm, codAmt) && isDeliveredStatus(st) && !isCancelledOrReturnedStatus(st)) {
         let cleanId = String(data.orderId || data.mainOrderId || id || '').trim().replace(/^#/, '');
-        if (cleanId.endsWith(`_${vendorId}`)) {
-          cleanId = cleanId.slice(0, -(vendorId.length + 1));
+        for (const vid of vendorIds) {
+          if (cleanId.endsWith(`_${vid}`)) {
+            cleanId = cleanId.slice(0, -(vid.length + 1));
+          }
         }
         if (cleanId.includes('_')) {
           const parts = cleanId.split('_');
@@ -621,75 +577,188 @@ export async function syncPlatformFeesForVendor(vendorId: string): Promise<Vendo
           eligibleOrders.set(cleanId, data);
         }
       }
+    };
+
+    allVendorOrders.forEach(({ id, data }) => checkAndAdd(id, data));
+    allMainOrders.forEach(({ id, data }) => checkAndAdd(id, data));
+    allResellerOrders.forEach(({ id, data }) => checkAndAdd(id, data));
+
+    // 4. Fetch existing fee records and payments for this vendor to determine paid status
+    const [allFeeRecords, allFeePayments] = await Promise.all([
+      rtdbList<PlatformFeeRecord>('platform_fee_records').catch(() => []),
+      rtdbList<PlatformFeePaymentRecord>('platform_fee_payments').catch(() => [])
+    ]);
+
+    const existingFeeRecordsMap = new Map<string, PlatformFeeRecord>();
+    for (const r of allFeeRecords) {
+      if (r?.data && (r.data.vendorId === vendorId || vendorIds.has(r.data.vendorId))) {
+        existingFeeRecordsMap.set(r.data.orderId, r.data);
+      }
     }
 
-    // 3. For each eligible order, ensure platform fee record exists
+    const paidOrderIds = new Set<string>();
+    for (const p of allFeePayments) {
+      if (p?.data && (p.data.vendorId === vendorId || vendorIds.has(p.data.vendorId)) && p.data.status === 'verified') {
+        if (Array.isArray(p.data.coveredRecordIds)) {
+          p.data.coveredRecordIds.forEach(id => {
+            const ordId = id.includes('_') ? id.split('_').slice(1).join('_') : id;
+            paidOrderIds.add(ordId);
+          });
+        }
+      }
+    }
+
+    // 5. Construct synchronized records and calculate sums
     const now = Date.now();
+    let totalFee = 0;
+    let paidFee = 0;
+    const syncedRecords: PlatformFeeRecord[] = [];
+
     for (const [cleanOrderId, order] of eligibleOrders.entries()) {
       const recordId = `${vendorId}_${cleanOrderId}`;
-      const existing = await rtdbGet<PlatformFeeRecord>(`platform_fee_records/${recordId}`);
-      if (!existing) {
-        const feeAmount = Number(order.platformFee || 5);
-        const customerName = formatSafeString(order.customerName || order.shippingAddress?.name, 'Customer');
-        const customerPhone = formatSafeString(order.customerPhone || order.shippingAddress?.mobile || order.shippingAddress?.phone, '');
+      const existing = existingFeeRecordsMap.get(cleanOrderId);
+      const isPaid = Boolean(
+        existing?.status === 'paid' || 
+        order.platformFeeStatus === 'paid' || 
+        order.isPlatformFeePaid === true ||
+        paidOrderIds.has(cleanOrderId)
+      );
 
-        const newRecord: PlatformFeeRecord = {
-          id: recordId,
-          vendorId,
-          orderId: cleanOrderId,
-          mainOrderId: order.mainOrderId || cleanOrderId,
-          customerName,
-          customerPhone,
+      const feeAmount = Number(existing?.feeAmount || order.platformFee || 5);
+      totalFee += feeAmount;
+      if (isPaid) {
+        paidFee += feeAmount;
+      }
+
+      const customerName = formatSafeString(existing?.customerName || order.customerName || order.shippingAddress?.name, 'Customer');
+      const customerPhone = formatSafeString(existing?.customerPhone || order.customerPhone || order.shippingAddress?.mobile || order.shippingAddress?.phone, '');
+
+      const record: PlatformFeeRecord = {
+        id: recordId,
+        vendorId,
+        orderId: cleanOrderId,
+        mainOrderId: order.mainOrderId || cleanOrderId,
+        customerName,
+        customerPhone,
+        feeAmount,
+        paymentMethod: 'cod',
+        orderStatus: order.status || 'Delivered',
+        status: isPaid ? 'paid' : 'due',
+        deliveredAt: existing?.deliveredAt || order.deliveredAt || now,
+        paidAt: existing?.paidAt || (isPaid ? now : undefined),
+        paymentTrxId: existing?.paymentTrxId || order.platformFeeTrxId || undefined,
+        paymentMethodUsed: existing?.paymentMethodUsed || undefined,
+        createdAt: existing?.createdAt || order.createdAt || now
+      };
+
+      syncedRecords.push(record);
+
+      // Asynchronously ensure record exists in database
+      if (!existing || existing.status !== record.status) {
+        rtdbSet(`platform_fee_records/${recordId}`, record).catch(() => {});
+        rtdbSet(`processed_platform_fee_orders/${recordId}`, {
+          processedAt: now,
           feeAmount,
-          paymentMethod: 'cod',
-          orderStatus: order.status || 'Delivered',
-          status: 'due',
-          deliveredAt: order.deliveredAt || now,
-          createdAt: order.createdAt || now
-        };
-
-        await Promise.allSettled([
-          rtdbSet(`platform_fee_records/${recordId}`, newRecord),
-          rtdbSet(`processed_platform_fee_orders/${recordId}`, {
-            processedAt: now,
-            feeAmount,
-            vendorId,
-            orderId: cleanOrderId
-          })
-        ]);
+          vendorId,
+          orderId: cleanOrderId
+        }).catch(() => {});
       }
     }
 
-    // 4. Update and return summary
-    return await updateVendorPlatformFeeSummary(vendorId);
+    vendorRecordsCache.set(vendorId, syncedRecords);
+
+    // 6. Vendor profile info for summary
+    const [vendorData, userDataSnap, storeData] = await Promise.all([
+      rtdbGet<any>(`vendors/${vendorId}`).catch(() => null),
+      rtdbGet<any>(`users/${vendorId}`).catch(() => null),
+      rtdbGet<any>(`stores/${vendorId}`).catch(() => null)
+    ]);
+
+    const rawAddress = vendorData?.address || (vendorData?.district ? `${vendorData.district}${vendorData.upazila ? ', ' + vendorData.upazila : ''}` : (userDataSnap?.address || userData?.address || 'N/A'));
+    const address = formatAddress(rawAddress);
+    const vendorName = formatSafeString(vendorData?.ownerName || vendorData?.name || userDataSnap?.name || userData?.name, 'Vendor');
+    const storeName = formatSafeString(vendorData?.storeName || vendorData?.shopName || storeData?.storeName, 'Shop');
+    const mobileNumber = formatSafeString(vendorData?.mobileNumber || vendorData?.phone || userDataSnap?.phone || userData?.phone, '');
+    const email = formatSafeString(vendorData?.email || userDataSnap?.email || userData?.email, '');
+
+    const dueFee = Math.max(0, totalFee - paidFee);
+
+    const summary: VendorPlatformFeeSummary = {
+      vendorId,
+      vendorName,
+      storeName,
+      mobileNumber,
+      address,
+      email,
+      totalDeliveredCodOrders: syncedRecords.length,
+      totalPlatformFee: totalFee,
+      paidPlatformFee: paidFee,
+      duePlatformFee: dueFee,
+      lastUpdated: Date.now()
+    };
+
+    // Save summary asynchronously
+    rtdbSet(`vendor_platform_fees/${vendorId}`, summary).catch(() => {});
+    return summary;
   } catch (err) {
     console.error('Error syncing platform fees for vendor:', err);
-    return await updateVendorPlatformFeeSummary(vendorId);
+    return {
+      vendorId,
+      vendorName: 'Vendor',
+      storeName: 'Shop',
+      mobileNumber: '',
+      address: 'N/A',
+      email: '',
+      totalDeliveredCodOrders: 0,
+      totalPlatformFee: 0,
+      paidPlatformFee: 0,
+      duePlatformFee: 0,
+      lastUpdated: Date.now()
+    };
   }
 }
 
 /**
  * Gets the current platform fee summary for a vendor with automatic synchronization
  */
-export async function getVendorPlatformFee(vendorId: string): Promise<VendorPlatformFeeSummary | null> {
+export async function getVendorPlatformFee(
+  vendorId: string,
+  user?: any,
+  userData?: any
+): Promise<VendorPlatformFeeSummary | null> {
   try {
     if (!vendorId) return null;
-    return await syncPlatformFeesForVendor(vendorId);
+    return await syncPlatformFeesForVendor(vendorId, user, userData);
   } catch (e) {
     console.error('Error fetching vendor platform fee summary:', e);
     return null;
   }
 }
 
+// In-memory cache of synced records per vendor
+const vendorRecordsCache = new Map<string, PlatformFeeRecord[]>();
+
 /**
  * Gets all fee records for a specific vendor
  */
-export async function getVendorPlatformFeeRecords(vendorId: string): Promise<PlatformFeeRecord[]> {
+export async function getVendorPlatformFeeRecords(
+  vendorId: string,
+  user?: any,
+  userData?: any
+): Promise<PlatformFeeRecord[]> {
   try {
+    if (!vendorId) return [];
+
+    // Trigger sync to get latest computed records
+    await syncPlatformFeesForVendor(vendorId, user, userData).catch(() => {});
+
+    const cached = vendorRecordsCache.get(vendorId) || [];
+
+    // Also read stored records to merge if any were written
     const all = await rtdbList<PlatformFeeRecord>('platform_fee_records').catch(() => []);
-    return all
+    const fromDb = all
       .map(r => r.data)
-      .filter(r => r && r.vendorId === vendorId)
+      .filter(r => r && (r.vendorId === vendorId || (user?.uid && r.vendorId === user.uid)))
       .map(r => ({
         ...r,
         customerName: formatSafeString(r.customerName, 'Customer'),
@@ -697,11 +766,22 @@ export async function getVendorPlatformFeeRecords(vendorId: string): Promise<Pla
         paymentMethod: formatSafeString(r.paymentMethod, 'cod'),
         paymentTrxId: formatSafeString(r.paymentTrxId, ''),
         paymentMethodUsed: formatSafeString(r.paymentMethodUsed, '')
-      }))
+      }));
+
+    // Merge: prefer DB records if they exist, fallback to cached synced records
+    const recordMap = new Map<string, PlatformFeeRecord>();
+    for (const r of cached) {
+      if (r?.id) recordMap.set(r.id, r);
+    }
+    for (const r of fromDb) {
+      if (r?.id) recordMap.set(r.id, r);
+    }
+
+    return Array.from(recordMap.values())
       .sort((a, b) => (b.deliveredAt || b.createdAt || 0) - (a.deliveredAt || a.createdAt || 0));
   } catch (e) {
     console.error('Error getting vendor fee records:', e);
-    return [];
+    return vendorRecordsCache.get(vendorId) || [];
   }
 }
 
@@ -897,6 +977,7 @@ export async function settleVendorPlatformFeePayment(params: SettleVendorPlatfor
   await rtdbSet(`platform_fee_payments/${paymentId}`, paymentRecord);
 
   // 3. Recalculate Vendor Summary
+  vendorRecordsCache.delete(vendorId);
   await updateVendorPlatformFeeSummary(vendorId);
 }
 

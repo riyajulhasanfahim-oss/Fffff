@@ -21,7 +21,7 @@ import RocketPaymentModal from '../../../components/checkout/RocketPaymentModal'
 import UpayPaymentModal from '../../../components/checkout/UpayPaymentModal';
 
 export default function VendorPlatformFee() {
-  const { user } = useAuth();
+  const { user, userData } = useAuth();
   const [summary, setSummary] = useState<VendorPlatformFeeSummary | null>(null);
   const [records, setRecords] = useState<PlatformFeeRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,8 +43,8 @@ export default function VendorPlatformFee() {
     try {
       setLoading(true);
       const [sum, recs] = await Promise.all([
-        getVendorPlatformFee(vendorId),
-        getVendorPlatformFeeRecords(vendorId)
+        getVendorPlatformFee(vendorId, user, userData),
+        getVendorPlatformFeeRecords(vendorId, user, userData)
       ]);
       setSummary(sum);
       setRecords(recs);
@@ -58,7 +58,15 @@ export default function VendorPlatformFee() {
 
   useEffect(() => {
     loadData();
-  }, [vendorId]);
+
+    const handleUpdate = () => {
+      loadData();
+    };
+    window.addEventListener('vendor_order_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('vendor_order_updated', handleUpdate);
+    };
+  }, [vendorId, user?.uid, userData]);
 
   const dueAmount = summary?.duePlatformFee || 0;
   const invoiceId = `FEE-INV-${vendorId.substring(0, 5).toUpperCase()}-${Date.now().toString().slice(-4)}`;

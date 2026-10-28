@@ -292,6 +292,26 @@
     "system_config": {
       ".read": true,
       ".write": "auth != null && auth.token.admin === true"
+    },
+    "platform_fee_records": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["vendorId", "orderId", "status", "deliveredAt", "createdAt"]
+    },
+    "vendor_platform_fees": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["vendorId", "lastUpdated"]
+    },
+    "platform_fee_payments": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["vendorId", "transactionId", "status", "createdAt"]
+    },
+    "processed_platform_fee_orders": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["vendorId", "orderId"]
     }
   }
 }
