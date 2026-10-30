@@ -9,6 +9,7 @@ import Footer from '../components/layout/Footer';
 import { Check, ChevronRight, ChevronDown, User, Users, MapPin, Mail, Phone, Store, CheckCircle, ArrowLeft, Lock, FileText, Gift, MessageCircle, Eye, EyeOff, Copy, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
+import YouTubeTutorialBanner from '../components/reseller/YouTubeTutorialBanner';
 import { DriveImageUpload } from '../components/common/DriveImageUpload';
 import PaymentMethodSelectionModal from '../components/checkout/PaymentMethodSelectionModal';
 import BkashPaymentModal from '../components/checkout/BkashPaymentModal';
@@ -538,7 +539,7 @@ export default function ResellerApplication() {
         <div className="w-full max-w-sm sm:max-w-xl md:max-w-2xl lg:max-w-3xl mx-auto transition-all">
           
           {/* Top Step & Navigation Bar */}
-          <div className="flex items-center justify-between border-b border-slate-200/80 pb-3 sm:pb-4 mb-4 sm:mb-6">
+          <div className="flex items-center justify-between border-b border-slate-200/80 pb-2.5 sm:pb-3 mb-2.5 sm:mb-3.5">
             <button 
               type="button" 
               onClick={() => step > 1 ? setStep(step - 1) : navigate('/')} 
@@ -557,7 +558,10 @@ export default function ResellerApplication() {
             </div>
           </div>
 
-          <div className="text-center mb-5 sm:mb-8">
+          {/* Compact YouTube Tutorial Banner */}
+          <YouTubeTutorialBanner className="mb-3 sm:mb-4" />
+
+          <div className="text-center mb-3.5 sm:mb-6">
             <div className="w-10 h-10 sm:w-13 sm:h-13 bg-slate-900 text-white rounded-xl sm:rounded-2xl flex items-center justify-center mx-auto mb-2.5 shadow-md">
               <Users className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>

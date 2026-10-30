@@ -27,6 +27,7 @@ import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import toast from 'react-hot-toast';
 import { rtdbGet, rtdbList, rtdbSubscribe } from '../../lib/rtdb';
+import YouTubeTutorialBanner from '../../components/reseller/YouTubeTutorialBanner';
 import { ensureResellerWallet, getResellerLedgerTransactions } from '../../services/resellerWalletService';
 import {
   AreaChart,
@@ -647,6 +648,9 @@ export default function ResellerDashboard() {
       <Header />
       
       <main className="flex-grow py-3 sm:py-5 px-2.5 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+        {/* YouTube Tutorial Guide Banner */}
+        <YouTubeTutorialBanner className="mb-3.5 sm:mb-5" />
+
         {/* Profile Card & Actions Header */}
         <div className="mb-3.5 sm:mb-5 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           {/* Profile Section */}
