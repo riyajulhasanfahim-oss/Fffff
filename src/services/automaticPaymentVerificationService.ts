@@ -432,11 +432,25 @@ async function executeBusinessActionSafely(
           updatedAt: now
         };
 
+        // Check existing portfolio to calculate cumulative totals
+        let existingShares = 0;
+        let existingCapital = 0;
+        try {
+          const exPortfolio = await rtdbGet<any>(`shareholders/${shareholderUserId}/portfolio`);
+          if (exPortfolio) {
+            existingShares = Number(exPortfolio.activeSharesPercent) || 0;
+            existingCapital = Number(exPortfolio.portfolioValue) || (existingShares * 2000);
+          }
+        } catch (_) {}
+
+        const finalTotalShares = existingShares + sharePercent;
+        const finalTotalCapital = existingCapital + totalAmount;
+
         const portfolioPayload = {
           userId: shareholderUserId,
           shareholderName: applicantName,
-          activeSharesPercent: sharePercent,
-          portfolioValue: sharePercent * 2000,
+          activeSharesPercent: finalTotalShares,
+          portfolioValue: finalTotalCapital,
           status: 'active_shareholder',
           lastVerifiedAt: now,
           updatedAt: now

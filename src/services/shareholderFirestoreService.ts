@@ -230,19 +230,50 @@ export async function activateVerifiedShareholderInFirestore(params: {
 }): Promise<boolean> {
   const now = Date.now();
   const sharePrice = 2000;
+
+  // Retrieve existing portfolio doc if present to increment shares and capital
+  let existingShares = 0;
+  let existingCapital = 0;
+  let existingShareholderName = params.applicantName;
+  let existingEmail = params.email || '';
+  let existingPhone = params.phone || params.payerMobile || '';
+  let existingGuardian = params.guardianName || '';
+  let existingAddress = params.address || '';
+
+  try {
+    const existingSnap = await getDoc(doc(db, 'shareholders', params.userId));
+    if (existingSnap.exists()) {
+      const exData = existingSnap.data() as ShareholderPortfolioDoc;
+      if (exData) {
+        existingShares = Number(exData.activeSharesPercent) || 0;
+        existingCapital = Number(exData.portfolioValue) || (existingShares * sharePrice);
+        if (exData.shareholderName) existingShareholderName = exData.shareholderName;
+        if (exData.email) existingEmail = exData.email;
+        if (exData.phone) existingPhone = exData.phone;
+        if (exData.guardianName) existingGuardian = exData.guardianName;
+        if (exData.address) existingAddress = exData.address;
+      }
+    }
+  } catch (readErr) {
+    console.warn('[Shareholder Firestore] Note reading existing portfolio:', readErr);
+  }
+
+  const finalTotalShares = existingShares + params.sharePercent;
+  const finalTotalCapital = existingCapital + (params.totalAmount || (params.sharePercent * sharePrice));
+
   const portfolioDoc: ShareholderPortfolioDoc = {
     userId: params.userId,
-    shareholderName: params.applicantName,
-    activeSharesPercent: params.sharePercent,
-    portfolioValue: params.totalAmount || (params.sharePercent * sharePrice),
+    shareholderName: existingShareholderName,
+    activeSharesPercent: finalTotalShares,
+    portfolioValue: finalTotalCapital,
     status: 'active_shareholder',
     lastVerifiedAt: now,
     updatedAt: now,
     createdAt: now,
-    email: params.email || '',
-    phone: params.phone || params.payerMobile || '',
-    guardianName: params.guardianName || '',
-    address: params.address || ''
+    email: existingEmail,
+    phone: existingPhone,
+    guardianName: existingGuardian,
+    address: existingAddress
   };
 
   const paymentDoc: SharePaymentDoc = {
@@ -272,15 +303,15 @@ export async function activateVerifiedShareholderInFirestore(params: {
     updatedAt: now
   };
 
-  const certificateNumber = `RJ-CERT-${params.userId.slice(0, 8).toUpperCase()}-${String(params.sharePercent * 100).padStart(4, '0')}`;
+  const certificateNumber = `RJ-CERT-${params.userId.slice(0, 8).toUpperCase()}-${String(finalTotalShares * 100).padStart(4, '0')}`;
   const certificateDoc: ShareCertificateDoc = {
     certificateNumber,
     shareholderId: `RJ-SH-${params.userId.slice(0, 8).toUpperCase()}`,
     userId: params.userId,
-    fullName: params.applicantName,
-    approvedSharePercentage: params.sharePercent,
-    totalAmountPaid: params.totalAmount || (params.sharePercent * 2000),
-    shareUnits: params.sharePercent,
+    fullName: existingShareholderName,
+    approvedSharePercentage: finalTotalShares,
+    totalAmountPaid: finalTotalCapital,
+    shareUnits: finalTotalShares,
     pricePerShare: 2000,
     transactionId: params.transactionId,
     issueDate: now,
