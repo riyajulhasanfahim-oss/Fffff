@@ -33,7 +33,14 @@ import {
   TrendingUp,
   Percent,
   Users,
-  AlertCircle
+  AlertCircle,
+  Edit3,
+  BadgeDollarSign,
+  Calculator,
+  Save,
+  ArrowDown,
+  ArrowUp,
+  Info
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { isAllowedAdminEmail } from '../../constants/adminAllowlist';
@@ -42,6 +49,10 @@ import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { 
   getAllShareholderApplicationsFromFirestore, 
   getAllShareholdersFromFirestore,
+  adminUpdateShareholderPaymentInFirestore,
+  adminUpdateResellerFee,
+  adminUpdatePlatformFee,
+  getFinancialOverviewData,
   SharePaymentDoc,
   ShareholderPortfolioDoc
 } from '../../services/shareholderFirestoreService';
@@ -67,7 +78,7 @@ export default function AdminShareholderManagement() {
   const { user } = useAuth();
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'applications' | 'shareholders' | 'availability' | 'commissions' | 'ledger' | 'withdrawals' | 'audit'>('applications');
+  const [activeTab, setActiveTab] = useState<'applications' | 'shareholders' | 'financials' | 'availability' | 'commissions' | 'ledger' | 'withdrawals' | 'audit'>('applications');
   const [verifiedShareholders, setVerifiedShareholders] = useState<any[]>([]);
 
   // Datasets
@@ -77,6 +88,23 @@ export default function AdminShareholderManagement() {
   const [ledgerEntries, setLedgerEntries] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
+
+  // Financial Management State
+  const [financialOverview, setFinancialOverview] = useState<{
+    resellerVerification: { totalRevenue: number; approvedCount: number; pendingCount: number; currentFee: number };
+    platformFee: { totalFee: number; paidFee: number; dueFee: number; feePerOrder: number; totalOrders: number };
+  } | null>(null);
+  const [editResellerFeeInput, setEditResellerFeeInput] = useState<string>('200');
+  const [editPlatformFeeInput, setEditPlatformFeeInput] = useState<string>('5');
+  const [savingFee, setSavingFee] = useState<boolean>(false);
+
+  // Payment Edit System Modal
+  const [editPaymentModalShareholder, setEditPaymentModalShareholder] = useState<any | null>(null);
+  const [editPaymentBalance, setEditPaymentBalance] = useState<string>('0');
+  const [editPaymentPaid, setEditPaymentPaid] = useState<string>('0');
+  const [editPaymentEarned, setEditPaymentEarned] = useState<string>('0');
+  const [editPaymentNotes, setEditPaymentNotes] = useState<string>('');
+  const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -195,10 +223,28 @@ export default function AdminShareholderManagement() {
             email: app.email || '',
             phone: app.phone || app.payerMobile || '',
             guardianName: app.guardianName || '',
-            address: app.address || ''
+            address: app.address || '',
+            availableWithdrawBalance: 0,
+            paidCommission: 0,
+            totalEarnedCommission: 0,
+            pendingCommission: 0
           });
         }
       });
+
+      // Supplemental dynamic financial stats (reseller & platform fees)
+      try {
+        const finData = await getFinancialOverviewData();
+        setFinancialOverview(finData);
+        if (finData?.resellerVerification?.currentFee) {
+          setEditResellerFeeInput(String(finData.resellerVerification.currentFee));
+        }
+        if (finData?.platformFee?.feePerOrder) {
+          setEditPlatformFeeInput(String(finData.platformFee.feePerOrder));
+        }
+      } catch (fErr) {
+        console.warn('Financial overview fetch notice:', fErr);
+      }
 
       const finalShareholdersList = Array.from(finalShareholdersMap.values());
       finalShareholdersList.sort((a, b) => (b.lastVerifiedAt || b.createdAt || 0) - (a.lastVerifiedAt || a.createdAt || 0));
@@ -617,6 +663,114 @@ export default function AdminShareholderManagement() {
     }
   };
 
+  // Handle Individual Shareholder Payment Edit (Requirements 1 & 2)
+  const handlePaymentEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editPaymentModalShareholder || !user) return;
+    try {
+      setSavingPayment(true);
+      const targetUserId = editPaymentModalShareholder.userId;
+      const availableNum = Math.max(0, Number(editPaymentBalance) || 0);
+      const paidNum = Math.max(0, Number(editPaymentPaid) || 0);
+      const earnedNum = Math.max(0, Number(editPaymentEarned) || 0);
+      const pendingNum = Math.max(0, earnedNum - paidNum);
+
+      // 1. Direct authoritative Cloud Firestore write
+      const success = await adminUpdateShareholderPaymentInFirestore({
+        userId: targetUserId,
+        availableWithdrawBalance: availableNum,
+        paidCommission: paidNum,
+        totalEarnedCommission: earnedNum,
+        pendingCommission: pendingNum,
+        adminEmail: user.email || 'admin',
+        notes: editPaymentNotes.trim()
+      });
+
+      // 2. Server endpoint write
+      try {
+        const token = await user.getIdToken().catch(() => '');
+        await fetch('/api/shareholders/admin/update-payment', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-admin-email': user.email || '',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            userId: targetUserId,
+            availableWithdrawBalance: availableNum,
+            paidCommission: paidNum,
+            totalEarnedCommission: earnedNum,
+            notes: editPaymentNotes.trim()
+          })
+        });
+      } catch (_) {}
+
+      if (success) {
+        toast.success(`পেমেন্ট সফলভাবে সংরক্ষিত হয়েছে! ${editPaymentModalShareholder.shareholderName}-এর বর্তমান ব্যালেন্স ৳${availableNum.toLocaleString()} নির্ধারণ করা হয়েছে।`);
+        setEditPaymentModalShareholder(null);
+        await fetchOverview();
+      } else {
+        toast.error('পেমেন্ট সংরক্ষণ করতে সমস্যা হয়েছে');
+      }
+    } catch (err: any) {
+      console.error('Error saving shareholder payment:', err);
+      toast.error(err.message || 'Error updating payment');
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
+  // Handle Reseller Verification Fee Update (Requirement 3)
+  const handleUpdateResellerFeeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const feeNum = Number(editResellerFeeInput);
+    if (isNaN(feeNum) || feeNum < 0) {
+      toast.error('অনুগ্রহ করে সঠিক ফি লিখুন');
+      return;
+    }
+    try {
+      setSavingFee(true);
+      const ok = await adminUpdateResellerFee(feeNum, user.email || 'admin');
+      if (ok) {
+        toast.success(`রিসেলার ভেরিফিকেশন ফি সফলভাবে ৳${feeNum} নির্ধারণ করা হয়েছে!`);
+        await fetchOverview();
+      } else {
+        toast.error('ফি আপডেট করতে সমস্যা হয়েছে');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating fee');
+    } finally {
+      setSavingFee(false);
+    }
+  };
+
+  // Handle Platform Fee Update (Requirement 4)
+  const handleUpdatePlatformFeeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const feeNum = Number(editPlatformFeeInput);
+    if (isNaN(feeNum) || feeNum < 0) {
+      toast.error('অনুগ্রহ করে সঠিক ফি লিখুন');
+      return;
+    }
+    try {
+      setSavingFee(true);
+      const ok = await adminUpdatePlatformFee(feeNum, user.email || 'admin');
+      if (ok) {
+        toast.success(`প্রতি অর্ডারে প্ল্যাটফর্ম ফি সফলভাবে ৳${feeNum} নির্ধারণ করা হয়েছে!`);
+        await fetchOverview();
+      } else {
+        toast.error('ফি আপডেট করতে সমস্যা হয়েছে');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating fee');
+    } finally {
+      setSavingFee(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-6">
@@ -792,12 +946,21 @@ export default function AdminShareholderManagement() {
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('financials')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+            activeTab === 'financials' ? 'bg-slate-900 text-white shadow-2xs ring-2 ring-primary-main/20' : 'text-slate-700 hover:text-slate-950 font-extrabold bg-white/60'
+          }`}
+        >
+          3. 💰 Financial Hub & Fees (আর্থিক নিয়ন্ত্রণ ও ফি)
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('availability')}
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
             activeTab === 'availability' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          3. Share Availability & Price Pool
+          4. Share Availability & Price Pool
         </button>
         <button
           type="button"
@@ -806,7 +969,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'commissions' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          4. Commission Sharing Agreements
+          5. Commission Sharing Agreements
         </button>
         <button
           type="button"
@@ -815,7 +978,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'ledger' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          5. Auditable Financial Ledger ({ledgerEntries.length})
+          6. Auditable Financial Ledger ({ledgerEntries.length})
         </button>
         <button
           type="button"
@@ -824,7 +987,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'withdrawals' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          6. Withdrawal Requests ({withdrawals.length})
+          7. Withdrawal Requests ({withdrawals.length})
         </button>
         <button
           type="button"
@@ -833,7 +996,7 @@ export default function AdminShareholderManagement() {
             activeTab === 'audit' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          7. Governance Audit Logs ({auditLogs.length})
+          8. Governance Audit Logs ({auditLogs.length})
         </button>
       </div>
 
@@ -1083,129 +1246,188 @@ export default function AdminShareholderManagement() {
                     <th className="py-3 px-4">Shareholder & Contact</th>
                     <th className="py-3 px-4">Equity Holding</th>
                     <th className="py-3 px-4">Verified Capital</th>
+                    <th className="py-3 px-4 text-emerald-800 bg-emerald-50/50">বর্তমান ব্যালেন্স</th>
+                    <th className="py-3 px-4 text-indigo-800 bg-indigo-50/50">মোট অর্জিত</th>
+                    <th className="py-3 px-4 text-blue-800 bg-blue-50/50">পরিশোধিত</th>
+                    <th className="py-3 px-4 text-amber-800 bg-amber-50/50">বাকি টাকা</th>
                     <th className="py-3 px-4">Account Status</th>
-                    <th className="py-3 px-4">Ratification Date</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {filteredShareholders.map((sh) => (
-                    <tr key={sh.userId} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
-                        <div className="flex items-center gap-1.5">
-                          <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>{sh.shareholderId || `RJ-SH-${sh.userId.slice(0, 8).toUpperCase()}`}</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-normal block font-mono">UID: {sh.userId}</span>
-                      </td>
+                  {filteredShareholders.map((sh) => {
+                    const currentBal = Number(sh.availableWithdrawBalance ?? 0);
+                    const totalEarned = Number(sh.totalEarnedCommission ?? 0);
+                    const totalPaid = Number(sh.paidCommission ?? 0);
+                    const remainingDue = Number(sh.pendingCommission ?? Math.max(0, totalEarned - totalPaid));
 
-                      <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900">{sh.shareholderName}</div>
-                        <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
-                          {sh.phone && <span>📞 {sh.phone}</span>}
-                          {sh.email && <span>✉️ {sh.email}</span>}
-                        </div>
-                        {sh.guardianName && (
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            C/O: {sh.guardianName}
+                    return (
+                      <tr key={sh.userId} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
+                          <div className="flex items-center gap-1.5">
+                            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>{sh.shareholderId || `RJ-SH-${sh.userId.slice(0, 8).toUpperCase()}`}</span>
                           </div>
-                        )}
-                        {sh.address && (
-                          <div className="text-[10px] text-slate-400 mt-0.5 truncate max-w-xs">
-                            📍 {sh.address}
+                          <span className="text-[10px] text-slate-400 font-normal block font-mono">UID: {sh.userId}</span>
+                        </td>
+
+                        <td className="py-3.5 px-4">
+                          <div className="font-bold text-slate-900">{sh.shareholderName}</div>
+                          <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
+                            {sh.phone && <span>📞 {sh.phone}</span>}
+                            {sh.email && <span>✉️ {sh.email}</span>}
                           </div>
-                        )}
-                      </td>
+                          {sh.guardianName && (
+                            <div className="text-[10px] text-slate-400 mt-0.5">
+                              C/O: {sh.guardianName}
+                            </div>
+                          )}
+                          {sh.address && (
+                            <div className="text-[10px] text-slate-400 mt-0.5 truncate max-w-xs">
+                              📍 {sh.address}
+                            </div>
+                          )}
+                        </td>
 
-                      <td className="py-3.5 px-4">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black bg-sky-50 text-sky-700 border border-sky-200">
-                          {sh.activeSharesPercent}%
-                        </span>
-                        <span className="text-[10px] text-slate-500 block mt-0.5">
-                          {sh.activeSharesPercent} Equity Unit(s)
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-4">
-                        <div className="font-black text-slate-900">
-                          ৳{sh.portfolioValue?.toLocaleString()}
-                        </div>
-                        <span className="text-[10px] text-emerald-600 font-semibold block">
-                          Verified Capital
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-4">
-                        {sh.status === 'suspended' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                            <ShieldAlert className="w-3 h-3 text-rose-600" />
-                            <span>Suspended</span>
+                        <td className="py-3.5 px-4">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black bg-sky-50 text-sky-700 border border-sky-200">
+                            {sh.activeSharesPercent}%
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Active Shareholder</span>
+                          <span className="text-[10px] text-slate-500 block mt-0.5">
+                            {sh.activeSharesPercent} Equity Unit(s)
                           </span>
-                        )}
-                      </td>
+                        </td>
 
-                      <td className="py-3.5 px-4 text-slate-600 font-mono text-[11px]">
-                        {sh.lastVerifiedAt ? new Date(sh.lastVerifiedAt).toLocaleDateString('en-GB', {
-                          day: 'numeric',
-                          month: 'short',
-                          year: 'numeric'
-                        }) : 'N/A'}
-                      </td>
+                        <td className="py-3.5 px-4">
+                          <div className="font-black text-slate-900">
+                            ৳{sh.portfolioValue?.toLocaleString()}
+                          </div>
+                          <span className="text-[10px] text-emerald-600 font-semibold block">
+                            Verified Capital
+                          </span>
+                        </td>
 
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const matchingApp = applications.find(a => a.userId === sh.userId);
-                              setSelectedAppDetail(matchingApp || {
-                                applicationId: sh.shareholderId,
-                                id: sh.shareholderId,
-                                userId: sh.userId,
-                                applicantName: sh.shareholderName,
-                                phone: sh.phone,
-                                email: sh.email,
-                                guardianName: sh.guardianName,
-                                address: sh.address,
-                                sharePercent: sh.activeSharesPercent,
-                                shareUnits: sh.activeSharesPercent,
-                                totalAmount: sh.portfolioValue,
-                                paymentStatus: 'Approved',
-                                status: 'approved',
-                                paymentMethod: 'Bank / MFS Verified',
-                                transactionId: 'VERIFIED-LEDGER-RATIFIED',
-                                submissionTimestamp: sh.lastVerifiedAt,
-                                isShareholderActive: sh.status !== 'suspended'
-                              });
-                            }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] transition-colors cursor-pointer"
-                            title="View Full Profile & Verification Details"
-                          >
-                            <Eye className="w-3 h-3" />
-                            <span>Details</span>
-                          </button>
+                        {/* বর্তমান ব্যালেন্স */}
+                        <td className="py-3.5 px-4 bg-emerald-50/30">
+                          <div className="font-black text-emerald-700 text-sm">
+                            ৳{currentBal.toLocaleString()}
+                          </div>
+                          <span className="text-[10px] text-emerald-600 font-medium block">
+                            তোলার যোগ্য ব্যালেন্স
+                          </span>
+                        </td>
 
-                          <button
-                            type="button"
-                            onClick={() => handleToggleSuspension(sh.userId, sh.status === 'suspended')}
-                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                              sh.status === 'suspended'
-                                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
-                                : 'bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700'
-                            }`}
-                            title={sh.status === 'suspended' ? 'Reactivate Shareholder' : 'Suspend Shareholder'}
-                          >
-                            {sh.status === 'suspended' ? <UserCheck className="w-3.5 h-3.5 text-emerald-600" /> : <UserX className="w-3.5 h-3.5" />}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        {/* মোট অর্জিত লভ্যাংশ */}
+                        <td className="py-3.5 px-4 bg-indigo-50/30">
+                          <div className="font-bold text-indigo-900">
+                            ৳{totalEarned.toLocaleString()}
+                          </div>
+                          <span className="text-[10px] text-indigo-600 block">
+                            মোট লাভ / প্রাপ্তি
+                          </span>
+                        </td>
+
+                        {/* পরিশোধিত অর্থ */}
+                        <td className="py-3.5 px-4 bg-blue-50/30">
+                          <div className="font-bold text-blue-900">
+                            ৳{totalPaid.toLocaleString()}
+                          </div>
+                          <span className="text-[10px] text-blue-600 block">
+                            কোম্পানি পরিশোধ করেছে
+                          </span>
+                        </td>
+
+                        {/* বাকি টাকা */}
+                        <td className="py-3.5 px-4 bg-amber-50/30">
+                          <div className={`font-black ${remainingDue > 0 ? 'text-amber-700' : 'text-slate-500'}`}>
+                            ৳{remainingDue.toLocaleString()}
+                          </div>
+                          <span className="text-[10px] text-amber-600 block">
+                            {remainingDue > 0 ? 'বকেয়া লভ্যাংশ' : 'কোনো বাকি নেই'}
+                          </span>
+                        </td>
+
+                        <td className="py-3.5 px-4">
+                          {sh.status === 'suspended' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                              <ShieldAlert className="w-3 h-3 text-rose-600" />
+                              <span>Suspended</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Active</span>
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* পেমেন্ট এডিট বাটন (Payment Edit Button) */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditPaymentModalShareholder(sh);
+                                setEditPaymentBalance(String(sh.availableWithdrawBalance ?? 0));
+                                setEditPaymentPaid(String(sh.paidCommission ?? 0));
+                                setEditPaymentEarned(String(sh.totalEarnedCommission ?? 0));
+                                setEditPaymentNotes(sh.lastUpdateNotes || '');
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-2xs transition-colors cursor-pointer"
+                              title="পেমেন্টের পরিমাণ এডিট করুন"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>পেমেন্ট এডিট</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const matchingApp = applications.find(a => a.userId === sh.userId);
+                                setSelectedAppDetail(matchingApp || {
+                                  applicationId: sh.shareholderId,
+                                  id: sh.shareholderId,
+                                  userId: sh.userId,
+                                  applicantName: sh.shareholderName,
+                                  phone: sh.phone,
+                                  email: sh.email,
+                                  guardianName: sh.guardianName,
+                                  address: sh.address,
+                                  sharePercent: sh.activeSharesPercent,
+                                  shareUnits: sh.activeSharesPercent,
+                                  totalAmount: sh.portfolioValue,
+                                  paymentStatus: 'Approved',
+                                  status: 'approved',
+                                  paymentMethod: 'Bank / MFS Verified',
+                                  transactionId: 'VERIFIED-LEDGER-RATIFIED',
+                                  submissionTimestamp: sh.lastVerifiedAt,
+                                  isShareholderActive: sh.status !== 'suspended'
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] transition-colors cursor-pointer"
+                              title="View Full Profile & Verification Details"
+                            >
+                              <Eye className="w-3 h-3" />
+                              <span>Details</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleToggleSuspension(sh.userId, sh.status === 'suspended')}
+                              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                sh.status === 'suspended'
+                                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700'
+                              }`}
+                              title={sh.status === 'suspended' ? 'Reactivate Shareholder' : 'Suspend Shareholder'}
+                            >
+                              {sh.status === 'suspended' ? <UserCheck className="w-3.5 h-3.5 text-emerald-600" /> : <UserX className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -1214,7 +1436,404 @@ export default function AdminShareholderManagement() {
       )}
 
       {/* =========================================================================
-          TAB 3: SHARE AVAILABILITY & PRICE POOL (TASK 3)
+          TAB 3: FINANCIAL HUB & FEES MANAGEMENT (REQUIREMENTS 3, 4, 5)
+      ========================================================================== */}
+      {activeTab === 'financials' && (
+        <div className="space-y-8">
+          {/* Header & Description */}
+          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 rounded-3xl p-6 sm:p-8 text-white shadow-lg relative overflow-hidden">
+            <div className="relative z-10">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 text-[11px] font-bold mb-3">
+                <BadgeDollarSign className="w-3.5 h-3.5" />
+                <span>Executive Financial Governance & Dynamic Fees</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black">
+                আর্থিক ব্যবস্থাপনা ও ফি নিয়ন্ত্রণ হাব
+              </h2>
+              <p className="text-slate-300 text-xs sm:text-sm mt-1 max-w-3xl leading-relaxed">
+                রিসেলার ভেরিফিকেশন ফি, প্ল্যাটফর্ম ফি এবং শেয়ারহোল্ডারদের পরিশোধিত অর্থ ও অবশিষ্ট ব্যালেন্সের সমন্বিত হিসাব। এখান থেকে অ্যাডমিন যেকোনো ফি পরিবর্তন করতে পারেন এবং পুরো কোম্পানির আর্থিক চিত্র নিয়ন্ত্রণ করতে পারেন।
+              </p>
+            </div>
+            <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none translate-x-10 translate-y-10">
+              <Coins className="w-80 h-80 text-white" />
+            </div>
+          </div>
+
+          {/* 6 Integrated Financial Summary Cards (Requirement 5) */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+            {/* 1. Shareholder Verified Capital */}
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs">
+              <div className="flex items-center gap-1.5 text-slate-500 text-[10px] font-bold uppercase tracking-wider">
+                <Building2 className="w-3.5 h-3.5 text-primary-main" />
+                <span>শেয়ার মূলধন</span>
+              </div>
+              <div className="text-xl font-black text-slate-900 mt-1.5">
+                ৳{(metrics?.totalVerifiedSharePayments || 0).toLocaleString()}
+              </div>
+              <span className="text-[10px] text-slate-500 block mt-0.5">
+                অনুমোদিত {metrics?.approvedShareholders || 0} শেয়ারহোল্ডার
+              </span>
+            </div>
+
+            {/* 2. Reseller Verification Revenue */}
+            <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200 shadow-2xs">
+              <div className="flex items-center gap-1.5 text-indigo-700 text-[10px] font-bold uppercase tracking-wider">
+                <Users className="w-3.5 h-3.5 text-indigo-600" />
+                <span>রিসেলার ভেরিফিকেশন</span>
+              </div>
+              <div className="text-xl font-black text-indigo-950 mt-1.5">
+                ৳{(financialOverview?.resellerVerification.totalRevenue || 0).toLocaleString()}
+              </div>
+              <span className="text-[10px] text-indigo-700 font-semibold block mt-0.5">
+                ভেরিফাইড: {financialOverview?.resellerVerification.approvedCount || 0} জন
+              </span>
+            </div>
+
+            {/* 3. Platform Fee Revenue */}
+            <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 shadow-2xs">
+              <div className="flex items-center gap-1.5 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">
+                <Activity className="w-3.5 h-3.5 text-emerald-600" />
+                <span>প্ল্যাটফর্ম ফি আয়</span>
+              </div>
+              <div className="text-xl font-black text-emerald-950 mt-1.5">
+                ৳{(financialOverview?.platformFee.totalFee || 0).toLocaleString()}
+              </div>
+              <span className="text-[10px] text-emerald-700 font-semibold block mt-0.5">
+                {financialOverview?.platformFee.totalOrders || 0} টি সফল অর্ডার
+              </span>
+            </div>
+
+            {/* 4. Total Company Revenue Inflows */}
+            <div className="p-4 rounded-2xl bg-slate-900 text-white shadow-2xs">
+              <div className="flex items-center gap-1.5 text-sky-300 text-[10px] font-bold uppercase tracking-wider">
+                <TrendingUp className="w-3.5 h-3.5 text-sky-400" />
+                <span>মোট কোম্পানি ইন-ফ্লো</span>
+              </div>
+              <div className="text-xl font-black text-white mt-1.5">
+                ৳{(
+                  (metrics?.totalVerifiedSharePayments || 0) +
+                  (financialOverview?.resellerVerification.totalRevenue || 0) +
+                  (financialOverview?.platformFee.totalFee || 0)
+                ).toLocaleString()}
+              </div>
+              <span className="text-[10px] text-slate-300 block mt-0.5">
+                সার্বমোট রাজস্ব ও ক্যাপিটাল
+              </span>
+            </div>
+
+            {/* 5. Total Shareholder Commissions Paid */}
+            <div className="p-4 rounded-2xl bg-blue-50/70 border border-blue-200 shadow-2xs">
+              <div className="flex items-center gap-1.5 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
+                <ArrowUp className="w-3.5 h-3.5 text-blue-600" />
+                <span>মোট লভ্যাংশ পরিশোধ</span>
+              </div>
+              <div className="text-xl font-black text-blue-950 mt-1.5">
+                ৳{verifiedShareholders.reduce((sum, sh) => sum + Number(sh.paidCommission || 0), 0).toLocaleString()}
+              </div>
+              <span className="text-[10px] text-blue-700 font-semibold block mt-0.5">
+                শেয়ারহোল্ডারদের দেয়া হয়েছে
+              </span>
+            </div>
+
+            {/* 6. Remaining Balance / Liabilities */}
+            <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 shadow-2xs">
+              <div className="flex items-center gap-1.5 text-amber-700 text-[10px] font-bold uppercase tracking-wider">
+                <Wallet className="w-3.5 h-3.5 text-amber-600" />
+                <span>বর্তমান ব্যালেন্স/বাকি</span>
+              </div>
+              <div className="text-xl font-black text-amber-900 mt-1.5">
+                ৳{verifiedShareholders.reduce((sum, sh) => sum + Number(sh.availableWithdrawBalance || 0), 0).toLocaleString()}
+              </div>
+              <span className="text-[10px] text-amber-700 font-semibold block mt-0.5">
+                তোলার যোগ্য অবশিষ্টাংশ
+              </span>
+            </div>
+          </div>
+
+          {/* Dynamic Fee Configuration Cards (Requirements 3 & 4) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Card 1: Reseller Verification Fee (Requirement 3) */}
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-7 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 font-black">
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-black text-slate-900 text-base">
+                        রিসেলার ভেরিফিকেশন ফি নিয়ন্ত্রণ
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Reseller Registration & Verification Fee Hub
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1 rounded-full text-xs font-black bg-indigo-100 text-indigo-800">
+                    বর্তমান ফি: ৳{financialOverview?.resellerVerification.currentFee || 200}
+                  </span>
+                </div>
+
+                {/* Metrics Breakdown */}
+                <div className="grid grid-cols-3 gap-3 my-5 text-center">
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    <span className="text-[10px] text-slate-500 font-bold block">মোট সংগৃহীত ফি</span>
+                    <span className="text-base font-black text-slate-900 mt-0.5 block">
+                      ৳{(financialOverview?.resellerVerification.totalRevenue || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-100">
+                    <span className="text-[10px] text-emerald-700 font-bold block">অনুমোদিত রিসেলার</span>
+                    <span className="text-base font-black text-emerald-900 mt-0.5 block">
+                      {financialOverview?.resellerVerification.approvedCount || 0} জন
+                    </span>
+                  </div>
+                  <div className="p-3 bg-amber-50 rounded-2xl border border-amber-100">
+                    <span className="text-[10px] text-amber-700 font-bold block">অপেক্ষমাণ আবেদন</span>
+                    <span className="text-base font-black text-amber-900 mt-0.5 block">
+                      {financialOverview?.resellerVerification.pendingCount || 0} জন
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                  অ্যাডমিন এখান থেকে প্রয়োজন অনুযায়ী রিসেলার ভেরিফিকেশন ফি বাড়াতে বা কমাতে পারেন। নির্ধারিত ফি সরাসরি রেজিস্ট্রেশন পেজে প্রদর্শিত হবে।
+                </p>
+              </div>
+
+              {/* Edit Form */}
+              <form onSubmit={handleUpdateResellerFeeSubmit} className="pt-4 border-t border-slate-100 space-y-3">
+                <label className="block text-xs font-bold text-slate-800">
+                  নতুন রিসেলার ভেরিফিকেশন ফি নির্ধারণ করুন (৳ BDT)
+                </label>
+                <div className="flex items-center gap-3">
+                  <div className="relative flex-1">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-bold text-slate-400">৳</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={editResellerFeeInput}
+                      onChange={(e) => setEditResellerFeeInput(e.target.value)}
+                      placeholder="e.g. 200"
+                      required
+                      className="w-full pl-8 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={savingFee}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{savingFee ? 'সংরক্ষণ হচ্ছে...' : 'ফি আপডেট করুন'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Card 2: Platform Fee (Requirement 4) */}
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-7 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 font-black">
+                      <Calculator className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-black text-slate-900 text-base">
+                        প্ল্যাটফর্ম ফি নিয়ন্ত্রণ ও অর্ডার হিসাব
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Platform Fee Governance & Vendor Accounting
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-800">
+                    প্রতি অর্ডার: ৳{financialOverview?.platformFee.feePerOrder || 5}
+                  </span>
+                </div>
+
+                {/* Metrics Breakdown */}
+                <div className="grid grid-cols-3 gap-3 my-5 text-center">
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    <span className="text-[10px] text-slate-500 font-bold block">মোট প্ল্যাটফর্ম ফি</span>
+                    <span className="text-base font-black text-slate-900 mt-0.5 block">
+                      ৳{(financialOverview?.platformFee.totalFee || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-100">
+                    <span className="text-[10px] text-emerald-700 font-bold block">পরিশোধিত/জমা</span>
+                    <span className="text-base font-black text-emerald-900 mt-0.5 block">
+                      ৳{(financialOverview?.platformFee.paidFee || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-amber-50 rounded-2xl border border-amber-100">
+                    <span className="text-[10px] text-amber-700 font-bold block">বকেয়া প্ল্যাটফর্ম ফি</span>
+                    <span className="text-base font-black text-amber-900 mt-0.5 block">
+                      ৳{(financialOverview?.platformFee.dueFee || 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                  অর্ডারে প্রযোজ্য প্ল্যাটফর্ম ফি যেকোনো সময় সমন্বয় করতে পারবেন। সফলভাবে ডেলিভারকৃত মোট অর্ডারের সংখ্যার ভিত্তিতে এই ফি গণনা করা হয়।
+                </p>
+              </div>
+
+              {/* Edit Form */}
+              <form onSubmit={handleUpdatePlatformFeeSubmit} className="pt-4 border-t border-slate-100 space-y-3">
+                <label className="block text-xs font-bold text-slate-800">
+                  প্রতি সফল ডেলিভারিতে প্ল্যাটফর্ম ফি (৳ BDT)
+                </label>
+                <div className="flex items-center gap-3">
+                  <div className="relative flex-1">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-bold text-slate-400">৳</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.5"
+                      value={editPlatformFeeInput}
+                      onChange={(e) => setEditPlatformFeeInput(e.target.value)}
+                      placeholder="e.g. 5"
+                      required
+                      className="w-full pl-8 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={savingFee}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{savingFee ? 'সংরক্ষণ হচ্ছে...' : 'ফি আপডেট করুন'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          {/* Complete Financial Overview Table (Requirement 5) */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-8">
+            <h3 className="text-base font-black text-slate-900 mb-1 flex items-center gap-2">
+              <PieChart className="w-5 h-5 text-indigo-600" />
+              <span>সার্বিক আর্থিক চিত্র ও খাতভিত্তিক বিবরণী (Unified Financial Audit)</span>
+            </h3>
+            <p className="text-xs text-slate-500 mb-6">
+              শেয়ারহোল্ডার পেমেন্ট, রিসেলার ভেরিফিকেশন এবং প্ল্যাটফর্ম ফির একক সমন্বিত ব্যালেন্স শিট
+            </p>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-100">
+                  <tr>
+                    <th className="py-3 px-4">খাত (Sector)</th>
+                    <th className="py-3 px-4">মোট সংগৃহীত / আয় (Inflow)</th>
+                    <th className="py-3 px-4">পরিশোধিত / বিতরণকৃত (Outflow)</th>
+                    <th className="py-3 px-4">অবশিষ্ট স্থিতি / বকেয়া (Balance / Due)</th>
+                    <th className="py-3 px-4 text-right">স্ট্যাটাস</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  <tr className="hover:bg-slate-50/70">
+                    <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-primary-main" />
+                      <span>শেয়ারহোল্ডার ইকুইটি ও লভ্যাংশ</span>
+                    </td>
+                    <td className="py-3.5 px-4 font-bold text-emerald-700">
+                      ৳{(metrics?.totalVerifiedSharePayments || 0).toLocaleString()} (মূলধন)
+                    </td>
+                    <td className="py-3.5 px-4 font-bold text-blue-700">
+                      ৳{verifiedShareholders.reduce((s, sh) => s + Number(sh.paidCommission || 0), 0).toLocaleString()} (পরিশোধিত)
+                    </td>
+                    <td className="py-3.5 px-4 font-bold text-amber-700">
+                      ৳{verifiedShareholders.reduce((s, sh) => s + Number(sh.availableWithdrawBalance || 0), 0).toLocaleString()} (ব্যালেন্স)
+                    </td>
+                    <td className="py-3.5 px-4 text-right">
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                        সক্রিয় ও নিরীক্ষিত
+                      </span>
+                    </td>
+                  </tr>
+
+                  <tr className="hover:bg-slate-50/70">
+                    <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2">
+                      <Users className="w-4 h-4 text-indigo-600" />
+                      <span>রিসেলার ভেরিফিকেশন ফি</span>
+                    </td>
+                    <td className="py-3.5 px-4 font-bold text-emerald-700">
+                      ৳{(financialOverview?.resellerVerification.totalRevenue || 0).toLocaleString()}
+                    </td>
+                    <td className="py-3.5 px-4 text-slate-400 font-mono">
+                      ৳০ (১০০% আয় সংরক্ষিত)
+                    </td>
+                    <td className="py-3.5 px-4 font-bold text-emerald-700">
+                      ৳{(financialOverview?.resellerVerification.totalRevenue || 0).toLocaleString()} (জমা তহবিল)
+                    </td>
+                    <td className="py-3.5 px-4 text-right">
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                        {financialOverview?.resellerVerification.approvedCount || 0} জন অনুমোদিত
+                      </span>
+                    </td>
+                  </tr>
+
+                  <tr className="hover:bg-slate-50/70">
+                    <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-emerald-600" />
+                      <span>অর্ডার প্ল্যাটফর্ম ফি</span>
+                    </td>
+                    <td className="py-3.5 px-4 font-bold text-emerald-700">
+                      ৳{(financialOverview?.platformFee.totalFee || 0).toLocaleString()}
+                    </td>
+                    <td className="py-3.5 px-4 text-slate-400 font-mono">
+                      ৳{(financialOverview?.platformFee.paidFee || 0).toLocaleString()} (পরিশোধিত)
+                    </td>
+                    <td className="py-3.5 px-4 font-bold text-amber-700">
+                      ৳{(financialOverview?.platformFee.dueFee || 0).toLocaleString()} (বকেয়া ফি)
+                    </td>
+                    <td className="py-3.5 px-4 text-right">
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                        {financialOverview?.platformFee.totalOrders || 0} ডেলিভারি
+                      </span>
+                    </td>
+                  </tr>
+
+                  {/* Summary Totals Row */}
+                  <tr className="bg-slate-50/80 font-black text-slate-900 border-t-2 border-slate-200">
+                    <td className="py-4 px-4 text-sm uppercase tracking-wider text-slate-900">
+                      সর্বমোট আর্থিক সারসংক্ষেপ (Grand Total)
+                    </td>
+                    <td className="py-4 px-4 text-sm text-emerald-800 font-black">
+                      ৳{(
+                        (metrics?.totalVerifiedSharePayments || 0) +
+                        (financialOverview?.resellerVerification.totalRevenue || 0) +
+                        (financialOverview?.platformFee.totalFee || 0)
+                      ).toLocaleString()}
+                    </td>
+                    <td className="py-4 px-4 text-sm text-blue-800 font-black">
+                      ৳{verifiedShareholders.reduce((s, sh) => s + Number(sh.paidCommission || 0), 0).toLocaleString()}
+                    </td>
+                    <td className="py-4 px-4 text-sm text-amber-800 font-black">
+                      ৳{(
+                        verifiedShareholders.reduce((s, sh) => s + Number(sh.availableWithdrawBalance || 0), 0) +
+                        (financialOverview?.platformFee.dueFee || 0)
+                      ).toLocaleString()}
+                    </td>
+                    <td className="py-4 px-4 text-right">
+                      <span className="px-3 py-1 rounded-full text-xs font-black bg-slate-900 text-white">
+                        RJ WORLD BD
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 4: SHARE AVAILABILITY & PRICE POOL (TASK 3)
       ========================================================================== */}
       {activeTab === 'availability' && metrics && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2019,6 +2638,232 @@ export default function AdminShareholderManagement() {
                   className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md"
                 >
                   Record Adjustment
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* =========================================================================
+          SHAREHOLDER PAYMENT EDIT MODAL (REQUIREMENTS 1 & 2)
+      ========================================================================== */}
+      {editPaymentModalShareholder && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-slate-200">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
+                  <BadgeDollarSign className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-lg">
+                    শেয়ারহোল্ডার পেমেন্ট ও ব্যালেন্স এডিট
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Shareholder Payment Management & Direct Dashboard Sync
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditPaymentModalShareholder(null)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Shareholder Info Card */}
+            <div className="my-4 p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-slate-900 text-sm">
+                    {editPaymentModalShareholder.shareholderName}
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                    ID: {editPaymentModalShareholder.shareholderId || editPaymentModalShareholder.userId}
+                  </div>
+                  {editPaymentModalShareholder.phone && (
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      📞 {editPaymentModalShareholder.phone}
+                    </div>
+                  )}
+                </div>
+                <div className="text-right">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-black bg-sky-100 text-sky-800">
+                    {editPaymentModalShareholder.activeSharesPercent}% শেয়ার
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-1">
+                    মূলধন: ৳{editPaymentModalShareholder.portfolioValue?.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Notice */}
+            <div className="mb-4 p-3 rounded-xl bg-blue-50/80 border border-blue-200 flex items-start gap-2.5 text-xs text-blue-900">
+              <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <p className="leading-relaxed">
+                অ্যাডমিন এখানে যে পরিমাণ টাকা নির্ধারণ করে Save করবেন, ঠিক সেই পরিমাণ টাকা এই শেয়ারহোল্ডারের ড্যাশবোর্ডে স্বয়ংক্রিয়ভাবে প্রদর্শিত হবে। প্রত্যেকের হিসাব আলাদা ও সুরক্ষিত থাকবে।
+              </p>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handlePaymentEditSubmit} className="space-y-4 text-xs">
+              {/* Field 1: Current Available Balance */}
+              <div>
+                <label className="block text-slate-800 font-bold mb-1 flex items-center justify-between">
+                  <span>১. বর্তমান ব্যালেন্স (তোলার যোগ্য ব্যালেন্স) [৳ BDT]</span>
+                  <span className="text-[10px] text-emerald-600 font-bold">Dashboard এ দেখাবে</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-black text-slate-400">৳</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={editPaymentBalance}
+                    onChange={(e) => setEditPaymentBalance(e.target.value)}
+                    required
+                    className="w-full pl-8 pr-4 py-2.5 bg-white border border-slate-300 rounded-xl font-black text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-2xs"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  এই টাকা শেয়ারহোল্ডার তার ড্যাশবোর্ডে "বর্তমান তোলার যোগ্য ব্যালেন্স" হিসেবে দেখতে পারবেন।
+                </p>
+              </div>
+
+              {/* Field 2 & 3: Total Earned & Total Paid in 2 columns */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-800 font-bold mb-1">
+                    ২. মোট প্রাপ্তি / অর্জিত লভ্যাংশ [৳]
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-black text-slate-400">৳</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={editPaymentEarned}
+                      onChange={(e) => setEditPaymentEarned(e.target.value)}
+                      required
+                      className="w-full pl-8 pr-3 py-2 bg-white border border-slate-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">মোট কত টাকা লাভ পেয়েছে</span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-800 font-bold mb-1">
+                    ৩. পরিশোধিত অর্থ (Paid Out) [৳]
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-black text-slate-400">৳</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={editPaymentPaid}
+                      onChange={(e) => setEditPaymentPaid(e.target.value)}
+                      required
+                      className="w-full pl-8 pr-3 py-2 bg-white border border-slate-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">মোট কত টাকা পেমেন্ট করা হয়েছে</span>
+                </div>
+              </div>
+
+              {/* Calculated Due Display */}
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 block">
+                    স্বয়ংক্রিয় বাকি হিসাব (Remaining Due)
+                  </span>
+                  <span className="text-xs text-amber-900">
+                    (মোট প্রাপ্তি − মোট পরিশোধিত অর্থ)
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-base font-black text-amber-900">
+                    ৳{Math.max(0, (Number(editPaymentEarned) || 0) - (Number(editPaymentPaid) || 0)).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div>
+                <span className="block text-[11px] font-bold text-slate-600 mb-1.5">
+                  দ্রুত ব্যালেন্স পরিবর্তন শর্টকাট:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditPaymentBalance(String((Number(editPaymentBalance) || 0) + 1000))}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[10px] transition-colors"
+                  >
+                    +১,০০০ ৳
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPaymentBalance(String((Number(editPaymentBalance) || 0) + 5000))}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[10px] transition-colors"
+                  >
+                    +৫,০০০ ৳
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPaymentBalance(String((Number(editPaymentBalance) || 0) + 10000))}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[10px] transition-colors"
+                  >
+                    +১০,০০০ ৳
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const earned = Number(editPaymentEarned) || 0;
+                      setEditPaymentPaid(String(earned));
+                      setEditPaymentBalance('0');
+                    }}
+                    className="px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold rounded-lg text-[10px] transition-colors"
+                  >
+                    বকেয়া সম্পূর্ণ পরিশোধ করুন (Clear Due)
+                  </button>
+                </div>
+              </div>
+
+              {/* Field 4: Admin Notes */}
+              <div>
+                <label className="block text-slate-800 font-bold mb-1">
+                  ৪. পেমেন্ট নোট / রেফারেন্স (ঐচ্ছিক)
+                </label>
+                <input
+                  type="text"
+                  value={editPaymentNotes}
+                  onChange={(e) => setEditPaymentNotes(e.target.value)}
+                  placeholder="যেমন: মার্চ মাসের লভ্যাংশ সমন্বয় অথবা ব্যাংক রেফারেন্স..."
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary-main"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditPaymentModalShareholder(null)}
+                  disabled={savingPayment}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPayment}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{savingPayment ? 'সংরক্ষণ হচ্ছে...' : 'পেমেন্ট সংরক্ষণ করুন'}</span>
                 </button>
               </div>
             </form>

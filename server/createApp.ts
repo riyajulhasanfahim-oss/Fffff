@@ -6576,6 +6576,22 @@ app.use((req, res, next) => {
             ? 'Application Rejected' 
             : 'Inactive';
 
+      const earnedFinal = portfolio?.totalEarnedCommission !== undefined && !isNaN(Number(portfolio.totalEarnedCommission))
+        ? Number(portfolio.totalEarnedCommission)
+        : totalEarnedCommission;
+
+      const paidFinal = portfolio?.paidCommission !== undefined && !isNaN(Number(portfolio.paidCommission))
+        ? Number(portfolio.paidCommission)
+        : paidCommission;
+
+      const availableFinal = portfolio?.availableWithdrawBalance !== undefined && !isNaN(Number(portfolio.availableWithdrawBalance))
+        ? Number(portfolio.availableWithdrawBalance)
+        : Math.max(0, pendingCommission - totalPendingWithdrawals);
+
+      const pendingFinal = portfolio?.pendingCommission !== undefined && !isNaN(Number(portfolio.pendingCommission))
+        ? Number(portfolio.pendingCommission)
+        : Math.max(0, earnedFinal - paidFinal);
+
       return res.json({
         success: true,
         authenticatedUid,
@@ -6593,11 +6609,11 @@ app.use((req, res, next) => {
           approvedSharePercentage,
           totalAmountPaidForApprovedShares,
           totalEligibleRevenue,
-          totalEarnedCommission,
-          pendingCommission,
-          approvedCommission,
-          paidCommission,
-          availableWithdrawBalance: Math.max(0, pendingCommission - totalPendingWithdrawals)
+          totalEarnedCommission: earnedFinal,
+          pendingCommission: pendingFinal,
+          approvedCommission: earnedFinal,
+          paidCommission: paidFinal,
+          availableWithdrawBalance: availableFinal
         },
         revenueSources,
         monthlyIncomeHistory,
@@ -6627,6 +6643,75 @@ app.use((req, res, next) => {
     } catch (err: any) {
       console.error('[Get Shareholder Me Error]:', err);
       return res.status(500).json({ success: false, error: err.message || 'Server error loading shareholder profile.' });
+    }
+  });
+
+  // Admin: Update individual shareholder payment & balance directly
+  app.post('/api/shareholders/admin/update-payment', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const rawAdminEmail = (req.headers['x-admin-email'] as string) || '';
+      let callerEmail = '';
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split('Bearer ')[1].trim();
+        try {
+          const decoded = await getAuth().verifyIdToken(token);
+          callerEmail = decoded.email || '';
+        } catch (_) {}
+      }
+      if (!callerEmail && rawAdminEmail) callerEmail = rawAdminEmail;
+
+      if (!isAllowedAdminEmail(callerEmail)) {
+        return res.status(403).json({ success: false, error: 'Unauthorized. Authorized admin access required.' });
+      }
+
+      const { userId, availableWithdrawBalance, paidCommission, totalEarnedCommission, notes } = req.body || {};
+      if (!userId) {
+        return res.status(400).json({ success: false, error: 'Target userId is required.' });
+      }
+
+      const now = Date.now();
+      const earned = Math.max(0, Number(totalEarnedCommission) || 0);
+      const paid = Math.max(0, Number(paidCommission) || 0);
+      const available = Math.max(0, Number(availableWithdrawBalance) || 0);
+      const pending = Math.max(0, earned - paid);
+
+      const updateData = {
+        availableWithdrawBalance: available,
+        paidCommission: paid,
+        totalEarnedCommission: earned,
+        pendingCommission: pending,
+        lastPaymentUpdate: now,
+        lastUpdatedBy: callerEmail,
+        lastUpdateNotes: (notes || 'Admin Payment Edit').trim(),
+        updatedAt: now
+      };
+
+      try {
+        await getFirestore(CURRENT_FIRESTORE_DATABASE_ID).collection('shareholders').doc(userId).set(updateData, { merge: true });
+      } catch (fsErr) {
+        console.warn('Firestore admin payment write error:', fsErr);
+      }
+
+      // Mirror to RTDB
+      try {
+        await fetch(`${CURRENT_RTDB_BASE}/shareholders/${userId}/wallet.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updateData),
+          signal: AbortSignal.timeout(3000)
+        });
+      } catch (_) {}
+
+      return res.json({
+        success: true,
+        message: 'Shareholder payment updated successfully.',
+        updated: updateData
+      });
+    } catch (err: any) {
+      console.error('[Admin Update Shareholder Payment Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error updating payment.' });
     }
   });
 

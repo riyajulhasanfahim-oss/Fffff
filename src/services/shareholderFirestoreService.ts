@@ -14,6 +14,8 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 
+import { rtdbGet, rtdbSet, rtdbUpdate } from '../lib/rtdb';
+
 export interface ShareholderPortfolioDoc {
   userId: string;
   shareholderName: string;
@@ -27,6 +29,13 @@ export interface ShareholderPortfolioDoc {
   phone?: string;
   guardianName?: string;
   address?: string;
+  availableWithdrawBalance?: number;
+  paidCommission?: number;
+  totalEarnedCommission?: number;
+  pendingCommission?: number;
+  lastPaymentUpdate?: number;
+  lastUpdatedBy?: string;
+  lastUpdateNotes?: string;
 }
 
 export interface SharePaymentDoc {
@@ -675,7 +684,14 @@ export async function getAllShareholdersFromFirestore(): Promise<ShareholderPort
           email: data.email || '',
           phone: data.phone || data.mobile || data.payerMobile || '',
           guardianName: data.guardianName || '',
-          address: data.address || ''
+          address: data.address || '',
+          availableWithdrawBalance: Number(data.availableWithdrawBalance || 0),
+          paidCommission: Number(data.paidCommission || 0),
+          totalEarnedCommission: Number(data.totalEarnedCommission || 0),
+          pendingCommission: Number(data.pendingCommission !== undefined ? data.pendingCommission : Math.max(0, Number(data.totalEarnedCommission || 0) - Number(data.paidCommission || 0))),
+          lastPaymentUpdate: data.lastPaymentUpdate || null,
+          lastUpdatedBy: data.lastUpdatedBy || '',
+          lastUpdateNotes: data.lastUpdateNotes || ''
         });
       }
     });
@@ -904,4 +920,285 @@ export async function adminRejectShareholderInFirestore(app: SharePaymentDoc, re
     console.error('[Admin Firestore Rejection Error]:', err);
     return false;
   }
+}
+
+/**
+ * Admin: Edit and persistently update a specific shareholder's payment amounts in Cloud Firestore.
+ * This guarantees the exact edited amounts reflect immediately on the shareholder's dashboard.
+ */
+export async function adminUpdateShareholderPaymentInFirestore(params: {
+  userId: string;
+  availableWithdrawBalance: number;
+  paidCommission: number;
+  totalEarnedCommission: number;
+  pendingCommission?: number;
+  adminEmail: string;
+  notes?: string;
+}): Promise<boolean> {
+  const now = Date.now();
+  const targetUserId = params.userId.trim();
+  if (!targetUserId) return false;
+
+  const earned = Math.max(0, Number(params.totalEarnedCommission) || 0);
+  const paid = Math.max(0, Number(params.paidCommission) || 0);
+  const available = Math.max(0, Number(params.availableWithdrawBalance) || 0);
+  const pending = params.pendingCommission !== undefined 
+    ? Math.max(0, Number(params.pendingCommission) || 0)
+    : Math.max(0, earned - paid);
+
+  const payload: Partial<ShareholderPortfolioDoc> = {
+    availableWithdrawBalance: available,
+    paidCommission: paid,
+    totalEarnedCommission: earned,
+    pendingCommission: pending,
+    lastPaymentUpdate: now,
+    lastUpdatedBy: params.adminEmail || 'admin',
+    lastUpdateNotes: (params.notes || 'Admin Payment Edit').trim(),
+    updatedAt: now
+  };
+
+  try {
+    // 1. Authoritative Cloud Firestore write
+    const docRef = doc(db, 'shareholders', targetUserId);
+    await setDoc(docRef, payload, { merge: true });
+
+    // 2. Audit Trail & Financial Ledger entry
+    try {
+      const ledgerId = `LEDGER-PAY-${now}-${targetUserId.slice(0, 6)}`;
+      await setDoc(doc(db, 'shareholder_ledger', ledgerId), {
+        id: ledgerId,
+        userId: targetUserId,
+        shareholderId: `RJ-SH-${targetUserId.slice(0, 8).toUpperCase()}`,
+        type: 'admin_payment_adjustment',
+        availableWithdrawBalance: available,
+        paidCommission: paid,
+        totalEarnedCommission: earned,
+        pendingCommission: pending,
+        notes: (params.notes || 'Admin Payment Adjustment').trim(),
+        adminEmail: params.adminEmail,
+        timestamp: now,
+        status: 'ratified'
+      }, { merge: true });
+    } catch (_) {}
+
+    // 3. Administrative Governance Audit Log
+    try {
+      const logId = `AUDIT-${now}-${Math.random().toString(36).substring(2, 6)}`;
+      await setDoc(doc(db, 'shareholder_audit_logs', logId), {
+        id: logId,
+        action: 'ADMIN_SHAREHOLDER_PAYMENT_EDIT',
+        userId: targetUserId,
+        performedBy: params.adminEmail,
+        timestamp: now,
+        changes: {
+          availableWithdrawBalance: available,
+          paidCommission: paid,
+          totalEarnedCommission: earned,
+          pendingCommission: pending
+        },
+        notes: params.notes || ''
+      }, { merge: true });
+    } catch (_) {}
+
+    // 4. In-App Notification for Shareholder
+    try {
+      const notifId = `NOTIF-${now}-${Math.random().toString(36).substring(2, 6)}`;
+      await setDoc(doc(db, 'notifications', notifId), {
+        id: notifId,
+        userId: targetUserId,
+        targetUserId: targetUserId,
+        type: 'shareholder_payment_updated',
+        title: 'Shareholder Payment & Balance Updated',
+        titleBn: 'শেয়ারহোল্ডার পেমেন্ট ব্যালেন্স আপডেট হয়েছে',
+        message: `Your shareholder balance has been updated by administration. Available balance: ৳${available.toLocaleString()}`,
+        messageBn: `অ্যাডমিন আপনার শেয়ারহোল্ডার ব্যালেন্স আপডেট করেছেন। বর্তমান উত্তোলনযোগ্য ব্যালেন্স: ৳${available.toLocaleString()}`,
+        timestamp: now,
+        read: false,
+        status: 'active'
+      }, { merge: true });
+    } catch (_) {}
+
+    // 5. Mirror to RTDB for multi-system compatibility
+    try {
+      await rtdbUpdate(`shareholders/${targetUserId}/wallet`, {
+        availableWithdrawBalance: available,
+        paidCommission: paid,
+        totalEarnedCommission: earned,
+        pendingCommission: pending,
+        updatedAt: now,
+        lastUpdatedBy: params.adminEmail
+      });
+      await rtdbUpdate(`shareholders/${targetUserId}/portfolio`, {
+        availableWithdrawBalance: available,
+        paidCommission: paid,
+        totalEarnedCommission: earned,
+        pendingCommission: pending,
+        updatedAt: now
+      });
+    } catch (_) {}
+
+    // 6. Update local cache if available
+    try {
+      const cachedStr = localStorage.getItem(`rj_shareholder_active_${targetUserId}`);
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        localStorage.setItem(`rj_shareholder_active_${targetUserId}`, JSON.stringify({ ...cached, ...payload }));
+      }
+    } catch (_) {}
+
+    return true;
+  } catch (err) {
+    console.error('[Admin Firestore Payment Edit Error]:', err);
+    return false;
+  }
+}
+
+/**
+ * Admin: Update Reseller Verification Fee across RTDB and Firestore
+ */
+export async function adminUpdateResellerFee(fee: number, adminEmail: string): Promise<boolean> {
+  const cleanFee = Math.max(0, Number(fee) || 0);
+  const now = Date.now();
+  try {
+    // 1. RTDB settings
+    await rtdbSet('settings/reseller/registrationFee', cleanFee).catch(() => {});
+    await rtdbSet('settings/appConfig/resellerRegistrationFee', cleanFee).catch(() => {});
+    
+    // 2. Firestore system config
+    await setDoc(doc(db, 'system_config', 'reseller_fee'), {
+      registrationFee: cleanFee,
+      updatedAt: now,
+      updatedBy: adminEmail
+    }, { merge: true }).catch(() => {});
+
+    return true;
+  } catch (err) {
+    console.error('[adminUpdateResellerFee Error]:', err);
+    return false;
+  }
+}
+
+/**
+ * Admin: Update Platform Fee per Order across RTDB and Firestore
+ */
+export async function adminUpdatePlatformFee(feePerOrder: number, adminEmail: string): Promise<boolean> {
+  const cleanFee = Math.max(0, Number(feePerOrder) || 0);
+  const now = Date.now();
+  try {
+    // 1. RTDB settings
+    await rtdbSet('settings/platform_fee/feePerOrder', cleanFee).catch(() => {});
+    await rtdbSet('settings/appConfig/platformFeePerOrder', cleanFee).catch(() => {});
+
+    // 2. Firestore system config
+    await setDoc(doc(db, 'system_config', 'platform_fee'), {
+      feePerOrder: cleanFee,
+      updatedAt: now,
+      updatedBy: adminEmail
+    }, { merge: true }).catch(() => {});
+
+    return true;
+  } catch (err) {
+    console.error('[adminUpdatePlatformFee Error]:', err);
+    return false;
+  }
+}
+
+/**
+ * Fetch dynamic financial overview including Reseller verification revenue, Platform fees, and current rates
+ */
+export async function getFinancialOverviewData(): Promise<{
+  resellerVerification: {
+    totalRevenue: number;
+    approvedCount: number;
+    pendingCount: number;
+    currentFee: number;
+  };
+  platformFee: {
+    totalFee: number;
+    paidFee: number;
+    dueFee: number;
+    feePerOrder: number;
+    totalOrders: number;
+  };
+}> {
+  let resellerTotal = 0;
+  let resellerApproved = 0;
+  let resellerPending = 0;
+  let currentResellerFee = 200;
+
+  // 1. Fetch Reseller Fee Settings
+  try {
+    const rfSetting = await rtdbGet<any>('settings/reseller');
+    if (rfSetting && rfSetting.registrationFee !== undefined) {
+      currentResellerFee = Number(rfSetting.registrationFee) || 200;
+    } else {
+      const appCfg = await rtdbGet<any>('settings/appConfig');
+      if (appCfg && appCfg.resellerRegistrationFee !== undefined) {
+        currentResellerFee = Number(appCfg.resellerRegistrationFee) || 200;
+      }
+    }
+  } catch (_) {}
+
+  // 2. Fetch Resellers
+  try {
+    const rawResellers = await rtdbGet<Record<string, any>>('resellers');
+    if (rawResellers && typeof rawResellers === 'object') {
+      Object.values(rawResellers).forEach((r: any) => {
+        if (!r) return;
+        const st = (r.status || '').toLowerCase();
+        const ps = (r.paymentStatus || '').toLowerCase();
+        const isApproved = st === 'approved' || st === 'active' || ps === 'verified' || ps === 'approved';
+        if (isApproved) {
+          resellerApproved++;
+          const fee = Number(r.registrationFee || r.fee || r.paymentAmount || currentResellerFee);
+          resellerTotal += fee;
+        } else if (st === 'pending' || ps === 'pending') {
+          resellerPending++;
+        }
+      });
+    }
+  } catch (_) {}
+
+  // 3. Fetch Platform Fees
+  let platformTotal = 0;
+  let platformPaid = 0;
+  let platformDue = 0;
+  let platformFeePerOrder = 5;
+  let platformOrdersCount = 0;
+
+  try {
+    const pfSetting = await rtdbGet<any>('settings/platform_fee');
+    if (pfSetting && pfSetting.feePerOrder !== undefined) {
+      platformFeePerOrder = Number(pfSetting.feePerOrder) || 5;
+    }
+  } catch (_) {}
+
+  try {
+    const vendorFees = await rtdbGet<Record<string, any>>('vendor_platform_fees');
+    if (vendorFees && typeof vendorFees === 'object') {
+      Object.values(vendorFees).forEach((vf: any) => {
+        if (!vf) return;
+        platformTotal += Number(vf.totalPlatformFee || 0);
+        platformPaid += Number(vf.paidPlatformFee || 0);
+        platformDue += Number(vf.duePlatformFee || 0);
+        platformOrdersCount += Number(vf.totalDeliveredCodOrders || 0);
+      });
+    }
+  } catch (_) {}
+
+  return {
+    resellerVerification: {
+      totalRevenue: resellerTotal,
+      approvedCount: resellerApproved,
+      pendingCount: resellerPending,
+      currentFee: currentResellerFee
+    },
+    platformFee: {
+      totalFee: platformTotal,
+      paidFee: platformPaid,
+      dueFee: platformDue,
+      feePerOrder: platformFeePerOrder,
+      totalOrders: platformOrdersCount
+    }
+  };
 }

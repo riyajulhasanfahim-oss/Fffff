@@ -266,18 +266,38 @@ export default function ShareholderDashboard() {
 
         const currentShareholderId = `RJ-SH-${user.uid.slice(0, 8).toUpperCase()}`;
 
-        // Assemble unified summary (Section B & C)
+        // Assemble unified summary (Section B & C) with authoritative Firestore values
+        const earned = fsPortfolio?.totalEarnedCommission !== undefined && !isNaN(Number(fsPortfolio.totalEarnedCommission))
+          ? Number(fsPortfolio.totalEarnedCommission)
+          : (serverData?.summary?.totalEarnedCommission || 0);
+
+        const paid = fsPortfolio?.paidCommission !== undefined && !isNaN(Number(fsPortfolio.paidCommission))
+          ? Number(fsPortfolio.paidCommission)
+          : (serverData?.summary?.paidCommission || 0);
+
+        const available = fsPortfolio?.availableWithdrawBalance !== undefined && !isNaN(Number(fsPortfolio.availableWithdrawBalance))
+          ? Number(fsPortfolio.availableWithdrawBalance)
+          : (serverData?.summary?.availableWithdrawBalance !== undefined
+              ? Number(serverData.summary.availableWithdrawBalance)
+              : Math.max(0, earned - paid));
+
+        const pending = fsPortfolio?.pendingCommission !== undefined && !isNaN(Number(fsPortfolio.pendingCommission))
+          ? Number(fsPortfolio.pendingCommission)
+          : (serverData?.summary?.pendingCommission !== undefined
+              ? Number(serverData.summary.pendingCommission)
+              : Math.max(0, earned - paid));
+
         setSummary({
           shareholderId: currentShareholderId,
           shareholderStatus: 'Active Shareholder',
           approvedSharePercentage: approvedSharePercent,
           totalAmountPaidForApprovedShares: totalPaid,
           totalEligibleRevenue: fsRevenue.totalEligibleRevenue || serverData?.summary?.totalEligibleRevenue || 0,
-          totalEarnedCommission: serverData?.summary?.totalEarnedCommission || 0,
-          pendingCommission: serverData?.summary?.pendingCommission || 0,
-          approvedCommission: serverData?.summary?.approvedCommission || 0,
-          paidCommission: serverData?.summary?.paidCommission || 0,
-          availableWithdrawBalance: serverData?.summary?.availableWithdrawBalance || 0
+          totalEarnedCommission: earned,
+          pendingCommission: pending,
+          approvedCommission: earned,
+          paidCommission: paid,
+          availableWithdrawBalance: available
         });
 
         // Revenue Sources Breakdown (Sections F & G)
