@@ -774,16 +774,15 @@ export default function AdminNotifications() {
                     />
 
                     <div className="flex items-center gap-2">
-                      <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer transition-colors">
+                      <a
+                        href="https://digantstudio.in/image-to-link.html"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer transition-colors no-underline"
+                      >
                         <Upload className="w-3.5 h-3.5" />
                         <span>ডিভাইস থেকে আপলোড</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleFileUpload}
-                          className="hidden"
-                        />
-                      </label>
+                      </a>
 
                       {imageUrlInput && (
                         <button

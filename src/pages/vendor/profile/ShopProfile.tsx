@@ -1248,17 +1248,15 @@ export default function ShopProfile() {
                         </button>
                       )}
                     </div>
-                    <label className={`shrink-0 flex items-center justify-center px-2.5 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl cursor-pointer hover:bg-slate-100 transition-colors font-medium text-xs ${uploadingImages['logo'] ? 'opacity-70 pointer-events-none' : ''}`}>
-                      {uploadingImages['logo'] ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <UploadCloud className="w-3.5 h-3.5 mr-1" />}
-                      <span>{uploadingImages['logo'] ? '...' : 'Upload'}</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => handleImageUpload('logo', e)}
-                        disabled={uploadingImages['logo']}
-                      />
-                    </label>
+                    <a
+                      href="https://digantstudio.in/image-to-link.html"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 flex items-center justify-center px-2.5 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl cursor-pointer hover:bg-slate-100 transition-colors font-medium text-xs no-underline"
+                    >
+                      <UploadCloud className="w-3.5 h-3.5 mr-1" />
+                      <span>Upload</span>
+                    </a>
                   </div>
                 </div>
               </div>

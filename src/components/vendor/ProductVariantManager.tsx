@@ -437,19 +437,15 @@ export default function ProductVariantManager({
                         </div>
                       )}
 
-                      <label
+                      <a
+                        href="https://digantstudio.in/image-to-link.html"
+                        target="_blank"
+                        rel="noopener noreferrer"
                         title="Upload color-specific image"
-                        className="absolute inset-0 bg-black/40 text-white flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
+                        className="absolute inset-0 bg-black/40 text-white flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity cursor-pointer no-underline"
                       >
                         <UploadCloud className="w-4 h-4" />
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => handleColorImageUpload(col.id, e)}
-                          disabled={uploadingColorId === col.id}
-                        />
-                      </label>
+                      </a>
                     </div>
 
                     <div className="flex-1 min-w-0 space-y-1">
@@ -478,16 +474,14 @@ export default function ProductVariantManager({
                           placeholder="Image URL (optional)"
                           className="text-[10px] text-gray-600 bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5 w-full focus:bg-white focus:outline-none"
                         />
-                        <label className="text-[10px] bg-slate-100 text-slate-700 hover:bg-slate-200 px-2 py-0.5 rounded cursor-pointer shrink-0 font-medium">
+                        <a
+                          href="https://digantstudio.in/image-to-link.html"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] bg-slate-100 text-slate-700 hover:bg-slate-200 px-2 py-0.5 rounded cursor-pointer shrink-0 font-medium no-underline inline-block"
+                        >
                           Upload
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={(e) => handleColorImageUpload(col.id, e)}
-                            disabled={uploadingColorId === col.id}
-                          />
-                        </label>
+                        </a>
                       </div>
                     </div>
                   </div>
