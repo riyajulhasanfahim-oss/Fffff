@@ -172,7 +172,7 @@ export default function PaymentMethodSelectionModal({
 
                 {/* Option 2: WhatsApp Support */}
                 <a
-                  href="https://wa.me/8801864670673"
+                  href="https://wa.me/8801824132707"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full border border-gray-200 hover:border-emerald-300 rounded-xl p-2.5 sm:p-3 flex items-center gap-2.5 sm:gap-3 bg-white hover:bg-emerald-50/30 active:scale-[0.99] transition-all shadow-2xs text-left cursor-pointer group no-underline block"
@@ -192,7 +192,7 @@ export default function PaymentMethodSelectionModal({
                   <div className="min-w-0 flex-1 flex flex-wrap items-center justify-between gap-1">
                     <div>
                       <span className="text-xs sm:text-sm font-bold text-gray-800 group-hover:text-emerald-700 transition-colors flex items-center gap-1.5">
-                        WhatsApp: <span className="font-extrabold text-gray-900">01864670673</span>
+                        WhatsApp: <span className="font-extrabold text-gray-900">01824132707</span>
                       </span>
                       <p className="text-[10px] sm:text-[11px] text-gray-500 font-medium leading-tight mt-0.5">
                         পেমেন্ট ও অর্ডার সহায়তায় সরাসরি হোয়াটসঅ্যাপে কথা বলুন
