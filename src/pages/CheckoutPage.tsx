@@ -1626,11 +1626,12 @@ export default function CheckoutPage() {
     const expectedAmount = paymentMethod === 'only_delivery_charge' ? shippingCharge : grandTotal;
     const invoiceId = currentInvoiceId || 'S2N4HE603308';
     setLoading(true);
+    setPaymentErrorMessage('');
     try {
       const timeoutPromise = new Promise<any>((_, reject) => {
         setTimeout(() => {
-          reject(new Error('Payment verification timed out. Please try again.'));
-        }, 3500);
+          reject(new Error('verification_timeout'));
+        }, 16000);
       });
 
       const result = await Promise.race([
@@ -1671,6 +1672,8 @@ export default function CheckoutPage() {
           errorMsg = result.message || 'পেমেন্ট মেথড সঠিক নয়! সঠিক পেমেন্ট মেথড ব্যবহার করুন।';
         } else if (result.rejectionReason === 'duplicate_transaction') {
           errorMsg = result.message || 'এই ট্রানজেকশন আইডি ইতিমধ্যে ব্যবহৃত হয়েছে!';
+        } else if (result.rejectionReason === 'record_not_found') {
+          errorMsg = result.message || 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
         } else if (result.message) {
           errorMsg = result.message;
         }
@@ -1679,7 +1682,10 @@ export default function CheckoutPage() {
       }
     } catch (err: any) {
       console.error('Payment verification error:', err);
-      const errNotice = 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
+      let errNotice = 'পেমেন্ট যাচাইকরণে সময় বেশি লাগছে, অনুগ্রহ করে কয়েক সেকেন্ড পর আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
+      if (err?.message && err.message !== 'verification_timeout') {
+        errNotice = err.message;
+      }
       setPaymentErrorMessage(errNotice);
       toast.error(errNotice, { duration: 5000 });
     } finally {

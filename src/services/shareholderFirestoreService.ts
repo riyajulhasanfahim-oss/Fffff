@@ -231,49 +231,78 @@ export async function activateVerifiedShareholderInFirestore(params: {
   const now = Date.now();
   const sharePrice = 2000;
 
-  // Retrieve existing portfolio doc if present to increment shares and capital
-  let existingShares = 0;
-  let existingCapital = 0;
-  let existingShareholderName = params.applicantName;
-  let existingEmail = params.email || '';
-  let existingPhone = params.phone || params.payerMobile || '';
-  let existingGuardian = params.guardianName || '';
-  let existingAddress = params.address || '';
+  // Calculate cumulative approved share percentage and capital
+  let cumulativeShares = params.sharePercent;
+  let cumulativeValue = params.totalAmount || (params.sharePercent * sharePrice);
+  let existingAvailableBalance = 0;
+  let existingEarnedCommission = 0;
+  let existingPaidCommission = 0;
+  let existingPendingCommission = 0;
 
   try {
-    const existingSnap = await getDoc(doc(db, 'shareholders', params.userId));
-    if (existingSnap.exists()) {
-      const exData = existingSnap.data() as ShareholderPortfolioDoc;
-      if (exData) {
-        existingShares = Number(exData.activeSharesPercent) || 0;
-        existingCapital = Number(exData.portfolioValue) || (existingShares * sharePrice);
-        if (exData.shareholderName) existingShareholderName = exData.shareholderName;
-        if (exData.email) existingEmail = exData.email;
-        if (exData.phone) existingPhone = exData.phone;
-        if (exData.guardianName) existingGuardian = exData.guardianName;
-        if (exData.address) existingAddress = exData.address;
+    const existingSnap = await getDoc(doc(db, 'shareholders', params.userId)).catch(() => null);
+    if (existingSnap && existingSnap.exists()) {
+      const existingData = existingSnap.data() as ShareholderPortfolioDoc;
+      if (existingData) {
+        existingAvailableBalance = Number(existingData.availableWithdrawBalance) || 0;
+        existingEarnedCommission = Number(existingData.totalEarnedCommission) || 0;
+        existingPaidCommission = Number(existingData.paidCommission) || 0;
+        existingPendingCommission = Number(existingData.pendingCommission) || 0;
+
+        // Query all approved payments for this user to calculate exact cumulative totals
+        const qApproved = query(
+          collection(db, 'share_payments'),
+          where('userId', '==', params.userId),
+          where('paymentStatus', '==', 'Approved')
+        );
+        const approvedSnap = await getDocs(qApproved).catch(() => null);
+        let sumApprovedPercent = 0;
+        let sumApprovedAmount = 0;
+        let alreadyRecordedThisApp = false;
+
+        if (approvedSnap && !approvedSnap.empty) {
+          approvedSnap.forEach((d) => {
+            const data = d.data();
+            if (d.id === params.applicationId || data.applicationId === params.applicationId) {
+              alreadyRecordedThisApp = true;
+            }
+            sumApprovedPercent += Number(data.sharePercent || 0);
+            sumApprovedAmount += Number(data.totalAmount || (data.sharePercent * sharePrice));
+          });
+        }
+
+        if (!alreadyRecordedThisApp) {
+          const basePrev = sumApprovedPercent > 0 ? sumApprovedPercent : (Number(existingData.activeSharesPercent) || 0);
+          const baseValuePrev = sumApprovedAmount > 0 ? sumApprovedAmount : (Number(existingData.portfolioValue) || (basePrev * sharePrice));
+          cumulativeShares = basePrev + params.sharePercent;
+          cumulativeValue = baseValuePrev + (params.totalAmount || (params.sharePercent * sharePrice));
+        } else {
+          cumulativeShares = sumApprovedPercent;
+          cumulativeValue = sumApprovedAmount;
+        }
       }
     }
-  } catch (readErr) {
-    console.warn('[Shareholder Firestore] Note reading existing portfolio:', readErr);
+  } catch (err) {
+    console.warn('[Shareholder Firestore] Error calculating cumulative shares:', err);
   }
-
-  const finalTotalShares = existingShares + params.sharePercent;
-  const finalTotalCapital = existingCapital + (params.totalAmount || (params.sharePercent * sharePrice));
 
   const portfolioDoc: ShareholderPortfolioDoc = {
     userId: params.userId,
-    shareholderName: existingShareholderName,
-    activeSharesPercent: finalTotalShares,
-    portfolioValue: finalTotalCapital,
+    shareholderName: params.applicantName,
+    activeSharesPercent: cumulativeShares,
+    portfolioValue: cumulativeValue,
     status: 'active_shareholder',
+    availableWithdrawBalance: existingAvailableBalance,
+    totalEarnedCommission: existingEarnedCommission,
+    paidCommission: existingPaidCommission,
+    pendingCommission: existingPendingCommission,
     lastVerifiedAt: now,
     updatedAt: now,
     createdAt: now,
-    email: existingEmail,
-    phone: existingPhone,
-    guardianName: existingGuardian,
-    address: existingAddress
+    email: params.email || '',
+    phone: params.phone || params.payerMobile || '',
+    guardianName: params.guardianName || '',
+    address: params.address || ''
   };
 
   const paymentDoc: SharePaymentDoc = {
@@ -303,15 +332,15 @@ export async function activateVerifiedShareholderInFirestore(params: {
     updatedAt: now
   };
 
-  const certificateNumber = `RJ-CERT-${params.userId.slice(0, 8).toUpperCase()}-${String(finalTotalShares * 100).padStart(4, '0')}`;
+  const certificateNumber = `RJ-CERT-${params.userId.slice(0, 8).toUpperCase()}-${String(cumulativeShares * 100).padStart(4, '0')}`;
   const certificateDoc: ShareCertificateDoc = {
     certificateNumber,
     shareholderId: `RJ-SH-${params.userId.slice(0, 8).toUpperCase()}`,
     userId: params.userId,
-    fullName: existingShareholderName,
-    approvedSharePercentage: finalTotalShares,
-    totalAmountPaid: finalTotalCapital,
-    shareUnits: finalTotalShares,
+    fullName: params.applicantName,
+    approvedSharePercentage: cumulativeShares,
+    totalAmountPaid: cumulativeValue,
+    shareUnits: cumulativeShares,
     pricePerShare: 2000,
     transactionId: params.transactionId,
     issueDate: now,
@@ -322,7 +351,7 @@ export async function activateVerifiedShareholderInFirestore(params: {
   };
 
   try {
-    // 1. Write to 'shareholders'
+    // 1. Write to 'shareholders' with cumulative ownership
     await setDoc(doc(db, 'shareholders', params.userId), portfolioDoc, { merge: true });
 
     // 2. Write to 'share_payments'

@@ -1791,11 +1791,27 @@ app.use((req, res, next) => {
     }
   };
 
-  app.put('/api/:path(*)', (req, res) => handleGenericRtdbProxy(req, res, 'PUT'));
-  app.patch('/api/:path(*)', (req, res) => handleGenericRtdbProxy(req, res, 'PATCH'));
+  // Explicit API route prefixes that must not be swallowed by RTDB proxy
+  const EXPLICIT_SERVER_ROUTES = [
+    'payment', 'vendor', 'shareholders', 'admin', 'auth',
+    'courier', 'referral', 'products', 'support', 'search', 'upload-image', 'gateways-status'
+  ];
+
+  const shouldPassToNextHandler = (cleanPath: string) => {
+    const firstSegment = (cleanPath || '').split('/')[0].toLowerCase();
+    return EXPLICIT_SERVER_ROUTES.includes(firstSegment);
+  };
+
+  app.put('/api/:path(*)', (req, res, next) => {
+    if (shouldPassToNextHandler(req.params.path)) return next();
+    return handleGenericRtdbProxy(req, res, 'PUT');
+  });
+  app.patch('/api/:path(*)', (req, res, next) => {
+    if (shouldPassToNextHandler(req.params.path)) return next();
+    return handleGenericRtdbProxy(req, res, 'PATCH');
+  });
   app.post('/api/:path(*)', (req, res, next) => {
-    // If route matches another explicit POST handler, pass through, otherwise proxy to RTDB
-    if (res.headersSent) return;
+    if (shouldPassToNextHandler(req.params.path)) return next();
     return handleGenericRtdbProxy(req, res, 'POST');
   });
 
@@ -5676,6 +5692,29 @@ app.use((req, res, next) => {
           }),
           signal: AbortSignal.timeout(3000)
         }).catch(() => {});
+
+        // Sync cumulative portfolio and payment record to Cloud Firestore
+        try {
+          const fsDb = getFirestore();
+          await fsDb.collection('shareholders').doc(existing.userId).set({
+            userId: existing.userId,
+            shareholderName: existing.applicantName,
+            activeSharesPercent: userTotalPercent,
+            portfolioValue: userTotalPercent * 2000,
+            status: 'active_shareholder',
+            lastVerifiedAt: now,
+            updatedAt: now
+          }, { merge: true });
+
+          await fsDb.collection('share_payments').doc(applicationId).set({
+            paymentStatus: 'Approved',
+            status: 'approved',
+            verifiedAt: now,
+            verifiedBy: adminEmail,
+            isShareholderActive: true,
+            updatedAt: now
+          }, { merge: true });
+        } catch (_) {}
 
         // 4. Record Immutable Financial Ledger Entry (Task 6)
         await recordShareholderLedger({

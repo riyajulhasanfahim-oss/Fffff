@@ -101,7 +101,17 @@ function parseFirestorePaymentItem(id: string, data: any): FirestorePaymentRecor
     ? rawAmt
     : parseFloat(String(rawAmt).replace(/[^0-9.]/g, '')) || 0;
 
-  const rawMethod = data.paymentMethod || data.payment_method || data.method || data.channel || data.provider || data.gateway || '';
+  let rawMethod = data.paymentMethod || data.payment_method || data.method || data.provider || data.gateway || '';
+  if (!rawMethod && data.channel && !/^\d+$/.test(String(data.channel).trim())) {
+    rawMethod = data.channel;
+  }
+  if (!rawMethod && data.rawMessage) {
+    const rawLower = String(data.rawMessage).toLowerCase();
+    if (rawLower.includes('bkash')) rawMethod = 'bkash';
+    else if (rawLower.includes('nagad')) rawMethod = 'nagad';
+    else if (rawLower.includes('rocket')) rawMethod = 'rocket';
+    else if (rawLower.includes('upay')) rawMethod = 'upay';
+  }
   const rawReceivedAt = data.receivedAt || data.syncedAt || data.createdAt || 0;
   const receivedAt = typeof rawReceivedAt === 'number'
     ? rawReceivedAt
@@ -124,10 +134,10 @@ function parseFirestorePaymentItem(id: string, data: any): FirestorePaymentRecor
 
 /**
  * Direct query to Cloud Firestore `payments` collection
- * Single Source of Truth
+ * Single Source of Truth: Cloud Firestore
  */
 async function queryFirestorePaymentsNode(cleanTrxId: string): Promise<FirestorePaymentRecord | null> {
-  const withTimeout = <T>(p: Promise<T>, ms = 1500): Promise<T | null> => {
+  const withTimeout = <T>(p: Promise<T>, ms = 3000): Promise<T | null> => {
     return Promise.race([
       p,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))
@@ -135,26 +145,44 @@ async function queryFirestorePaymentsNode(cleanTrxId: string): Promise<Firestore
   };
 
   try {
-    // 1. Direct document fetch by ID (SMS Reader writes document with docId == cleanTrxId)
+    // 1. Direct document fetch by ID (cleanTrxId uppercase)
     const directDocRef = doc(db, 'payments', cleanTrxId);
-    const directDoc = await withTimeout(getDoc(directDocRef), 1500);
+    const directDoc = await withTimeout(getDoc(directDocRef), 3000);
     if (directDoc && directDoc.exists()) {
       const data = directDoc.data();
-      const rawTrx = data.transactionId || data.trxId || directDoc.id;
-      const itemTrx = String(rawTrx).trim().replace(/^#/, '').replace(/\s+/g, '').toUpperCase();
-      if (itemTrx === cleanTrxId) {
-        return parseFirestorePaymentItem(directDoc.id, data);
+      return parseFirestorePaymentItem(directDoc.id, data);
+    }
+
+    // 2. Direct document fetch by ID (cleanTrxId lowercase)
+    const lowerTrx = cleanTrxId.toLowerCase();
+    if (lowerTrx !== cleanTrxId) {
+      const lowerDocRef = doc(db, 'payments', lowerTrx);
+      const lowerDoc = await withTimeout(getDoc(lowerDocRef), 2000);
+      if (lowerDoc && lowerDoc.exists()) {
+        const data = lowerDoc.data();
+        return parseFirestorePaymentItem(lowerDoc.id, data);
       }
     }
 
-    // 2. Query Firestore 'payments' collection where transactionId == cleanTrxId
-    const q = query(
+    // 3. Query Firestore 'payments' collection where transactionId == cleanTrxId
+    const qTrx = query(
       collection(db, 'payments'),
       where('transactionId', '==', cleanTrxId)
     );
-    const qSnap = await withTimeout(getDocs(q), 1500);
-    if (qSnap && !qSnap.empty) {
-      const firstDoc = qSnap.docs[0];
+    const qTrxSnap = await withTimeout(getDocs(qTrx), 3000);
+    if (qTrxSnap && !qTrxSnap.empty) {
+      const firstDoc = qTrxSnap.docs[0];
+      return parseFirestorePaymentItem(firstDoc.id, firstDoc.data());
+    }
+
+    // 4. Query Firestore 'payments' where id == cleanTrxId or trxId == cleanTrxId
+    const qId = query(
+      collection(db, 'payments'),
+      where('id', '==', cleanTrxId)
+    );
+    const qIdSnap = await withTimeout(getDocs(qId), 2500);
+    if (qIdSnap && !qIdSnap.empty) {
+      const firstDoc = qIdSnap.docs[0];
       return parseFirestorePaymentItem(firstDoc.id, firstDoc.data());
     }
   } catch (err) {
@@ -521,8 +549,8 @@ async function executeBusinessActionSafely(
     return true;
   })();
 
-  // Safe timeout guard on business action writes (4 seconds to allow Firestore persistence)
-  const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 4000));
+  // Safe timeout guard on business action writes (800ms)
+  const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 800));
   return Promise.race([businessPromise, timeoutPromise]);
 }
 
@@ -603,7 +631,7 @@ export async function verifyPaymentAutomatic(
   console.log('[VERIFY] Start verification');
   console.log('[VERIFY] Pending request lookup started');
 
-  const cleanTrxId = (req.transactionId || '').trim().replace(/\s+/g, '').toUpperCase();
+  const cleanTrxId = (req.transactionId || '').trim().replace(/^#/, '').replace(/\s+/g, '').toUpperCase();
   const reqMethod = normalizeMethod(req.paymentMethod);
   const expectedAmount = Math.round(Number(req.expectedAmount) * 100) / 100;
 
@@ -635,23 +663,24 @@ export async function verifyPaymentAutomatic(
   }
 
   // Polling loop against Firestore payments collection (Single Source of Truth)
+  // Allows data fetch/refresh time for SMS Reader and Firestore updates
   const startTime = Date.now();
-  const MAX_WAIT_MS = 3200;
+  const MAX_WAIT_MS = 10000; // 10 seconds active polling window
 
   while (Date.now() - startTime < MAX_WAIT_MS) {
     console.log('[VERIFY] Querying Firestore payments collection');
 
-    // 1. Check direct Firestore first (ultra fast < 200ms)
+    // 1. Check direct Firestore first
     let firestoreRecord = await queryFirestorePaymentsNode(cleanTrxId);
     let serverResData: any = null;
 
-    // 2. If not found in direct Firestore on this check, query server API in background/parallel
+    // 2. Query server API in parallel to catch fast in-memory or REST-synced payments
     if (!firestoreRecord && typeof window !== 'undefined') {
       try {
         const serverRes = await fetch('/api/payment/verify-automatic', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(1500),
+          signal: AbortSignal.timeout(2000),
           body: JSON.stringify({
             transactionId: cleanTrxId,
             paymentMethod: reqMethod,
@@ -672,7 +701,7 @@ export async function verifyPaymentAutomatic(
 
     console.log('[VERIFY] Payment query completed');
 
-    // If server returned explicit mismatch rejection (amount or method mismatch, or duplicate), fail fast!
+    // If server returned explicit mismatch rejection (amount or method mismatch, or duplicate), fail fast with clear explanation!
     if (serverResData?.status === 'rejected' && serverResData?.rejectionReason !== 'record_not_found') {
       console.warn(`[VERIFY] Server returned rejection: ${serverResData.message}`);
       console.log('[VERIFY] Final response sent');
@@ -681,24 +710,6 @@ export async function verifyPaymentAutomatic(
         status: 'rejected',
         message: serverResData.message || 'Payment verification failed. Please check your Transaction ID.',
         rejectionReason: serverResData.rejectionReason || 'amount_mismatch'
-      };
-    }
-
-    // If server confirms record does not exist in Firestore payments collection, fail fast with Bengali message
-    if (!firestoreRecord && serverResData?.rejectionReason === 'record_not_found') {
-      console.warn(`[VERIFY] Payment record not found in Firestore for TrxID: ${cleanTrxId}`);
-      console.log('[VERIFY] Final response sent');
-      return {
-        success: false,
-        status: 'pending',
-        rejectionReason: 'record_not_found',
-        message: 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন',
-        diagnostic: {
-          transactionId: cleanTrxId,
-          expectedMethod: reqMethod,
-          expectedAmount,
-          invoiceId: req.invoiceId
-        }
       };
     }
 
@@ -820,21 +831,19 @@ export async function verifyPaymentAutomatic(
         paymentId: `PAY-${cleanTrxId}`,
         verifiedAt,
         receivedAmount,
-        senderNumber,
+        senderNumber: senderNumber || null,
         pushKey: docId
       };
     }
 
-    // If not found yet and still within timeout window, short 250ms sleep before re-polling
-    if (Date.now() - startTime < MAX_WAIT_MS - 300) {
-      await new Promise(resolve => setTimeout(resolve, 250));
-    } else {
-      break;
+    // If not found yet and still within MAX_WAIT_MS, wait 1000ms before refreshing/retrying
+    if (Date.now() - startTime < MAX_WAIT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
 
-  // Timeout reached and no matching payment record found in Firestore payments collection
-  console.warn(`[VERIFY] Payment record not found in Firestore payments collection for TrxID: ${cleanTrxId}`);
+  // Only after full polling period (10 seconds) without finding record, declare not found
+  console.warn(`[VERIFY] Payment record not found in Firestore after full refresh period: TrxID=${cleanTrxId}`);
   console.log('[VERIFY] Final response sent');
   return {
     success: false,
@@ -845,8 +854,8 @@ export async function verifyPaymentAutomatic(
       transactionId: cleanTrxId,
       expectedMethod: reqMethod,
       expectedAmount,
-      invoiceId: req.invoiceId,
-      elapsedMs: Date.now() - startTime
+      invoiceId: req.invoiceId
     }
   };
 }
+

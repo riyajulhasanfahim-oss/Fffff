@@ -13,15 +13,12 @@ import {
   getShareholderCertificateFromFirestore,
   getShareholderWithdrawalsFromFirestore,
   getEligibleCompanyRevenueFromFirestore,
-  submitShareholderWithdrawalToFirestore
+  submitShareholderWithdrawalToFirestore,
+  activateVerifiedShareholderInFirestore,
+  saveShareholderApplicationToFirestore
 } from '../../services/shareholderFirestoreService';
+import { verifyPaymentAutomatic } from '../../services/automaticPaymentVerificationService';
 import OfficialShareCertificateModal, { CertificateData } from '../../components/shareholder/OfficialShareCertificateModal';
-import PaymentMethodSelectionModal from '../../components/checkout/PaymentMethodSelectionModal';
-import BkashPaymentModal from '../../components/checkout/BkashPaymentModal';
-import NagadPaymentModal from '../../components/checkout/NagadPaymentModal';
-import RocketPaymentModal from '../../components/checkout/RocketPaymentModal';
-import UpayPaymentModal from '../../components/checkout/UpayPaymentModal';
-import { verifyPaymentAutomatic, type VerificationResult } from '../../services/automaticPaymentVerificationService';
 import { 
   Building2, 
   PieChart, 
@@ -29,10 +26,8 @@ import {
   ShieldAlert, 
   ShieldCheck, 
   Clock, 
-  ArrowLeft,
+  ArrowLeft, 
   Plus, 
-  Minus,
-  X,
   FileCheck2, 
   UserCheck, 
   AlertCircle,
@@ -64,7 +59,10 @@ import {
   Send,
   AlertTriangle,
   Info,
-  Check
+  Copy,
+  Sparkles,
+  Zap,
+  X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -174,38 +172,27 @@ export default function ShareholderDashboard() {
   const [withdrawAccount, setWithdrawAccount] = useState<string>('');
   const [withdrawSubmitting, setWithdrawSubmitting] = useState<boolean>(false);
 
+  // Increase Shares State (Requirement 2)
+  const [showIncreaseModal, setShowIncreaseModal] = useState<boolean>(false);
+  const [increaseShares, setIncreaseShares] = useState<number>(1);
+  const [increaseCustomInput, setIncreaseCustomInput] = useState<string>('1');
+  const [increasePaymentMethod, setIncreasePaymentMethod] = useState<'bKash' | 'Nagad' | 'Rocket' | 'Upay'>('bKash');
+  const [increaseTrxId, setIncreaseTrxId] = useState<string>('');
+  const [increaseSenderMobile, setIncreaseSenderMobile] = useState<string>('');
+  const [increaseSubmitting, setIncreaseSubmitting] = useState<boolean>(false);
+  const [increaseSuccessData, setIncreaseSuccessData] = useState<{
+    previousShares: number;
+    addedShares: number;
+    newTotalShares: number;
+    previousCapital: number;
+    addedCapital: number;
+    newTotalCapital: number;
+    transactionId: string;
+    isInstant: boolean;
+  } | null>(null);
+
   // Live polling ref for pending verification
   const pendingPollRef = useRef<any>(null);
-
-  // Increase Shares & Automatic Payment Gateway States (matching Reseller Registration)
-  const [showIncreaseSharesModal, setShowIncreaseSharesModal] = useState<boolean>(false);
-  const [additionalSharePercent, setAdditionalSharePercent] = useState<number>(1);
-  const [increaseShareSubmitting, setIncreaseShareSubmitting] = useState<boolean>(false);
-  const [showPaymentSelectionModal, setShowPaymentSelectionModal] = useState<boolean>(false);
-  const [showBkashModal, setShowBkashModal] = useState<boolean>(false);
-  const [showNagadModal, setShowNagadModal] = useState<boolean>(false);
-  const [showRocketModal, setShowRocketModal] = useState<boolean>(false);
-  const [showUpayModal, setShowUpayModal] = useState<boolean>(false);
-  const [selectedPaymentChannel, setSelectedPaymentChannel] = useState<'bkash' | 'nagad' | 'rocket' | 'upay' | null>(null);
-  const [paymentErrorMessage, setPaymentErrorMessage] = useState<string>('');
-  const [currentInvoiceId, setCurrentInvoiceId] = useState<string>(() => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let inv = 'SHR';
-    for (let i = 0; i < 9; i++) {
-      inv += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return inv;
-  });
-
-  const generateNewInvoiceId = () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let inv = 'SHR';
-    for (let i = 0; i < 9; i++) {
-      inv += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    setCurrentInvoiceId(inv);
-    return inv;
-  };
 
   // Strict Authentication Check
   useEffect(() => {
@@ -562,109 +549,184 @@ export default function ShareholderDashboard() {
     }
   };
 
-  // Handle Increase Shares Automatic Payment Verification (matches Reseller Registration flow)
-  const handleCompleteIncreaseSharePayment = async (channel: 'bkash' | 'nagad' | 'rocket' | 'upay', trxId: string) => {
+  // Handle Increase Shares Submission (Requirement 2)
+  const handleIncreaseSharesSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!user) return;
-    if (!trxId || !trxId.trim()) {
-      setPaymentErrorMessage(language === 'bn' ? 'অনুগ্রহ করে Transaction ID লিখুন।' : 'Please enter the transaction ID.');
+    const additionalPercent = Math.max(1, Number(increaseShares) || 1);
+    const pricePerUnit = 2000;
+    const additionalAmount = additionalPercent * pricePerUnit;
+    const cleanTrx = increaseTrxId.trim().toUpperCase();
+
+    if (!cleanTrx) {
+      toast.error(language === 'bn' ? 'অনুগ্রহ করে Transaction ID (TrxID) প্রদান করুন।' : 'Please enter Transaction ID.');
       return;
     }
 
-    const cleanTrx = trxId.trim().toUpperCase().replace(/\s+/g, '');
-    const payableAmount = additionalSharePercent * 2000;
-    const invId = currentInvoiceId;
-    const applicantFullName = profile?.fullName || profile?.applicantName || userData?.name || user.displayName || 'Shareholder';
-    const applicantPhone = profile?.phone || userData?.phone || '';
-
     try {
-      setIncreaseShareSubmitting(true);
-      setPaymentErrorMessage('');
+      setIncreaseSubmitting(true);
+      const currentOwnedPercent = summary?.approvedSharePercentage || 1;
+      const currentCapitalPaid = summary?.totalAmountPaidForApprovedShares || (currentOwnedPercent * pricePerUnit);
 
-      // Call Automatic Payment Verification with 8-second safety timeout
-      const timeoutPromise = new Promise<VerificationResult>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error('Payment verification timed out. Please try again.'));
-        }, 8000);
+      const targetAppId = `RJ-SH-INC-${user.uid.slice(0, 4).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+      const applicantFullName = profile?.fullName || profile?.applicantName || userData?.name || user.displayName || 'Shareholder Investor';
+
+      // 1. Run automatic verification against SMS reader records
+      const verifyResult = await verifyPaymentAutomatic({
+        transactionId: cleanTrx,
+        paymentMethod: increasePaymentMethod.toLowerCase() as any,
+        expectedAmount: additionalAmount,
+        invoiceId: targetAppId,
+        userId: user.uid,
+        userType: 'shareholder',
+        contextData: {
+          applicationId: targetAppId,
+          applicantName: applicantFullName,
+          fullName: applicantFullName,
+          sharePercent: additionalPercent,
+          shareUnits: additionalPercent,
+          payerMobile: increaseSenderMobile || userData?.phone || '',
+          email: user.email || '',
+          phone: increaseSenderMobile || userData?.phone || '',
+          isAdditionalPurchase: true,
+          previousSharesPercent: currentOwnedPercent
+        }
       });
 
-      const result = await Promise.race([
-        verifyPaymentAutomatic({
-          transactionId: cleanTrx,
-          paymentMethod: channel,
-          expectedAmount: payableAmount,
-          invoiceId: invId,
-          userId: user.uid,
-          userType: 'shareholder',
-          contextData: {
-            applicationId: invId,
-            sharePercent: additionalSharePercent,
-            shareUnits: additionalSharePercent,
-            totalAmount: payableAmount,
-            applicantName: applicantFullName,
-            phone: applicantPhone,
-            email: user.email || '',
-            address: profile?.address || ''
-          }
-        }),
-        timeoutPromise
-      ]);
+      const token = await user.getIdToken().catch(() => '');
 
-      if (result.status === 'verified') {
-        // Payment verified automatically and server-side verified!
-        setShowBkashModal(false);
-        setShowNagadModal(false);
-        setShowRocketModal(false);
-        setShowUpayModal(false);
-        setShowPaymentSelectionModal(false);
-        setShowIncreaseSharesModal(false);
+      if (verifyResult.status === 'verified') {
+        // Payment verified! Add cumulatively into Firestore
+        await activateVerifiedShareholderInFirestore({
+          userId: user.uid,
+          applicationId: targetAppId,
+          applicantName: applicantFullName,
+          sharePercent: additionalPercent,
+          totalAmount: additionalAmount,
+          paymentMethod: increasePaymentMethod,
+          transactionId: cleanTrx,
+          payerMobile: increaseSenderMobile || userData?.phone || '',
+          email: user.email || '',
+          phone: increaseSenderMobile || userData?.phone || ''
+        });
+
+        // Also sync to server endpoint
+        try {
+          await fetch('/api/shareholders/submit-payment', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': user.uid,
+              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify({
+              applicationId: targetAppId,
+              userId: user.uid,
+              applicantName: applicantFullName,
+              sharePercent: additionalPercent,
+              totalAmount: additionalAmount,
+              paymentMethod: increasePaymentMethod,
+              transactionId: cleanTrx,
+              payerMobile: increaseSenderMobile || userData?.phone || '',
+              status: 'approved',
+              paymentStatus: 'Approved'
+            })
+          });
+        } catch (_) {}
+
+        const newTotalShares = currentOwnedPercent + additionalPercent;
+        const newTotalCapital = currentCapitalPaid + additionalAmount;
+
+        setIncreaseSuccessData({
+          previousShares: currentOwnedPercent,
+          addedShares: additionalPercent,
+          newTotalShares,
+          previousCapital: currentCapitalPaid,
+          addedCapital: additionalAmount,
+          newTotalCapital,
+          transactionId: cleanTrx,
+          isInstant: true
+        });
+
+        toast.success(
+          language === 'bn' 
+            ? `অভিনন্দন! আপনার অতিরিক্ত ${additionalPercent}টি শেয়ার সফলভাবে যুক্ত হয়েছে। মোট শেয়ার: ${newTotalShares}%।`
+            : `Success! Added ${additionalPercent} additional shares. Total ownership is now ${newTotalShares}%.`
+        );
+
+        await fetchDashboardData();
+      } else {
+        // Pending admin verification - save separate verified purchase record
+        await saveShareholderApplicationToFirestore({
+          id: targetAppId,
+          applicationId: targetAppId,
+          userId: user.uid,
+          applicantName: applicantFullName,
+          phone: increaseSenderMobile || userData?.phone || '',
+          email: user.email || '',
+          sharePercent: additionalPercent,
+          sharePrice: pricePerUnit,
+          shareUnits: additionalPercent,
+          totalAmount: additionalAmount,
+          paymentMethod: increasePaymentMethod,
+          transactionId: cleanTrx,
+          payerMobile: increaseSenderMobile || userData?.phone || '',
+          submissionTimestamp: Date.now(),
+          paymentStatus: 'Pending Verification',
+          status: 'pending_verification',
+          isShareholderActive: true,
+          isOfficialCertificateIssued: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        } as any);
+
+        try {
+          await fetch('/api/shareholders/submit-payment', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': user.uid,
+              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify({
+              applicationId: targetAppId,
+              userId: user.uid,
+              applicantName: applicantFullName,
+              sharePercent: additionalPercent,
+              totalAmount: additionalAmount,
+              paymentMethod: increasePaymentMethod,
+              transactionId: cleanTrx,
+              payerMobile: increaseSenderMobile || userData?.phone || '',
+              status: 'pending_verification',
+              paymentStatus: 'Pending Verification'
+            })
+          });
+        } catch (_) {}
+
+        setIncreaseSuccessData({
+          previousShares: currentOwnedPercent,
+          addedShares: additionalPercent,
+          newTotalShares: currentOwnedPercent + additionalPercent,
+          previousCapital: currentCapitalPaid,
+          addedCapital: additionalAmount,
+          newTotalCapital: currentCapitalPaid + additionalAmount,
+          transactionId: cleanTrx,
+          isInstant: false
+        });
 
         toast.success(
           language === 'bn'
-            ? `অভিনন্দন! আপনার অতিরিক্ত ${additionalSharePercent}% শেয়ার সফলভাবে যুক্ত হয়েছে।`
-            : `Congratulations! ${additionalSharePercent}% additional share equity successfully added and verified!`,
-          { duration: 5000 }
+            ? 'অতিরিক্ত শেয়ারের পেমেন্ট তথ্য জমা দেওয়া হয়েছে। যাচাই সম্পন্ন হওয়া মাত্রই স্বয়ংক্রিয়ভাবে ব্যালেন্সে যুক্ত হবে।'
+            : 'Additional share payment submitted. It will be added to your ownership immediately upon verification.'
         );
 
-        // Instantly refresh dashboard data to reflect newly increased shares, capital, certificate, and records
         await fetchDashboardData();
-        generateNewInvoiceId();
-      } else if (
-        result.status === 'rejected' &&
-        (result.rejectionReason === 'amount_mismatch' ||
-         result.rejectionReason === 'method_mismatch' ||
-         result.rejectionReason === 'duplicate_transaction')
-      ) {
-        let errorMsg = result.message || 'Payment verification failed.';
-        if (result.rejectionReason === 'amount_mismatch') {
-          errorMsg = language === 'bn' 
-            ? `পেমেন্ট এমাউন্ট সঠিক নয়! প্রত্যাশিত: ৳${payableAmount.toLocaleString()}।`
-            : `Payment amount does not match! Expected: ৳${payableAmount.toLocaleString()}.`;
-        } else if (result.rejectionReason === 'method_mismatch') {
-          errorMsg = language === 'bn' 
-            ? 'পেমেন্ট মেথড সঠিক নয়! অনুগ্রহ করে সঠিক মেথডে টাকা পাঠান।'
-            : 'Payment channel mismatch! Please use the matching payment channel.';
-        } else if (result.rejectionReason === 'duplicate_transaction') {
-          errorMsg = language === 'bn' 
-            ? 'এই ট্রানজেকশন আইডি ইতিমধ্যে ব্যবহৃত হয়েছে! অনুগ্রহ করে নতুন পেমেন্ট করুন।'
-            : 'This Transaction ID has already been utilized. Duplicate payment rejected.';
-        }
-        setPaymentErrorMessage(errorMsg);
-        toast.error(errorMsg, { duration: 6000 });
-      } else {
-        // Unverified / Pending SMS / Not found
-        const msg = language === 'bn'
-          ? 'পেমেন্ট রেকর্ড এখনও পাওয়া যায়নি। অনুগ্রহ করে সঠিক TrxID ও এমাউন্ট মিলিয়ে পুনরায় চেষ্টা করুন।'
-          : 'Payment record not found yet. Please ensure you sent money with exact amount and entered correct TrxID.';
-        setPaymentErrorMessage(msg);
-        toast.error(msg, { duration: 5000 });
       }
     } catch (err: any) {
-      console.error('[Increase Shares Verification Error]:', err);
-      const errMsg = err?.message || 'Verification failed. Please try again.';
-      setPaymentErrorMessage(errMsg);
-      toast.error(errMsg);
+      console.error('Error submitting additional shares:', err);
+      toast.error(err.message || 'Error processing share purchase');
     } finally {
-      setIncreaseShareSubmitting(false);
+      setIncreaseSubmitting(false);
     }
   };
 
@@ -699,19 +761,19 @@ export default function ShareholderDashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans overflow-x-hidden">
       <Header />
 
-      <main className="flex-grow pt-2 sm:pt-5 pb-16 px-2.5 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+      <main className="flex-grow pt-3 sm:pt-6 pb-20 px-3 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
         {/* Top Breadcrumb Navigation */}
-        <div className="flex items-center justify-between gap-1.5 sm:gap-3 text-xs sm:text-sm text-slate-500 mb-2.5 sm:mb-4">
-          <div className="flex items-center gap-1 sm:gap-2 overflow-x-auto py-0.5 no-scrollbar text-[11px] sm:text-xs">
+        <div className="flex items-center justify-between gap-2 sm:gap-3 text-xs sm:text-sm text-slate-500 mb-4 sm:mb-6">
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-1 no-scrollbar">
             <button 
               type="button"
               onClick={() => navigate('/company-share')} 
-              className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-700 hover:text-slate-900 transition-colors shadow-2xs cursor-pointer font-medium shrink-0 text-[11px] sm:text-xs"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:text-slate-900 transition-colors shadow-2xs cursor-pointer font-medium shrink-0 text-xs"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-4 h-4" />
               <span>{language === 'bn' ? 'শেয়ার পোর্টাল' : 'Share Portal'}</span>
             </button>
             <span>/</span>
@@ -721,8 +783,8 @@ export default function ShareholderDashboard() {
               {language === 'bn' ? 'কোম্পানি শেয়ার' : 'Company Share'}
             </Link>
             <span>/</span>
-            <span className="text-slate-900 font-bold shrink-0 truncate max-w-[120px] sm:max-w-none">
-              {language === 'bn' ? 'ড্যাশবোর্ড' : 'Dashboard'}
+            <span className="text-slate-900 font-bold shrink-0">
+              {language === 'bn' ? 'শেয়ারহোল্ডার ড্যাশবোর্ড' : 'Shareholder Dashboard'}
             </span>
           </div>
 
@@ -730,10 +792,10 @@ export default function ShareholderDashboard() {
             type="button"
             onClick={() => fetchDashboardData()}
             disabled={refreshing}
-            className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-[11px] sm:text-xs font-semibold rounded-lg shadow-2xs transition-all cursor-pointer shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg shadow-2xs transition-all cursor-pointer shrink-0"
             title="Refresh Records"
           >
-            <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin text-primary-main' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-primary-main' : ''}`} />
             <span className="hidden sm:inline">{language === 'bn' ? 'রিফ্রেশ' : 'Refresh'}</span>
           </button>
         </div>
@@ -936,19 +998,19 @@ export default function ShareholderDashboard() {
             STATE 3: APPROVED SHAREHOLDER DASHBOARD (COMPLETE SECTIONS A-I)
         ========================================================================== */}
         {dashboardStatus === 'approved' && (
-          <div className="space-y-3 sm:space-y-5">
-            {/* Header Identity Card - Compact & Mobile Friendly */}
-            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-sky-950 text-white rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 lg:p-6 shadow-md border border-slate-800">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] sm:text-xs font-bold border border-emerald-500/30">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <div className="space-y-6">
+            {/* Header Identity Card */}
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-sky-950 text-white rounded-2xl sm:rounded-3xl p-4 sm:p-7 shadow-lg border border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 sm:gap-4">
+                <div className="space-y-1 sm:space-y-1.5">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] sm:text-xs font-bold border border-emerald-500/30">
+                    <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
                     <span>RJ WORLD BD • Verified Shareholder</span>
                   </div>
-                  <h1 className="text-base sm:text-xl md:text-2xl font-black text-white tracking-tight">
+                  <h1 className="text-lg sm:text-2xl md:text-3xl font-black text-white tracking-tight">
                     {profile?.fullName || profile?.applicantName || 'Valued Shareholder'}
                   </h1>
-                  <p className="text-[11px] sm:text-xs text-slate-300 flex items-center gap-2 flex-wrap">
+                  <p className="text-[11px] sm:text-xs text-slate-300 flex items-center gap-2 sm:gap-3 flex-wrap">
                     <span>ID: <strong className="text-white font-mono">{shareholderId}</strong></span>
                     <span>·</span>
                     <span>Ownership: <strong className="text-amber-400 font-bold">{summary?.approvedSharePercentage || 1}%</strong></span>
@@ -957,24 +1019,24 @@ export default function ShareholderDashboard() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 sm:flex sm:items-center gap-1.5 sm:gap-2 w-full sm:w-auto shrink-0 pt-1 sm:pt-0">
+                <div className="flex items-center gap-2 w-full sm:w-auto pt-1 sm:pt-0">
                   <button
                     type="button"
                     onClick={() => {
                       if (certificate) setShowCertificateModal(true);
                       else toast.error(language === 'bn' ? 'সার্টিফিকেট প্রস্তুত হচ্ছে...' : 'Certificate is being prepared.');
                     }}
-                    className="w-full sm:w-auto px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-[11px] sm:text-xs rounded-lg sm:rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1 min-h-[34px] sm:min-h-[38px]"
+                    className="flex-1 sm:flex-initial px-3.5 py-2 sm:px-4 sm:py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
-                    <Award className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{language === 'bn' ? 'সার্টিফিকেট' : 'Certificate'}</span>
+                    <Award className="w-4 h-4" />
+                    <span>{language === 'bn' ? 'সার্টিফিকেট দেখুন' : 'View Certificate'}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveNavTab('withdrawals')}
-                    className="w-full sm:w-auto px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-[11px] sm:text-xs rounded-lg sm:rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 min-h-[34px] sm:min-h-[38px]"
+                    className="flex-1 sm:flex-initial px-3.5 py-2 sm:px-4 sm:py-2.5 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
-                    <Wallet className="w-3.5 h-3.5 shrink-0" />
+                    <Wallet className="w-4 h-4" />
                     <span>{language === 'bn' ? 'উত্তোলন' : 'Withdraw'}</span>
                   </button>
                 </div>
@@ -982,9 +1044,9 @@ export default function ShareholderDashboard() {
             </div>
 
             {/* =========================================================================
-                SECTION I: DASHBOARD NAVIGATION BAR (COMPACT & MOBILE RESPONSIVE)
+                SECTION I: DASHBOARD NAVIGATION BAR (DESKTOP & MOBILE RESPONSIVE)
             ========================================================================== */}
-            <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 p-1 shadow-2xs overflow-x-auto no-scrollbar">
+            <div className="bg-white rounded-2xl border border-slate-200 p-1.5 shadow-2xs overflow-x-auto no-scrollbar">
               <div className="flex items-center gap-1 min-w-max">
                 {navTabs.map((tab) => {
                   const Icon = tab.icon;
@@ -994,16 +1056,16 @@ export default function ShareholderDashboard() {
                       key={tab.id}
                       type="button"
                       onClick={() => setActiveNavTab(tab.id)}
-                      className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
+                      className={`flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
                         isActive
-                          ? 'bg-slate-900 text-white shadow-2xs'
+                          ? 'bg-slate-900 text-white shadow-xs'
                           : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                       }`}
                     >
-                      <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-primary-main' : 'text-slate-400'}`} />
+                      <Icon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isActive ? 'text-primary-main' : 'text-slate-400'}`} />
                       <span>{language === 'bn' ? tab.labelBn : tab.label}</span>
                       {tab.count !== undefined && tab.count > 0 && (
-                        <span className={`px-1 py-0.1 rounded-full text-[9px] font-mono leading-none ${
+                        <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
                           isActive ? 'bg-primary-main text-white' : 'bg-slate-200 text-slate-700'
                         }`}>
                           {tab.count}
@@ -1016,112 +1078,112 @@ export default function ShareholderDashboard() {
             </div>
 
             {/* =========================================================================
-                TAB 1: OVERVIEW (Compact KPIs & Snapshot)
+                TAB 1: OVERVIEW (High-Level KPIs & Snapshot)
             ========================================================================== */}
             {activeNavTab === 'overview' && (
-              <div className="space-y-3 sm:space-y-4">
-                {/* 4 Summary KPI Cards - 2 Columns on Mobile for Compact View */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+              <div className="space-y-4 sm:space-y-6">
+                {/* 4 Summary KPI Cards (Responsive 2 cols on mobile, 4 on desktop) */}
+                <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
                   {/* Share Ownership */}
-                  <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 p-2.5 sm:p-3.5 shadow-2xs">
-                    <div className="flex items-center justify-between text-slate-500 mb-1">
-                      <span className="text-[10px] sm:text-xs font-semibold">Share Ownership</span>
-                      <Coins className="w-3.5 h-3.5 text-primary-main" />
+                  <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1.5">
+                      <span className="text-[11px] sm:text-xs font-semibold">Share Ownership</span>
+                      <Coins className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-primary-main" />
                     </div>
-                    <div className="text-base sm:text-xl lg:text-2xl font-black text-slate-900">
+                    <div className="text-lg sm:text-2xl font-black text-slate-900">
                       {summary?.approvedSharePercentage || 1}%
                     </div>
-                    <p className="text-[9px] sm:text-[11px] text-slate-500 mt-0.5 truncate">
-                      {summary?.approvedSharePercentage || 1} units @ ৳2k/1%
+                    <p className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5">
+                      {summary?.approvedSharePercentage || 1} units @ ৳2,000/1%
                     </p>
                   </div>
 
                   {/* Portfolio Capital Value */}
-                  <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 p-2.5 sm:p-3.5 shadow-2xs">
-                    <div className="flex items-center justify-between text-slate-500 mb-1">
-                      <span className="text-[10px] sm:text-xs font-semibold">Total Paid Capital</span>
-                      <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1.5">
+                      <span className="text-[11px] sm:text-xs font-semibold">Total Paid Capital</span>
+                      <DollarSign className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600" />
                     </div>
-                    <div className="text-base sm:text-xl lg:text-2xl font-black text-slate-900">
+                    <div className="text-lg sm:text-2xl font-black text-slate-900">
                       ৳{Number(summary?.totalAmountPaidForApprovedShares || 2000).toLocaleString()}
                     </div>
-                    <p className="text-[9px] sm:text-[11px] text-emerald-600 font-medium mt-0.5 truncate">
+                    <p className="text-[10px] sm:text-[11px] text-emerald-600 font-medium mt-0.5">
                       Verified & Fully Paid
                     </p>
                   </div>
 
                   {/* Calculated Allocation */}
-                  <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 p-2.5 sm:p-3.5 shadow-2xs">
-                    <div className="flex items-center justify-between text-slate-500 mb-1">
-                      <span className="text-[10px] sm:text-xs font-semibold">Allocation</span>
-                      <TrendingUp className="w-3.5 h-3.5 text-sky-600" />
+                  <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1.5">
+                      <span className="text-[11px] sm:text-xs font-semibold">Calculated Allocation</span>
+                      <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-600" />
                     </div>
-                    <div className="text-base sm:text-xl lg:text-2xl font-black text-slate-900">
+                    <div className="text-lg sm:text-2xl font-black text-slate-900">
                       ৳{Number(summary?.totalEarnedCommission || 0).toLocaleString()}
                     </div>
-                    <p className="text-[9px] sm:text-[11px] text-slate-500 mt-0.5 truncate">
-                      From revenue pools
+                    <p className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5">
+                      From recorded pools
                     </p>
                   </div>
 
                   {/* Available Withdrawable Balance */}
-                  <div className="bg-gradient-to-br from-slate-900 to-sky-950 text-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3.5 shadow-2xs">
-                    <div className="flex items-center justify-between text-slate-300 mb-1">
-                      <span className="text-[10px] sm:text-xs font-semibold">Withdrawable</span>
-                      <Wallet className="w-3.5 h-3.5 text-amber-400" />
+                  <div className="bg-gradient-to-br from-slate-900 to-sky-950 text-white rounded-2xl p-3 sm:p-4 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-300 mb-1.5">
+                      <span className="text-[11px] sm:text-xs font-semibold">Withdrawable</span>
+                      <Wallet className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
                     </div>
-                    <div className="text-base sm:text-xl lg:text-2xl font-black text-white">
+                    <div className="text-lg sm:text-2xl font-black text-white">
                       ৳{Number(summary?.availableWithdrawBalance || 0).toLocaleString()}
                     </div>
-                    <div className="flex items-center justify-between mt-0.5 text-[9px] sm:text-[11px]">
+                    <div className="flex items-center justify-between mt-0.5 text-[10px] sm:text-[11px]">
                       <span className="text-slate-400">Min: ৳100</span>
                       <button
                         type="button"
                         onClick={() => setActiveNavTab('withdrawals')}
                         className="text-amber-400 font-bold hover:underline"
                       >
-                        Payout &rarr;
+                        Withdraw &rarr;
                       </button>
                     </div>
                   </div>
                 </div>
 
                 {/* Quick Revenue Snapshot (Section D summary) */}
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3.5 sm:p-5 shadow-2xs space-y-3">
-                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                      <TrendingUp className="w-3.5 h-3.5 text-primary-main" />
-                      <span>Company Revenue Pools (রাজস্ব উৎস)</span>
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-primary-main" />
+                      <span>Company Revenue Pools Snapshot (কোম্পানি রাজস্ব উৎস)</span>
                     </h2>
                     <button
                       type="button"
                       onClick={() => setActiveNavTab('revenue')}
-                      className="text-[11px] sm:text-xs text-primary-main font-bold hover:underline flex items-center gap-0.5"
+                      className="text-xs text-primary-main font-bold hover:underline flex items-center gap-1"
                     >
-                      <span>Breakdown</span>
-                      <ChevronRight className="w-3 h-3" />
+                      <span>View Full Breakdown</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {revenueSources.map((source) => (
-                      <div key={source.id} className="p-2.5 sm:p-3.5 bg-slate-50 rounded-xl sm:rounded-2xl border border-slate-200/80 space-y-1 sm:space-y-1.5">
-                        <span className="text-[11px] sm:text-xs font-bold text-slate-900 block truncate">
+                      <div key={source.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+                        <span className="text-xs font-bold text-slate-900 block truncate">
                           {language === 'bn' ? source.titleBn : source.title}
                         </span>
-                        <div className="text-base sm:text-lg font-black text-slate-800">
+                        <div className="text-lg font-black text-slate-800">
                           ৳{Number(source.totalEligibleRevenue || 0).toLocaleString()}
                         </div>
-                        <div className="text-[10px] sm:text-[11px] text-slate-500 flex justify-between">
-                          <span>Allocation:</span>
+                        <div className="text-[11px] text-slate-500 flex justify-between">
+                          <span>Shareholder Allocation:</span>
                           <span className="font-bold text-emerald-600">৳{Number(source.calculatedCommission || 0).toLocaleString()}</span>
                         </div>
                       </div>
                     ))}
                   </div>
 
-                  <div className="p-2.5 bg-amber-50/70 border border-amber-200/70 rounded-xl flex items-start gap-2 text-[10px] sm:text-xs text-amber-800">
-                    <Info className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="p-3 bg-amber-50/70 border border-amber-200/70 rounded-xl flex items-start gap-2.5 text-xs text-amber-800">
+                    <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <p className="leading-relaxed">
                       <strong>Policy Notice:</strong> Calculations are strictly derived from verified transactions in the company database according to the official corporate agreement. Allocations represent business benefit distributions and do not guarantee any fixed returns or monthly income.
                     </p>
@@ -1134,234 +1196,206 @@ export default function ShareholderDashboard() {
                 TAB 2: MY SHARES (Section B - Share Ownership Summary & Increase Shares)
             ========================================================================== */}
             {activeNavTab === 'shares' && (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3 sm:p-5 lg:p-6 shadow-2xs space-y-3 sm:space-y-4">
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-4 sm:p-6 lg:p-8 shadow-sm space-y-5 sm:space-y-6">
                   {/* Section B Header with + Increase Shares Button */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 sm:pb-3 border-b border-slate-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-primary-main/10 text-primary-main flex items-center justify-center shrink-0">
-                        <Coins className="w-3.5 h-3.5" />
+                      <div className="w-8 h-8 rounded-xl bg-primary-main/10 flex items-center justify-center text-primary-main shrink-0">
+                        <Coins className="w-4 h-4" />
                       </div>
                       <div>
-                        <h2 className="text-xs sm:text-sm font-bold text-slate-900 tracking-wide">
-                          {language === 'bn' ? 'শেয়ার মালিকানা বিবরণী (My Shares)' : 'Section B: Share Ownership'}
+                        <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide">
+                          Section B: Share Ownership Summary (শেয়ার মালিকানা বিবরণী)
                         </h2>
-                        <span className="text-[10px] sm:text-[11px] text-slate-500 block">
-                          RJ WORLD BD Corporate Equity Portfolio
-                        </span>
+                        <span className="text-[10px] sm:text-[11px] text-slate-500">Corporate equity units & verified investment records</span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-bold bg-emerald-100 text-emerald-800 inline-flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                        <span>Active</span>
-                      </span>
-
+                    <div className="flex items-center gap-2 justify-between sm:justify-end">
+                      {/* REQUIRED NEW BUTTON: + Increase Shares */}
                       <button
                         type="button"
                         onClick={() => {
-                          setPaymentErrorMessage('');
-                          generateNewInvoiceId();
-                          setShowIncreaseSharesModal(true);
+                          setIncreaseSuccessData(null);
+                          setIncreaseTrxId('');
+                          setIncreaseSenderMobile(userData?.phone || profile?.phone || '');
+                          setShowIncreaseModal(true);
                         }}
-                        className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-[11px] sm:text-xs rounded-lg sm:rounded-xl shadow-xs transition-all cursor-pointer min-h-[32px] sm:min-h-[36px]"
+                        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 sm:px-4 sm:py-2.5 bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.98] text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer shrink-0"
                       >
-                        <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                        <span>{language === 'bn' ? '+ অতিরিক্ত শেয়ার' : '+ Increase Shares'}</span>
+                        <Plus className="w-4 h-4" />
+                        <span>+ Increase Shares</span>
                       </button>
+
+                      <span className="px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold bg-emerald-100 text-emerald-800 shrink-0">
+                        Verified & Active
+                      </span>
                     </div>
                   </div>
 
-                  {/* Increase Shares Promotional Action Banner - Compact */}
-                  <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-sky-950 text-white rounded-xl sm:rounded-2xl p-3 sm:p-4 border border-slate-700 shadow-xs">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
-                          <TrendingUp className="w-3 h-3 text-emerald-400" />
-                          <span>{language === 'bn' ? 'ইকুইটি শেয়ার বৃদ্ধির সুযোগ' : 'Expand Equity'}</span>
-                        </div>
-                        <h3 className="text-xs sm:text-base font-black text-white">
-                          {language === 'bn' ? 'অতিরিক্ত শেয়ার কিনে অংশীদারিত্ব বাড়ান' : 'Increase Your Corporate Share Equity'}
-                        </h3>
-                        <p className="text-[10px] sm:text-xs text-slate-300 max-w-xl leading-relaxed">
-                          {language === 'bn'
-                            ? 'প্রতি ১% শেয়ারের মূল্য মাত্র ২,০০০ টাকা। ইনস্ট্যান্ট অটোমেটিক গেটওয়ে (bKash, Nagad, Rocket, Upay) দিয়ে তাৎক্ষণিক অতিরিক্ত শেয়ার যুক্ত করুন।'
-                            : 'Rate: ৳2,000 per 1% share. Pay via instant automated payment gateway (bKash, Nagad, Rocket, Upay).'}
-                        </p>
-                      </div>
-
-                      <div className="shrink-0 pt-1 md:pt-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPaymentErrorMessage('');
-                            generateNewInvoiceId();
-                            setShowIncreaseSharesModal(true);
-                          }}
-                          className="w-full sm:w-auto px-3.5 sm:px-4 py-1.5 sm:py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold text-[11px] sm:text-xs rounded-lg sm:rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 min-h-[34px] sm:min-h-[38px]"
-                        >
-                          <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                          <span>{language === 'bn' ? '+ অতিরিক্ত শেয়ার কিনুন' : '+ Increase Shares'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 4 Summary KPI Cards */}
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 text-xs sm:text-sm">
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl sm:rounded-2xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[11px] font-medium">Purchased Percentage</span>
-                      <span className="text-base sm:text-lg font-black text-primary-main block mt-0.5">
+                  {/* 4 Summary Ownership Cards - Fully Mobile Responsive (2 cols on phone, 4 on desktop) */}
+                  <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4 text-xs sm:text-sm">
+                    <div className="p-3 sm:p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[10px] sm:text-[11px] font-medium">Purchased Percentage</span>
+                      <span className="text-lg sm:text-xl font-black text-primary-main block mt-1">
                         {summary?.approvedSharePercentage || 1}%
                       </span>
-                      <span className="text-[9px] sm:text-[10px] text-slate-500 block">Corporate Equity</span>
+                      <span className="text-[10px] sm:text-[11px] text-slate-500 block mt-0.5">Corporate Equity</span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl sm:rounded-2xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[11px] font-medium">Share Units Owned</span>
-                      <span className="text-base sm:text-lg font-black text-slate-900 block mt-0.5">
+                    <div className="p-3 sm:p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[10px] sm:text-[11px] font-medium">Share Units Owned</span>
+                      <span className="text-lg sm:text-xl font-black text-slate-900 block mt-1">
                         {summary?.approvedSharePercentage || 1} Units
                       </span>
-                      <span className="text-[9px] sm:text-[10px] text-slate-500 block">Rate: ৳2,000 / 1%</span>
+                      <span className="text-[10px] sm:text-[11px] text-slate-500 block mt-0.5">Rate: ৳2,000 / 1%</span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl sm:rounded-2xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[11px] font-medium">Total Capital Paid</span>
-                      <span className="text-base sm:text-lg font-black text-emerald-600 block mt-0.5">
+                    <div className="p-3 sm:p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[10px] sm:text-[11px] font-medium">Total Capital Paid</span>
+                      <span className="text-lg sm:text-xl font-black text-emerald-600 block mt-1">
                         ৳{Number(summary?.totalAmountPaidForApprovedShares || 2000).toLocaleString()}
                       </span>
-                      <span className="text-[9px] sm:text-[10px] text-emerald-700 block">100% Verified Paid</span>
+                      <span className="text-[10px] sm:text-[11px] text-emerald-700 block mt-0.5">100% Verified Paid</span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl sm:rounded-2xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[11px] font-medium">Share Status</span>
-                      <span className="text-xs sm:text-sm font-bold text-slate-900 block mt-0.5 truncate">
+                    <div className="p-3 sm:p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[10px] sm:text-[11px] font-medium">Share Issuance Status</span>
+                      <span className="text-sm sm:text-base font-bold text-slate-900 block mt-1">
                         Officially Issued
                       </span>
-                      <span className="text-[9px] sm:text-[10px] text-slate-500 block">Recorded in Registry</span>
+                      <span className="text-[10px] sm:text-[11px] text-slate-500 block mt-0.5">Recorded in Registry</span>
                     </div>
                   </div>
 
-                  {/* All Verified Purchase Records List (Mobile Friendly Cards + Table) */}
-                  <div className="pt-1 space-y-2">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
-                      <h3 className="text-[11px] sm:text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1">
-                        <FileCheck2 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>{language === 'bn' ? 'অনুমোদিত শেয়ার ক্রয়ের রেকর্ডসমূহ' : 'Verified Purchase Records'}</span>
+                  {/* Increase Shares Promotion Banner Card */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50 border border-emerald-200/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 text-emerald-800 font-bold text-xs sm:text-sm">
+                        <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>{language === 'bn' ? 'কোম্পানি শেয়ার বৃদ্ধি করার সুযোগ' : 'Expand Your Company Shareholding'}</span>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed max-w-2xl">
+                        {language === 'bn'
+                          ? `আপনার বর্তমান শেয়ার ${summary?.approvedSharePercentage || 1}%। আপনি যেকোনো সময় অতিরিক্ত শেয়ার ক্রয় করে মোট ইকুইটি ও লভ্যাংশ বৃদ্ধি করতে পারেন। নতুন শেয়ার আপনার বর্তমান শেয়ারের সাথে স্বয়ংক্রিয়ভাবে কিউমুলেটিভ বা যোগ হবে।`
+                          : `You currently hold ${summary?.approvedSharePercentage || 1}% equity. Purchase additional shares at ৳2,000/1% to increase your shareholding. All additional purchases are cumulative.`}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIncreaseSuccessData(null);
+                        setIncreaseTrxId('');
+                        setIncreaseSenderMobile(userData?.phone || profile?.phone || '');
+                        setShowIncreaseModal(true);
+                      }}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>{language === 'bn' ? 'শেয়ার বৃদ্ধি করুন' : '+ Increase Shares'}</span>
+                    </button>
+                  </div>
+
+                  {/* Cumulative Verified Purchase Records (All Purchases Displayed Separately) */}
+                  <div className="pt-2 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
+                        <FileCheck2 className="w-4 h-4 text-primary-main" />
+                        <span>Verified Share Purchase Records ({transactions.sharePurchases.length})</span>
                       </h3>
-                      <span className="text-[10px] sm:text-[11px] text-slate-500">
-                        {language === 'bn' ? `মোট: ${transactions.sharePurchases.length} টি` : `Total: ${transactions.sharePurchases.length}`}
+                      <span className="text-[10px] text-slate-400 font-medium">
+                        All verified investments
                       </span>
                     </div>
 
                     {transactions.sharePurchases.length > 0 ? (
-                      <div className="space-y-2">
-                        {/* Mobile Cards (visible on phones) - Compact & Clean */}
-                        <div className="block sm:hidden space-y-2">
-                          {transactions.sharePurchases.map((purchase, idx) => (
-                            <div key={purchase.id || purchase.applicationId || idx} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
-                              <div className="flex items-center justify-between gap-2 border-b border-slate-200/60 pb-1.5">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="w-4 h-4 rounded-full bg-primary-main/10 text-primary-main text-[10px] font-bold flex items-center justify-center">
-                                    {idx + 1}
-                                  </span>
-                                  <span className="font-mono text-[11px] font-bold text-slate-900">
-                                    {purchase.id || purchase.applicationId || `PUR-${idx + 1}`}
-                                  </span>
-                                </div>
-                                <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-0.5">
-                                  <Check className="w-2.5 h-2.5" />
-                                  <span>Verified</span>
+                      <div className="space-y-2.5">
+                        {/* Mobile Stacked Card View */}
+                        <div className="block sm:hidden space-y-2.5">
+                          {transactions.sharePurchases.map((p, idx) => (
+                            <div key={idx} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="font-black text-slate-900 text-xs">
+                                  {p.sharePercent || 1}% Equity Unit ({p.shareUnits || p.sharePercent || 1} Share)
+                                </span>
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  p.paymentStatus === 'Approved' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                  {p.paymentStatus === 'Approved' ? 'Verified' : (p.paymentStatus || 'Pending')}
                                 </span>
                               </div>
 
-                              <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                              <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-200/60">
                                 <div>
-                                  <span className="text-[9px] text-slate-400 block">Share</span>
-                                  <span className="font-bold text-primary-main">
-                                    {purchase.sharePercent || 1}% Equity
+                                  <span className="text-slate-400 block text-[10px]">Capital Paid</span>
+                                  <span className="font-black text-emerald-600">
+                                    ৳{Number(p.totalAmount || ((p.sharePercent || 1) * 2000)).toLocaleString()}
                                   </span>
                                 </div>
                                 <div>
-                                  <span className="text-[9px] text-slate-400 block">Paid</span>
-                                  <span className="font-bold text-emerald-600 font-mono">
-                                    ৳{Number(purchase.totalAmount || 2000).toLocaleString()}
+                                  <span className="text-slate-400 block text-[10px]">Method</span>
+                                  <span className="font-semibold text-slate-800">{p.paymentMethod || 'MFS'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 block text-[10px]">TrxID</span>
+                                  <span className="font-mono text-slate-800 font-bold truncate block">
+                                    {p.transactionId || 'VERIFIED-RECORD'}
                                   </span>
                                 </div>
                                 <div>
-                                  <span className="text-[9px] text-slate-400 block">Method</span>
-                                  <span className="font-medium text-slate-800">
-                                    {purchase.paymentMethod || 'Automatic'}
+                                  <span className="text-slate-400 block text-[10px]">Verification Date</span>
+                                  <span className="text-slate-600">
+                                    {new Date(p.verifiedAt || p.submissionTimestamp || p.createdAt || Date.now()).toLocaleDateString('en-GB')}
                                   </span>
                                 </div>
-                                <div>
-                                  <span className="text-[9px] text-slate-400 block">Date</span>
-                                  <span className="font-medium text-slate-600">
-                                    {purchase.verifiedAt 
-                                      ? new Date(purchase.verifiedAt).toLocaleDateString('en-GB')
-                                      : purchase.createdAt
-                                      ? new Date(purchase.createdAt).toLocaleDateString('en-GB')
-                                      : 'Verified'}
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="pt-1 border-t border-slate-200/60 text-[10px] flex items-center justify-between">
-                                <span className="text-[9px] text-slate-400">TrxID:</span>
-                                <span className="font-mono font-bold text-slate-900 text-[10px]">
-                                  {purchase.transactionId || 'Verified Record'}
-                                </span>
                               </div>
                             </div>
                           ))}
                         </div>
 
-                        {/* Desktop & Tablet Table (visible on sm and up) */}
-                        <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-200">
-                          <table className="min-w-[620px] w-full text-xs text-left">
+                        {/* Desktop Table View */}
+                        <div className="hidden sm:block overflow-x-auto rounded-2xl border border-slate-200">
+                          <table className="w-full text-xs text-left">
                             <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
                               <tr>
-                                <th className="py-2 px-2.5">#</th>
-                                <th className="py-2 px-2.5">Application ID</th>
-                                <th className="py-2 px-2.5">Transaction ID</th>
-                                <th className="py-2 px-2.5">Method</th>
-                                <th className="py-2 px-2.5">Share %</th>
-                                <th className="py-2 px-2.5">Amount Paid</th>
-                                <th className="py-2 px-2.5">Verification Date</th>
-                                <th className="py-2 px-2.5">Status</th>
+                                <th className="py-3 px-3.5">Reference ID</th>
+                                <th className="py-3 px-3.5">Purchased Shares</th>
+                                <th className="py-3 px-3.5">Capital Paid</th>
+                                <th className="py-3 px-3.5">Method</th>
+                                <th className="py-3 px-3.5">Transaction ID (TrxID)</th>
+                                <th className="py-3 px-3.5">Date</th>
+                                <th className="py-3 px-3.5 text-right">Status</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-slate-200">
-                              {transactions.sharePurchases.map((purchase, idx) => (
-                                <tr key={purchase.id || purchase.applicationId || idx} className="hover:bg-slate-50">
-                                  <td className="py-2 px-2.5 font-medium text-slate-500">{idx + 1}</td>
-                                  <td className="py-2 px-2.5 font-mono font-bold text-slate-900 truncate max-w-[140px]">
-                                    {purchase.id || purchase.applicationId || 'N/A'}
+                            <tbody className="divide-y divide-slate-200 text-slate-800">
+                              {transactions.sharePurchases.map((p, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50/70">
+                                  <td className="py-3 px-3.5 font-mono text-[11px] text-slate-600 font-bold">
+                                    {p.id || p.applicationId || `PURCHASE-${idx + 1}`}
                                   </td>
-                                  <td className="py-2 px-2.5 font-mono font-bold text-primary-main">
-                                    {purchase.transactionId || 'Verified Record'}
+                                  <td className="py-3 px-3.5 font-bold text-primary-main">
+                                    {p.sharePercent || 1}% Equity ({p.shareUnits || p.sharePercent || 1} Units)
                                   </td>
-                                  <td className="py-2 px-2.5 font-medium text-slate-700">
-                                    {purchase.paymentMethod || 'bKash'}
+                                  <td className="py-3 px-3.5 font-black text-emerald-600">
+                                    ৳{Number(p.totalAmount || ((p.sharePercent || 1) * 2000)).toLocaleString()}
                                   </td>
-                                  <td className="py-2 px-2.5 font-bold text-slate-900">
-                                    {purchase.sharePercent || 1}%
+                                  <td className="py-3 px-3.5 font-semibold text-slate-700">
+                                    {p.paymentMethod || 'MFS'}
                                   </td>
-                                  <td className="py-2 px-2.5 font-mono font-bold text-emerald-600">
-                                    ৳{Number(purchase.totalAmount || 2000).toLocaleString()}
+                                  <td className="py-3 px-3.5 font-mono font-bold text-slate-900">
+                                    {p.transactionId || 'VERIFIED-RECORD'}
                                   </td>
-                                  <td className="py-2 px-2.5 text-slate-600">
-                                    {purchase.verifiedAt 
-                                      ? new Date(purchase.verifiedAt).toLocaleDateString('en-GB')
-                                      : purchase.createdAt
-                                      ? new Date(purchase.createdAt).toLocaleDateString('en-GB')
-                                      : 'Verified'}
+                                  <td className="py-3 px-3.5 text-slate-600">
+                                    {new Date(p.verifiedAt || p.submissionTimestamp || p.createdAt || Date.now()).toLocaleDateString('en-GB')}
                                   </td>
-                                  <td className="py-2 px-2.5">
-                                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 inline-flex items-center gap-0.5">
-                                      <Check className="w-2.5 h-2.5" />
-                                      <span>Verified</span>
+                                  <td className="py-3 px-3.5 text-right">
+                                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                      p.paymentStatus === 'Approved' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                    }`}>
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                      <span>{p.paymentStatus === 'Approved' ? 'Verified & Active' : (p.paymentStatus || 'Pending')}</span>
                                     </span>
                                   </td>
                                 </tr>
@@ -1371,8 +1405,8 @@ export default function ShareholderDashboard() {
                         </div>
                       </div>
                     ) : (
-                      <div className="p-4 text-center bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-500">
-                        {language === 'bn' ? 'কোনো পূর্ববর্তী শেয়ার ক্রয়ের রেকর্ড পাওয়া যায়নি।' : 'No verified purchase records found.'}
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs text-slate-500 text-center">
+                        No purchase records found.
                       </div>
                     )}
                   </div>
@@ -1384,82 +1418,82 @@ export default function ShareholderDashboard() {
                 TAB 3: SHARE CERTIFICATE (Section C)
             ========================================================================== */}
             {activeNavTab === 'certificate' && (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 shadow-2xs space-y-3 sm:space-y-4">
-                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                      <Award className="w-3.5 h-3.5 text-amber-500" />
-                      <span>{language === 'bn' ? 'অফিসিয়াল শেয়ার সার্টিফিকেট' : 'Official Share Certificate'}</span>
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <Award className="w-4 h-4 text-amber-500" />
+                      <span>Section C: Official Share Certificate (শেয়ার সার্টিফিকেট)</span>
                     </h2>
-                    <span className="text-[10px] sm:text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                    <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
                       Corporate Certified
                     </span>
                   </div>
 
                   {certificate ? (
-                    <div className="bg-gradient-to-br from-amber-50 via-white to-amber-50/50 rounded-2xl sm:rounded-3xl border border-amber-300 p-4 sm:p-7 text-center space-y-3 sm:space-y-5 shadow-2xs relative overflow-hidden">
-                      <div className="w-12 h-12 rounded-full bg-amber-400/20 border border-amber-400 flex items-center justify-center mx-auto text-amber-600">
-                        <Award className="w-6 h-6" />
+                    <div className="bg-gradient-to-br from-amber-50 via-white to-amber-50/50 rounded-3xl border-2 border-amber-300 p-6 sm:p-10 text-center space-y-6 shadow-sm relative overflow-hidden">
+                      <div className="w-16 h-16 rounded-full bg-amber-400/20 border border-amber-400 flex items-center justify-center mx-auto text-amber-600">
+                        <Award className="w-8 h-8" />
                       </div>
 
-                      <div className="space-y-0.5">
-                        <span className="text-[10px] uppercase tracking-widest text-amber-700 font-bold block">
+                      <div className="space-y-1">
+                        <span className="text-xs uppercase tracking-widest text-amber-700 font-bold block">
                           RJ WORLD BD • Equity Shareholder
                         </span>
-                        <h3 className="text-base sm:text-xl font-black text-slate-900">
+                        <h3 className="text-xl sm:text-2xl font-black text-slate-900">
                           {certificate.shareholderName}
                         </h3>
-                        <p className="text-[10px] sm:text-xs text-slate-500 font-mono">
+                        <p className="text-xs text-slate-500 font-mono">
                           Certificate No: {certificate.certificateNumber}
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-w-2xl mx-auto text-[11px] sm:text-xs py-2 border-y border-amber-200">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-xs py-3 border-y border-amber-200">
                         <div>
-                          <span className="text-slate-400 block text-[9px] sm:text-[10px]">Shareholder ID</span>
+                          <span className="text-slate-400 block text-[11px]">Shareholder ID</span>
                           <span className="font-mono font-bold text-slate-900">{certificate.shareholderId}</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px] sm:text-[10px]">Ownership</span>
+                          <span className="text-slate-400 block text-[11px]">Ownership</span>
                           <span className="font-bold text-primary-main">{certificate.approvedSharePercentage}% Equity</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px] sm:text-[10px]">Capital Paid</span>
-                          <span className="font-bold text-emerald-600 font-mono">৳{Number(certificate.verifiedPurchaseAmount).toLocaleString()}</span>
+                          <span className="text-slate-400 block text-[11px]">Capital Paid</span>
+                          <span className="font-bold text-emerald-600">৳{Number(certificate.verifiedPurchaseAmount).toLocaleString()}</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px] sm:text-[10px]">Issue Date</span>
+                          <span className="text-slate-400 block text-[11px]">Issue Date</span>
                           <span className="font-medium text-slate-800">
                             {new Date(certificate.issueDate).toLocaleDateString('en-GB')}
                           </span>
                         </div>
                       </div>
 
-                      <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-1">
+                      <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
                         <button
                           type="button"
                           onClick={() => setShowCertificateModal(true)}
-                          className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2"
                         >
-                          <Eye className="w-3.5 h-3.5" />
+                          <Eye className="w-4 h-4" />
                           <span>View Official Certificate</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => setShowCertificateModal(true)}
-                          className="w-full sm:w-auto px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl shadow-2xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          className="px-5 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl shadow-2xs transition-all cursor-pointer flex items-center gap-2"
                         >
-                          <Printer className="w-3.5 h-3.5" />
+                          <Printer className="w-4 h-4" />
                           <span>Print Document</span>
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <div className="p-6 text-center bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
-                      <Lock className="w-6 h-6 text-slate-400 mx-auto" />
-                      <p className="text-xs sm:text-sm font-bold text-slate-700">Official Certificate Pending Issuance</p>
-                      <p className="text-[11px] text-slate-500 max-w-md mx-auto">
-                        Final share certificate is issued strictly after legitimate payment verification.
+                    <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                      <Lock className="w-8 h-8 text-slate-400 mx-auto" />
+                      <p className="text-sm font-bold text-slate-700">Official Certificate Pending Issuance</p>
+                      <p className="text-xs text-slate-500 max-w-md mx-auto">
+                        Final share certificate is issued strictly after legitimate payment verification and registry issuance approval.
                       </p>
                     </div>
                   )}
@@ -1471,63 +1505,63 @@ export default function ShareholderDashboard() {
                 TAB 4: REVENUE & BENEFITS (Section D & Section E)
             ========================================================================== */}
             {activeNavTab === 'revenue' && (
-              <div className="space-y-3 sm:space-y-4">
+              <div className="space-y-6">
                 {/* 3 Categories Required by Section D */}
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 shadow-2xs space-y-3 sm:space-y-4">
-                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                      <TrendingUp className="w-3.5 h-3.5 text-primary-main" />
-                      <span>{language === 'bn' ? 'কোম্পানি রাজস্ব ও লভ্যাংশ বিবরণী' : 'Section D: Revenue & Benefits'}</span>
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-primary-main" />
+                      <span>Section D: Company Revenue & Shareholder Benefits</span>
                     </h2>
-                    <span className="text-[10px] sm:text-xs font-semibold text-slate-500">
-                      Rate: {summary?.approvedSharePercentage || 1}%
+                    <span className="text-xs font-semibold text-slate-500">
+                      Approved Rate: {summary?.approvedSharePercentage || 1}%
                     </span>
                   </div>
 
-                  <p className="text-[11px] text-slate-600">
-                    Displaying 3 designated corporate revenue pools with verified income and calculated shareholder benefits.
+                  <p className="text-xs text-slate-600">
+                    Displaying the 3 designated corporate revenue pools with verified income and calculated shareholder benefits.
                   </p>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 sm:gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                     {revenueSources.map((source, idx) => (
-                      <div key={source.id} className="bg-slate-50 rounded-xl sm:rounded-2xl border border-slate-200 p-3 sm:p-4 space-y-2.5">
+                      <div key={source.id} className="bg-slate-50 rounded-2xl border border-slate-200 p-5 space-y-4">
                         <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-mono font-bold text-primary-main bg-primary-main/10 px-2 py-0.5 rounded-md">
+                          <span className="text-xs font-mono font-bold text-primary-main bg-primary-main/10 px-2 py-0.5 rounded-md">
                             Category {idx + 1}
                           </span>
-                          <span className="text-[10px] text-slate-400 font-medium">
-                            {source.transactionCount} Records
+                          <span className="text-[11px] text-slate-400 font-medium">
+                            {source.transactionCount} Verified Records
                           </span>
                         </div>
 
                         <div>
-                          <h3 className="text-xs sm:text-sm font-bold text-slate-900">
+                          <h3 className="text-sm font-bold text-slate-900">
                             {language === 'bn' ? source.titleBn : source.title}
                           </h3>
-                          <p className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                          <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
                             {source.description}
                           </p>
                         </div>
 
-                        <div className="pt-2 border-t border-slate-200/80 space-y-1.5 text-[11px]">
+                        <div className="pt-2 border-t border-slate-200/80 space-y-2 text-xs">
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Total Revenue:</span>
-                            <span className="font-bold text-slate-900 font-mono">৳{Number(source.totalEligibleRevenue).toLocaleString()}</span>
+                            <span className="text-slate-500">Total Company Revenue:</span>
+                            <span className="font-bold text-slate-900">৳{Number(source.totalEligibleRevenue).toLocaleString()}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Benefit Rate:</span>
+                            <span className="text-slate-500">Applicable Benefit Rate:</span>
                             <span className="font-bold text-primary-main">{source.approvedCommissionPercentage}%</span>
                           </div>
-                          <div className="flex justify-between text-emerald-700 bg-emerald-50/70 p-1.5 rounded-lg font-bold">
-                            <span>Calculated:</span>
-                            <span className="font-mono">৳{Number(source.calculatedCommission).toLocaleString()}</span>
+                          <div className="flex justify-between text-emerald-700 bg-emerald-50/70 p-2 rounded-lg font-bold">
+                            <span>Calculated Allocation:</span>
+                            <span>৳{Number(source.calculatedCommission).toLocaleString()}</span>
                           </div>
-                          <div className="flex justify-between text-[10px]">
+                          <div className="flex justify-between text-[11px]">
                             <span className="text-slate-400">Paid Out:</span>
                             <span className="text-slate-700 font-mono">৳{Number(source.paidCommission).toLocaleString()}</span>
                           </div>
-                          <div className="flex justify-between text-[10px]">
-                            <span className="text-slate-400">Payable:</span>
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-slate-400">Remaining Payable:</span>
                             <span className="text-slate-700 font-mono">৳{Number(source.pendingCommission).toLocaleString()}</span>
                           </div>
                         </div>
@@ -1536,13 +1570,13 @@ export default function ShareholderDashboard() {
                   </div>
 
                   {/* Section E: Monthly Earnings Summary */}
-                  <div className="pt-3 sm:pt-4 border-t border-slate-100 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="pt-6 border-t border-slate-100 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <h3 className="text-[11px] sm:text-xs font-bold text-slate-800 uppercase tracking-wide">
-                          {language === 'bn' ? 'মাসিক আয়ের বিবরণী' : 'Section E: Monthly Earnings'}
+                        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                          Section E: Monthly Earnings Summary (মাসিক আয়ের বিবরণী)
                         </h3>
-                        <p className="text-[10px] text-slate-500">
+                        <p className="text-[11px] text-slate-500">
                           Derived from database transactions. Shows 0 when no eligible transactions exist.
                         </p>
                       </div>
@@ -1551,7 +1585,7 @@ export default function ShareholderDashboard() {
                       <select
                         value={selectedMonthFilter}
                         onChange={(e) => setSelectedMonthFilter(e.target.value)}
-                        className="px-2.5 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-medium"
+                        className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-medium"
                       >
                         <option value="all">All Months</option>
                         {monthlyHistory.map(m => (
@@ -1562,31 +1596,31 @@ export default function ShareholderDashboard() {
 
                     {filteredMonthlyHistory.length > 0 ? (
                       <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="min-w-[620px] w-full text-xs text-left">
+                        <table className="w-full text-xs text-left">
                           <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
                             <tr>
-                              <th className="py-2 px-2.5">Month</th>
-                              <th className="py-2 px-2.5">Category</th>
-                              <th className="py-2 px-2.5">Eligible Revenue</th>
-                              <th className="py-2 px-2.5">Rate</th>
-                              <th className="py-2 px-2.5">Allocation</th>
-                              <th className="py-2 px-2.5">Paid</th>
-                              <th className="py-2 px-2.5">Remaining</th>
-                              <th className="py-2 px-2.5">Status</th>
+                              <th className="py-2.5 px-3">Month</th>
+                              <th className="py-2.5 px-3">Revenue Category</th>
+                              <th className="py-2.5 px-3">Eligible Revenue</th>
+                              <th className="py-2.5 px-3">Rate</th>
+                              <th className="py-2.5 px-3">Allocation</th>
+                              <th className="py-2.5 px-3">Paid</th>
+                              <th className="py-2.5 px-3">Remaining</th>
+                              <th className="py-2.5 px-3">Status</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-200">
                             {filteredMonthlyHistory.map((item, idx) => (
                               <tr key={idx} className="hover:bg-slate-50">
-                                <td className="py-2 px-2.5 font-semibold text-slate-800 text-[11px]">{item.monthName}</td>
-                                <td className="py-2 px-2.5 text-slate-600 text-[11px]">{item.revenueCategory}</td>
-                                <td className="py-2 px-2.5 font-mono text-[11px]">৳{Number(item.eligibleRevenue).toLocaleString()}</td>
-                                <td className="py-2 px-2.5 font-bold text-primary-main text-[11px]">{item.applicableCommissionPercentage}%</td>
-                                <td className="py-2 px-2.5 font-mono font-bold text-emerald-600 text-[11px]">৳{Number(item.commissionEarned).toLocaleString()}</td>
-                                <td className="py-2 px-2.5 font-mono text-slate-600 text-[11px]">৳{Number(item.amountPaid).toLocaleString()}</td>
-                                <td className="py-2 px-2.5 font-mono font-bold text-slate-900 text-[11px]">৳{Number(item.remainingPayableAmount).toLocaleString()}</td>
-                                <td className="py-2 px-2.5">
-                                  <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-sky-100 text-sky-800">
+                                <td className="py-2.5 px-3 font-semibold text-slate-800">{item.monthName}</td>
+                                <td className="py-2.5 px-3 text-slate-600">{item.revenueCategory}</td>
+                                <td className="py-2.5 px-3 font-mono">৳{Number(item.eligibleRevenue).toLocaleString()}</td>
+                                <td className="py-2.5 px-3 font-bold text-primary-main">{item.applicableCommissionPercentage}%</td>
+                                <td className="py-2.5 px-3 font-mono font-bold text-emerald-600">৳{Number(item.commissionEarned).toLocaleString()}</td>
+                                <td className="py-2.5 px-3 font-mono text-slate-600">৳{Number(item.amountPaid).toLocaleString()}</td>
+                                <td className="py-2.5 px-3 font-mono font-bold text-slate-900">৳{Number(item.remainingPayableAmount).toLocaleString()}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800">
                                     {item.status}
                                   </span>
                                 </td>
@@ -1596,7 +1630,7 @@ export default function ShareholderDashboard() {
                         </table>
                       </div>
                     ) : (
-                      <div className="p-4 text-center bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-500">
+                      <div className="p-6 text-center bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-500">
                         No monthly earnings records found for selected period (Total: ৳0.00).
                       </div>
                     )}
@@ -1609,29 +1643,29 @@ export default function ShareholderDashboard() {
                 TAB 5: TRANSACTION HISTORY (Section F)
             ========================================================================== */}
             {activeNavTab === 'transactions' && (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 shadow-2xs space-y-3 sm:space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                      <History className="w-3.5 h-3.5 text-primary-main" />
-                      <span>{language === 'bn' ? 'লেনদেনের বিবরণী' : 'Section F: Transaction History'}</span>
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <History className="w-4 h-4 text-primary-main" />
+                      <span>Section F: Payment and Transaction History</span>
                     </h2>
 
                     {/* Sub-Tabs: Purchases, Payments, Commissions, Withdrawals */}
-                    <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg overflow-x-auto no-scrollbar max-w-full">
+                    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
                       <button
                         type="button"
                         onClick={() => setActiveHistoryTab('purchases')}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all shrink-0 whitespace-nowrap ${
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
                           activeHistoryTab === 'purchases' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
-                        Purchases ({transactions.sharePurchases.length})
+                        Share Purchases ({transactions.sharePurchases.length})
                       </button>
                       <button
                         type="button"
                         onClick={() => setActiveHistoryTab('withdrawals')}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all shrink-0 whitespace-nowrap ${
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
                           activeHistoryTab === 'withdrawals' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
@@ -1640,7 +1674,7 @@ export default function ShareholderDashboard() {
                       <button
                         type="button"
                         onClick={() => setActiveHistoryTab('commissions')}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all shrink-0 whitespace-nowrap ${
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
                           activeHistoryTab === 'commissions' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
@@ -1649,42 +1683,97 @@ export default function ShareholderDashboard() {
                     </div>
                   </div>
 
-                  {/* Purchases Table */}
+                  {/* Purchases Table & Mobile Cards */}
                   {activeHistoryTab === 'purchases' && (
-                    <div className="overflow-x-auto rounded-xl border border-slate-200">
-                      <table className="min-w-[620px] w-full text-xs text-left">
-                        <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
-                          <tr>
-                            <th className="py-2 px-2.5">TrxID</th>
-                            <th className="py-2 px-2.5">Application ID</th>
-                            <th className="py-2 px-2.5">Date</th>
-                            <th className="py-2 px-2.5">Share %</th>
-                            <th className="py-2 px-2.5">Amount</th>
-                            <th className="py-2 px-2.5">Method</th>
-                            <th className="py-2 px-2.5">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          {transactions.sharePurchases.map((p, idx) => (
-                            <tr key={idx} className="hover:bg-slate-50">
-                              <td className="py-2 px-2.5 font-mono font-bold text-slate-900 text-[11px]">{p.transactionId || 'N/A'}</td>
-                              <td className="py-2 px-2.5 font-mono text-slate-600 text-[11px]">{p.id || p.applicationId}</td>
-                              <td className="py-2 px-2.5 text-slate-600 text-[11px]">
-                                {new Date(p.submissionTimestamp || p.createdAt || Date.now()).toLocaleDateString('en-GB')}
-                              </td>
-                              <td className="py-2 px-2.5 font-bold text-primary-main text-[11px]">{p.sharePercent}%</td>
-                              <td className="py-2 px-2.5 font-mono font-bold text-[11px]">৳{Number(p.totalAmount || 2000).toLocaleString()}</td>
-                              <td className="py-2 px-2.5 text-[11px]">{p.paymentMethod || 'bKash'}</td>
-                              <td className="py-2 px-2.5">
-                                <span className="font-semibold text-emerald-700 flex items-center gap-0.5 text-[10px]">
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  <span>{p.status === 'approved' ? 'Verified' : 'Pending'}</span>
+                    <div className="space-y-3">
+                      {/* Mobile Stacked Card View */}
+                      <div className="block sm:hidden space-y-2.5">
+                        {transactions.sharePurchases.length > 0 ? (
+                          transactions.sharePurchases.map((p, idx) => (
+                            <div key={idx} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-900">
+                                  {p.sharePercent || 1}% Equity ({p.shareUnits || p.sharePercent || 1} Units)
                                 </span>
-                              </td>
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  p.paymentStatus === 'Approved' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                  {p.paymentStatus || 'Pending'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-200">
+                                <div>
+                                  <span className="text-slate-400 block text-[10px]">Amount</span>
+                                  <span className="font-black text-emerald-600">৳{Number(p.totalAmount || 2000).toLocaleString()}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 block text-[10px]">Method</span>
+                                  <span className="font-semibold text-slate-800">{p.paymentMethod || 'MFS'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 block text-[10px]">TrxID</span>
+                                  <span className="font-mono text-slate-800 font-bold truncate block">{p.transactionId || 'N/A'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 block text-[10px]">Date</span>
+                                  <span className="text-slate-600">
+                                    {new Date(p.submissionTimestamp || p.createdAt || Date.now()).toLocaleDateString('en-GB')}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="p-4 text-center bg-slate-50 text-xs text-slate-500 rounded-xl">
+                            No purchases recorded.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Desktop Table View */}
+                      <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-200">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
+                            <tr>
+                              <th className="py-2.5 px-3">Transaction ID</th>
+                              <th className="py-2.5 px-3">Application ID</th>
+                              <th className="py-2.5 px-3">Date</th>
+                              <th className="py-2.5 px-3">Share %</th>
+                              <th className="py-2.5 px-3">Amount</th>
+                              <th className="py-2.5 px-3">Method</th>
+                              <th className="py-2.5 px-3">Payment Status</th>
+                              <th className="py-2.5 px-3">Verification</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {transactions.sharePurchases.map((p, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50">
+                                <td className="py-2.5 px-3 font-mono font-bold text-slate-900">{p.transactionId || 'N/A'}</td>
+                                <td className="py-2.5 px-3 font-mono text-slate-600">{p.id || p.applicationId}</td>
+                                <td className="py-2.5 px-3 text-slate-600">
+                                  {new Date(p.submissionTimestamp || p.createdAt || Date.now()).toLocaleDateString('en-GB')}
+                                </td>
+                                <td className="py-2.5 px-3 font-bold text-primary-main">{p.sharePercent}%</td>
+                                <td className="py-2.5 px-3 font-mono font-bold">৳{Number(p.totalAmount || 2000).toLocaleString()}</td>
+                                <td className="py-2.5 px-3">{p.paymentMethod || 'bKash'}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    p.paymentStatus === 'Approved' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {p.paymentStatus || 'Pending'}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <span className="font-semibold text-emerald-700 flex items-center gap-1">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>{p.status === 'approved' ? 'Verified' : 'Pending Review'}</span>
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
 
@@ -1692,31 +1781,31 @@ export default function ShareholderDashboard() {
                   {activeHistoryTab === 'withdrawals' && (
                     <div className="overflow-x-auto rounded-xl border border-slate-200">
                       {transactions.withdrawals.length > 0 ? (
-                        <table className="min-w-[540px] w-full text-xs text-left">
+                        <table className="w-full text-xs text-left">
                           <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
                             <tr>
-                              <th className="py-2 px-2.5">Request ID</th>
-                              <th className="py-2 px-2.5">Date</th>
-                              <th className="py-2 px-2.5">Amount</th>
-                              <th className="py-2 px-2.5">Method</th>
-                              <th className="py-2 px-2.5">Account</th>
-                              <th className="py-2 px-2.5">Status</th>
+                              <th className="py-2.5 px-3">Request ID</th>
+                              <th className="py-2.5 px-3">Date</th>
+                              <th className="py-2.5 px-3">Amount</th>
+                              <th className="py-2.5 px-3">Method</th>
+                              <th className="py-2.5 px-3">Account</th>
+                              <th className="py-2.5 px-3">Status</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-200">
                             {transactions.withdrawals.map((w, idx) => (
                               <tr key={idx} className="hover:bg-slate-50">
-                                <td className="py-2 px-2.5 font-mono font-bold text-slate-900 text-[11px]">{w.id}</td>
-                                <td className="py-2 px-2.5 text-slate-600 text-[11px]">
+                                <td className="py-2.5 px-3 font-mono font-bold text-slate-900">{w.id}</td>
+                                <td className="py-2.5 px-3 text-slate-600">
                                   {new Date(w.requestedAt || w.createdAt || Date.now()).toLocaleDateString('en-GB')}
                                 </td>
-                                <td className="py-2 px-2.5 font-mono font-bold text-emerald-600 text-[11px]">
+                                <td className="py-2.5 px-3 font-mono font-bold text-emerald-600">
                                   ৳{Number(w.amount || 0).toLocaleString()}
                                 </td>
-                                <td className="py-2 px-2.5 text-[11px]">{w.paymentMethod}</td>
-                                <td className="py-2 px-2.5 font-mono text-[11px]">{w.accountNumber}</td>
-                                <td className="py-2 px-2.5">
-                                  <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
+                                <td className="py-2.5 px-3">{w.paymentMethod}</td>
+                                <td className="py-2.5 px-3 font-mono">{w.accountNumber}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                     w.status === 'paid' ? 'bg-emerald-100 text-emerald-800' :
                                     w.status === 'rejected' ? 'bg-red-100 text-red-800' :
                                     'bg-amber-100 text-amber-800'
@@ -1729,7 +1818,7 @@ export default function ShareholderDashboard() {
                           </tbody>
                         </table>
                       ) : (
-                        <div className="p-4 text-center bg-slate-50 text-xs text-slate-500">
+                        <div className="p-6 text-center bg-slate-50 text-xs text-slate-500">
                           No withdrawal transactions yet.
                         </div>
                       )}
@@ -1740,27 +1829,27 @@ export default function ShareholderDashboard() {
                   {activeHistoryTab === 'commissions' && (
                     <div className="overflow-x-auto rounded-xl border border-slate-200">
                       {transactions.commissions.length > 0 ? (
-                        <table className="min-w-[540px] w-full text-xs text-left">
+                        <table className="w-full text-xs text-left">
                           <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
                             <tr>
-                              <th className="py-2 px-2.5">Allocation Ref</th>
-                              <th className="py-2 px-2.5">Category</th>
-                              <th className="py-2 px-2.5">Pool</th>
-                              <th className="py-2 px-2.5">Rate</th>
-                              <th className="py-2 px-2.5">Benefit</th>
-                              <th className="py-2 px-2.5">Status</th>
+                              <th className="py-2.5 px-3">Allocation Ref</th>
+                              <th className="py-2.5 px-3">Category</th>
+                              <th className="py-2.5 px-3">Eligible Pool</th>
+                              <th className="py-2.5 px-3">Rate</th>
+                              <th className="py-2.5 px-3">Calculated Benefit</th>
+                              <th className="py-2.5 px-3">Status</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-200">
                             {transactions.commissions.map((c, idx) => (
                               <tr key={idx} className="hover:bg-slate-50">
-                                <td className="py-2 px-2.5 font-mono font-bold text-slate-900 text-[11px]">{c.id}</td>
-                                <td className="py-2 px-2.5 text-slate-700 font-medium text-[11px]">{c.category}</td>
-                                <td className="py-2 px-2.5 font-mono text-[11px]">৳{Number(c.eligibleRevenue || 0).toLocaleString()}</td>
-                                <td className="py-2 px-2.5 font-bold text-primary-main text-[11px]">{c.rate}</td>
-                                <td className="py-2 px-2.5 font-mono font-bold text-emerald-600 text-[11px]">৳{Number(c.amount || 0).toLocaleString()}</td>
-                                <td className="py-2 px-2.5">
-                                  <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-sky-100 text-sky-800">
+                                <td className="py-2.5 px-3 font-mono font-bold text-slate-900">{c.id}</td>
+                                <td className="py-2.5 px-3 text-slate-700 font-medium">{c.category}</td>
+                                <td className="py-2.5 px-3 font-mono">৳{Number(c.eligibleRevenue || 0).toLocaleString()}</td>
+                                <td className="py-2.5 px-3 font-bold text-primary-main">{c.rate}</td>
+                                <td className="py-2.5 px-3 font-mono font-bold text-emerald-600">৳{Number(c.amount || 0).toLocaleString()}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800">
                                     {c.status}
                                   </span>
                                 </td>
@@ -1769,7 +1858,7 @@ export default function ShareholderDashboard() {
                           </tbody>
                         </table>
                       ) : (
-                        <div className="p-4 text-center bg-slate-50 text-xs text-slate-500">
+                        <div className="p-6 text-center bg-slate-50 text-xs text-slate-500">
                           No allocation transactions recorded yet.
                         </div>
                       )}
@@ -1783,29 +1872,29 @@ export default function ShareholderDashboard() {
                 TAB 6: WITHDRAWALS (Section G)
             ========================================================================== */}
             {activeNavTab === 'withdrawals' && (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 shadow-2xs space-y-3 sm:space-y-4">
-                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                      <Wallet className="w-3.5 h-3.5 text-primary-main" />
-                      <span>{language === 'bn' ? 'লভ্যাংশ উত্তোলন' : 'Section G: Withdrawal'}</span>
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <Wallet className="w-4 h-4 text-primary-main" />
+                      <span>Section G: Shareholder Withdrawal Section (লভ্যাংশ উত্তোলন)</span>
                     </h2>
-                    <span className="text-[11px] sm:text-xs font-mono font-bold text-slate-700">
+                    <span className="text-xs font-mono font-bold text-slate-700">
                       Available: ৳{Number(summary?.availableWithdrawBalance || 0).toLocaleString()}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     {/* Withdrawal Form */}
-                    <div className="md:col-span-1 bg-slate-50 rounded-xl sm:rounded-2xl border border-slate-200 p-3.5 space-y-3">
-                      <h3 className="text-[11px] font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                        <Send className="w-3 h-3 text-primary-main" />
+                    <div className="md:col-span-1 bg-slate-50 rounded-2xl border border-slate-200 p-5 space-y-4">
+                      <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                        <Send className="w-3.5 h-3.5 text-primary-main" />
                         <span>Request Payout</span>
                       </h3>
 
-                      <form onSubmit={handleWithdrawSubmit} className="space-y-2.5">
+                      <form onSubmit={handleWithdrawSubmit} className="space-y-3">
                         <div>
-                          <label className="text-[10px] sm:text-[11px] font-bold text-slate-700 block mb-0.5">
+                          <label className="text-[11px] font-bold text-slate-700 block mb-1">
                             Withdrawal Amount (৳) *
                           </label>
                           <input
@@ -1816,19 +1905,19 @@ export default function ShareholderDashboard() {
                             placeholder="Min ৳100"
                             value={withdrawAmount}
                             onChange={(e) => setWithdrawAmount(e.target.value)}
-                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-primary-main font-mono"
+                            className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-primary-main font-mono"
                             required
                           />
                         </div>
 
                         <div>
-                          <label className="text-[10px] sm:text-[11px] font-bold text-slate-700 block mb-0.5">
+                          <label className="text-[11px] font-bold text-slate-700 block mb-1">
                             Payout Method *
                           </label>
                           <select
                             value={withdrawMethod}
                             onChange={(e) => setWithdrawMethod(e.target.value as any)}
-                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-primary-main font-medium"
+                            className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-primary-main font-medium"
                           >
                             <option value="bKash">bKash (বিকাশ)</option>
                             <option value="Nagad">Nagad (নগদ)</option>
@@ -1838,15 +1927,15 @@ export default function ShareholderDashboard() {
                         </div>
 
                         <div>
-                          <label className="text-[10px] sm:text-[11px] font-bold text-slate-700 block mb-0.5">
-                            Account Number *
+                          <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                            Recipient Account Number *
                           </label>
                           <input
                             type="text"
                             placeholder="e.g. 01XXXXXXXXX or Bank A/C"
                             value={withdrawAccount}
                             onChange={(e) => setWithdrawAccount(e.target.value)}
-                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-primary-main font-mono"
+                            className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-primary-main font-mono"
                             required
                           />
                         </div>
@@ -1854,29 +1943,29 @@ export default function ShareholderDashboard() {
                         <button
                           type="submit"
                           disabled={withdrawSubmitting || !withdrawAmount || Number(withdrawAmount) < 100 || Number(withdrawAmount) > (summary?.availableWithdrawBalance || 0)}
-                          className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs rounded-lg transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                          className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs rounded-xl transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           {withdrawSubmitting ? (
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <RefreshCw className="w-4 h-4 animate-spin" />
                           ) : (
-                            <Send className="w-3 h-3" />
+                            <Send className="w-3.5 h-3.5" />
                           )}
-                          <span>Submit Request</span>
+                          <span>Submit Withdrawal Request</span>
                         </button>
                       </form>
                     </div>
 
                     {/* Withdrawal Guidelines and Status */}
-                    <div className="md:col-span-2 space-y-3">
-                      <div className="bg-sky-50 rounded-xl border border-sky-100 p-3 space-y-1.5 text-xs text-slate-700">
-                        <h4 className="font-bold text-slate-900 flex items-center gap-1.5 text-[11px]">
-                          <ShieldCheck className="w-3.5 h-3.5 text-primary-main" />
+                    <div className="md:col-span-2 space-y-4">
+                      <div className="bg-sky-50 rounded-2xl border border-sky-100 p-4 space-y-2 text-xs text-slate-700">
+                        <h4 className="font-bold text-slate-900 flex items-center gap-1.5">
+                          <ShieldCheck className="w-4 h-4 text-primary-main" />
                           <span>Official Withdrawal Protocol</span>
                         </h4>
-                        <ul className="list-disc pl-4 space-y-0.5 text-slate-600 text-[10px] sm:text-[11px]">
-                          <li>Withdrawals are processed strictly from verified available benefits balance.</li>
+                        <ul className="list-disc pl-4 space-y-1 text-slate-600 text-[11px]">
+                          <li>Withdrawal requests are processed strictly from verified available benefits balance.</li>
                           <li>Minimum single withdrawal amount is ৳100 BDT.</li>
-                          <li>Payouts processed to authorized account within 24-48 business hours.</li>
+                          <li>Corporate finance approves and disburses payouts to the authorized recipient account within 24-48 business hours.</li>
                         </ul>
                       </div>
 
@@ -1886,26 +1975,26 @@ export default function ShareholderDashboard() {
                           <table className="w-full text-xs text-left">
                             <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
                               <tr>
-                                <th className="py-2 px-2.5">Date</th>
-                                <th className="py-2 px-2.5">Amount</th>
-                                <th className="py-2 px-2.5">Method</th>
-                                <th className="py-2 px-2.5">Account</th>
-                                <th className="py-2 px-2.5">Status</th>
+                                <th className="py-2.5 px-3">Date</th>
+                                <th className="py-2.5 px-3">Amount</th>
+                                <th className="py-2.5 px-3">Method</th>
+                                <th className="py-2.5 px-3">Account</th>
+                                <th className="py-2.5 px-3">Status</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-200">
                               {transactions.withdrawals.map((w, idx) => (
                                 <tr key={idx} className="hover:bg-slate-50">
-                                  <td className="py-2 px-2.5 text-slate-600 text-[11px]">
+                                  <td className="py-2.5 px-3 text-slate-600">
                                     {new Date(w.requestedAt || w.createdAt || Date.now()).toLocaleDateString('en-GB')}
                                   </td>
-                                  <td className="py-2 px-2.5 font-mono font-bold text-slate-900 text-[11px]">
+                                  <td className="py-2.5 px-3 font-mono font-bold text-slate-900">
                                     ৳{Number(w.amount || 0).toLocaleString()}
                                   </td>
-                                  <td className="py-2 px-2.5 font-medium text-[11px]">{w.paymentMethod}</td>
-                                  <td className="py-2 px-2.5 font-mono text-[11px]">{w.accountNumber}</td>
-                                  <td className="py-2 px-2.5">
-                                    <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
+                                  <td className="py-2.5 px-3 font-medium">{w.paymentMethod}</td>
+                                  <td className="py-2.5 px-3 font-mono">{w.accountNumber}</td>
+                                  <td className="py-2.5 px-3">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                       w.status === 'paid' ? 'bg-emerald-100 text-emerald-800' :
                                       w.status === 'rejected' ? 'bg-red-100 text-red-800' :
                                       'bg-amber-100 text-amber-800'
@@ -1918,7 +2007,7 @@ export default function ShareholderDashboard() {
                             </tbody>
                           </table>
                         ) : (
-                          <div className="p-4 text-center text-xs text-slate-500">
+                          <div className="p-6 text-center text-xs text-slate-500">
                             No past withdrawals found.
                           </div>
                         )}
@@ -1933,35 +2022,35 @@ export default function ShareholderDashboard() {
                 TAB 7: NOTIFICATIONS (Section H)
             ========================================================================== */}
             {activeNavTab === 'notifications' && (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 shadow-2xs space-y-3">
-                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                      <Bell className="w-3.5 h-3.5 text-primary-main" />
-                      <span>{language === 'bn' ? 'বিজ্ঞপ্তি ও নোটিফিকেশন' : 'Section H: Notifications'}</span>
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-primary-main" />
+                      <span>Section H: Shareholder Notifications (বিজ্ঞপ্তি ও নোটিফিকেশন)</span>
                     </h2>
-                    <span className="text-[10px] sm:text-xs font-semibold text-slate-500 font-mono">
+                    <span className="text-xs font-semibold text-slate-500 font-mono">
                       {notifications.length} Updates
                     </span>
                   </div>
 
                   {notifications.length > 0 ? (
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {notifications.map((item) => (
-                        <div key={item.id} className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-start gap-2.5">
-                          <div className="w-6 h-6 rounded-lg bg-primary-main/10 text-primary-main flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
+                        <div key={item.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-primary-main/10 text-primary-main flex items-center justify-center shrink-0 mt-0.5">
+                            <CheckCircle2 className="w-4 h-4" />
                           </div>
                           <div className="space-y-0.5 flex-grow">
                             <div className="flex items-center justify-between">
-                              <span className="text-[11px] sm:text-xs font-bold text-slate-900">
+                              <span className="text-xs font-bold text-slate-900">
                                 {language === 'bn' && item.titleBn ? item.titleBn : item.title}
                               </span>
-                              <span className="text-[9px] text-slate-400 font-medium">
+                              <span className="text-[10px] text-slate-400 font-medium">
                                 {new Date(item.timestamp).toLocaleDateString('en-GB')}
                               </span>
                             </div>
-                            <p className="text-[10px] sm:text-[11px] text-slate-600 leading-relaxed">
+                            <p className="text-xs text-slate-600 leading-relaxed">
                               {language === 'bn' && item.messageBn ? item.messageBn : item.message}
                             </p>
                           </div>
@@ -1969,7 +2058,7 @@ export default function ShareholderDashboard() {
                       ))}
                     </div>
                   ) : (
-                    <div className="p-6 text-center bg-slate-50 rounded-xl text-xs text-slate-500">
+                    <div className="p-8 text-center bg-slate-50 rounded-2xl text-xs text-slate-500">
                       No notifications at this time.
                     </div>
                   )}
@@ -1981,79 +2070,79 @@ export default function ShareholderDashboard() {
                 TAB 8: SHAREHOLDER PROFILE (Section A)
             ========================================================================== */}
             {activeNavTab === 'profile' && (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 shadow-2xs space-y-3 sm:space-y-4">
-                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-                    <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-primary-main" />
-                      <span>{language === 'bn' ? 'শেয়ারহোল্ডার প্রোফাইল' : 'Section A: Shareholder Profile'}</span>
+              <div className="space-y-6">
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <User className="w-4 h-4 text-primary-main" />
+                      <span>Section A: Shareholder Profile (শেয়ারহোল্ডার প্রোফাইল)</span>
                     </h2>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-bold bg-emerald-100 text-emerald-800">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
                       Verified Member
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 text-xs sm:text-sm">
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Full Name</span>
-                      <span className="font-bold text-slate-900 text-xs sm:text-sm block mt-0.5 truncate">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs sm:text-sm">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Full Name</span>
+                      <span className="font-bold text-slate-900 text-sm sm:text-base block mt-1 truncate">
                         {profile?.fullName || profile?.applicantName || user?.displayName || 'Registered Shareholder'}
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Registered Email</span>
-                      <span className="font-bold text-slate-900 text-xs sm:text-sm block mt-0.5 truncate">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Registered Email</span>
+                      <span className="font-bold text-slate-900 text-sm block mt-1 truncate">
                         {profile?.email || user?.email || 'N/A'}
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Shareholder ID</span>
-                      <span className="font-mono font-bold text-primary-main text-xs sm:text-sm block mt-0.5">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Shareholder ID</span>
+                      <span className="font-mono font-bold text-primary-main text-sm sm:text-base block mt-1">
                         {shareholderId}
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Activation Date</span>
-                      <span className="font-bold text-slate-900 block mt-0.5 text-xs sm:text-sm">
-                        {profile?.accountCreationDate ? new Date(profile.accountCreationDate).toLocaleDateString('en-GB') : 'Active'}
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Account Activation Date</span>
+                      <span className="font-bold text-slate-900 block mt-1">
+                        {profile?.accountCreationDate ? new Date(profile.accountCreationDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Active'}
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Primary Application ID</span>
-                      <span className="font-mono font-bold text-slate-800 text-xs block mt-0.5 truncate">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Primary Application ID</span>
+                      <span className="font-mono font-bold text-slate-800 text-xs sm:text-sm block mt-1 truncate">
                         {profile?.applicationId || transactions.sharePurchases[0]?.id || 'N/A'}
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Verification Status</span>
-                      <span className="font-bold text-emerald-600 flex items-center gap-1 mt-0.5 text-xs">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Payment Verification Status</span>
+                      <span className="font-bold text-emerald-600 flex items-center gap-1 mt-1">
+                        <CheckCircle2 className="w-4 h-4" />
                         <span>{profile?.paymentVerificationStatus || 'Verified'}</span>
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Account Status</span>
-                      <span className="font-bold text-slate-900 block mt-0.5 text-xs">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Shareholder Account Status</span>
+                      <span className="font-bold text-slate-900 block mt-1">
                         {profile?.shareholderAccountStatus || 'Active Shareholder'}
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Phone</span>
-                      <span className="font-mono font-bold text-slate-900 block mt-0.5 text-xs">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Registered Phone</span>
+                      <span className="font-mono font-bold text-slate-900 block mt-1">
                         {profile?.phone || userData?.phone || 'N/A'}
                       </span>
                     </div>
 
-                    <div className="p-2.5 sm:p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="text-slate-400 block text-[9px] sm:text-[10px] font-medium">Address</span>
-                      <span className="font-medium text-slate-800 block mt-0.5 text-xs truncate">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <span className="text-slate-400 block text-[11px] font-medium">Official Address</span>
+                      <span className="font-medium text-slate-800 block mt-1 truncate">
                         {profile?.address || 'Bangladesh'}
                       </span>
                     </div>
@@ -2065,270 +2154,334 @@ export default function ShareholderDashboard() {
         )}
       </main>
 
-      {/* Official Printable Share Certificate Modal */}
-      <OfficialShareCertificateModal
-        isOpen={showCertificateModal}
-        onClose={() => setShowCertificateModal(false)}
-        certificate={certificate}
-      />
-
       {/* =========================================================================
-          INCREASE SHARES MODAL (Mobile Responsive & Touch Friendly)
+          INCREASE SHARES MODAL (Requirement 2)
       ========================================================================== */}
-      {showIncreaseSharesModal && (
-        <div 
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain animate-in fade-in duration-200"
-          onClick={() => setShowIncreaseSharesModal(false)}
-        >
-          <div 
-            className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden my-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {showIncreaseModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col">
             {/* Modal Header */}
-            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-sky-950 text-white p-3.5 sm:p-5 relative">
+            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-sky-950 text-white p-4 sm:p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <Coins className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black tracking-tight flex items-center gap-2">
+                    <span>+ Increase Shares</span>
+                    <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/60">
+                      {language === 'bn' ? 'শেয়ার বৃদ্ধি করুন' : 'Equity Expansion'}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-300">
+                    {language === 'bn' ? 'অতিরিক্ত শেয়ার ক্রয় করে মালিকানা বৃদ্ধি করুন' : 'Purchase additional corporate shares cumulatively'}
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowIncreaseSharesModal(false)}
-                className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+                onClick={() => {
+                  setShowIncreaseModal(false);
+                  setIncreaseSuccessData(null);
+                }}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
-
-              <div className="flex items-center gap-1.5 mb-1">
-                <span className="px-2 py-0.2 rounded-full text-[9px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  RJ WORLD BD • Equity Share
-                </span>
-              </div>
-              <h3 className="text-base sm:text-lg font-black text-white">
-                {language === 'bn' ? 'অতিরিক্ত শেয়ার বৃদ্ধি করুন' : 'Increase Your Shares'}
-              </h3>
-              <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5">
-                {language === 'bn'
-                  ? 'প্রতি ১% শেয়ারের মূল্য মাত্র ২,০০০ টাকা। তাত্ক্ষণিক অটোমেটিক পেমেন্ট গেটওয়ে।'
-                  : 'Rate: ৳2,000 per 1% share. Instant automatic payment gateway.'}
-              </p>
             </div>
 
             {/* Modal Body */}
-            <div className="p-3.5 sm:p-5 space-y-3 sm:space-y-4">
-              {/* Current Ownership Badge */}
-              <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-[11px] sm:text-xs">
-                <span className="text-slate-600 font-medium">
-                  {language === 'bn' ? 'বর্তমান মালিকানা' : 'Current Ownership'}
-                </span>
-                <span className="font-bold text-primary-main bg-primary-main/10 px-2 py-0.5 rounded-full font-mono">
-                  {summary?.approvedSharePercentage || 1}% Equity ({summary?.approvedSharePercentage || 1} Units)
-                </span>
-              </div>
-
-              {/* Share Increment Selector */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-bold text-slate-800 uppercase tracking-wide">
-                  {language === 'bn' ? 'অতিরিক্ত শেয়ার সংখ্যা' : 'Additional Share Percentage'}
-                </label>
-
-                {/* Stepper with Controls */}
-                <div className="flex items-center gap-2 sm:gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setAdditionalSharePercent(Math.max(1, additionalSharePercent - 1))}
-                    disabled={additionalSharePercent <= 1}
-                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0 font-bold"
-                  >
-                    <Minus className="w-3.5 h-3.5" />
-                  </button>
-
-                  <div className="flex-1 bg-slate-50 rounded-lg sm:rounded-xl border border-slate-300 px-3 py-1.5 text-center">
-                    <span className="text-lg sm:text-xl font-black text-primary-main font-mono">
-                      {additionalSharePercent}%
-                    </span>
-                    <span className="block text-[9px] sm:text-[10px] text-slate-500 font-medium">
-                      ({additionalSharePercent} Share Units)
-                    </span>
+            <div className="p-4 sm:p-6 overflow-y-auto flex-grow space-y-4">
+              {increaseSuccessData ? (
+                /* SUCCESS / CONFIRMATION VIEW */
+                <div className="text-center py-2 space-y-4">
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+                    <CheckCircle2 className="w-8 h-8" />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setAdditionalSharePercent(Math.min(50, additionalSharePercent + 1))}
-                    disabled={additionalSharePercent >= 50}
-                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0 font-bold"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                  <div>
+                    <span className="inline-block px-3 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 mb-1.5">
+                      {increaseSuccessData.isInstant ? 'যাচাইকৃত ও সক্রিয় (Verified & Active)' : 'আবেদন গৃহীত (Under Verification)'}
+                    </span>
+                    <h4 className="text-lg font-black text-slate-900">
+                      {language === 'bn'
+                        ? `অভিনন্দন! আপনার অতিরিক্ত ${increaseSuccessData.addedShares}টি শেয়ার সফলভাবে রেকর্ড হয়েছে`
+                        : `Success! Added +${increaseSuccessData.addedShares} Additional Shares`}
+                    </h4>
+                    <p className="text-xs text-slate-600 mt-1 max-w-sm mx-auto">
+                      {increaseSuccessData.isInstant
+                        ? (language === 'bn'
+                            ? 'পেমেন্ট সফলভাবে স্বয়ংক্রিয়ভাবে যাচাই হয়েছে এবং আপনার বর্তমান শেয়ারে যুক্ত হয়েছে।'
+                            : 'Payment was verified automatically and added to your active shareholding.')
+                        : (language === 'bn'
+                            ? 'আপনার পেমেন্ট তথ্য গৃহীত হয়েছে। অ্যাডমিন ও SMS ভেরিফিকেশন সম্পন্ন হওয়ামাত্রই ব্যালেন্সে যুক্ত হবে।'
+                            : 'Payment details received. Additional shares will reflect once verification completes.')}
+                    </p>
+                  </div>
 
-                {/* Quick Selection Chips */}
-                <div className="grid grid-cols-5 gap-1 pt-0.5">
-                  {[1, 2, 3, 5, 10].map((val) => (
+                  {/* Cumulative Breakdown Box */}
+                  <div className="bg-slate-50 rounded-2xl border border-slate-200 p-3.5 text-left space-y-2 text-xs">
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>পূর্বের শেয়ার (Previous Shares):</span>
+                      <span className="font-bold text-slate-800">{increaseSuccessData.previousShares}% ({increaseSuccessData.previousShares} Units)</span>
+                    </div>
+                    <div className="flex justify-between items-center text-emerald-700 bg-emerald-50/80 p-2 rounded-xl border border-emerald-100">
+                      <span className="font-bold">+ অতিরিক্ত ক্রয় (Newly Purchased):</span>
+                      <span className="font-black text-emerald-800">+{increaseSuccessData.addedShares}% (৳{increaseSuccessData.addedCapital.toLocaleString()})</span>
+                    </div>
+                    <div className="border-t border-slate-200 pt-2 flex justify-between items-center text-xs font-black text-slate-900">
+                      <span>সর্বমোট নতুন শেয়ার (New Total Shares):</span>
+                      <span className="text-primary-main">{increaseSuccessData.newTotalShares}% ({increaseSuccessData.newTotalShares} Units)</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600 text-[11px]">
+                      <span>মোট পরিশোধিত মূলধন (Total Capital):</span>
+                      <span className="font-bold text-slate-800">৳{increaseSuccessData.newTotalCapital.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-500 text-[11px]">
+                      <span>Transaction ID (TrxID):</span>
+                      <span className="font-mono font-bold text-slate-700">{increaseSuccessData.transactionId}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
                     <button
-                      key={val}
                       type="button"
-                      onClick={() => setAdditionalSharePercent(val)}
-                      className={`py-1 text-[10px] sm:text-[11px] font-bold rounded-md transition-all cursor-pointer text-center ${
-                        additionalSharePercent === val
-                          ? 'bg-primary-main text-white shadow-2xs'
-                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                      }`}
+                      onClick={() => {
+                        setShowIncreaseModal(false);
+                        setIncreaseSuccessData(null);
+                        fetchDashboardData();
+                      }}
+                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer transition-all"
                     >
-                      +{val}%
+                      {language === 'bn' ? 'ড্যাশবোর্ডে ফিরে যান' : 'Close & Refresh Dashboard'}
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowIncreaseModal(false);
+                        setIncreaseSuccessData(null);
+                        setActiveNavTab('certificate');
+                      }}
+                      className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl shadow-md cursor-pointer transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <Award className="w-4 h-4" />
+                      <span>{language === 'bn' ? 'আপডেট সার্টিফিকেট দেখুন' : 'View Certificate'}</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                /* SHARE PURCHASE FORM */
+                <form onSubmit={handleIncreaseSharesSubmit} className="space-y-4">
+                  {/* Step 1: Select Shares */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] flex items-center justify-center font-bold">1</span>
+                        <span>{language === 'bn' ? 'অতিরিক্ত শেয়ার সংখ্যা নির্বাচন করুন' : 'Select Additional Shares'}</span>
+                      </label>
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        ৳2,000 / 1%
+                      </span>
+                    </div>
 
-              {/* Dynamic Financial Calculation Summary */}
-              <div className="p-2.5 sm:p-3 bg-emerald-50 rounded-xl border border-emerald-200 space-y-1.5 text-[11px] sm:text-xs">
-                <div className="flex items-center justify-between text-slate-600">
-                  <span>{language === 'bn' ? 'অতিরিক্ত শেয়ার' : 'Additional Share'}</span>
-                  <span className="font-bold text-slate-900 font-mono">+{additionalSharePercent}%</span>
-                </div>
-                <div className="flex items-center justify-between text-slate-600">
-                  <span>{language === 'bn' ? 'শেয়ার প্রতি মূল্য' : 'Unit Price'}</span>
-                  <span className="font-medium text-slate-900">৳2,000 / 1%</span>
-                </div>
-                <div className="flex items-center justify-between text-slate-600 border-t border-emerald-200/60 pt-1.5">
-                  <span className="font-bold text-slate-800">
-                    {language === 'bn' ? 'মোট প্রদেয় অর্থ' : 'Total Amount Payable'}
-                  </span>
-                  <span className="text-base sm:text-lg font-black text-emerald-700 font-mono">
-                    ৳{(additionalSharePercent * 2000).toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-slate-500 text-[10px] pt-0.5">
-                  <span>{language === 'bn' ? 'পেমেন্ট পরবর্তী মোট মালিকানা' : 'Resulting Total Equity'}</span>
-                  <span className="font-bold text-primary-main">
-                    {(summary?.approvedSharePercentage || 1) + additionalSharePercent}% Equity
-                  </span>
-                </div>
-              </div>
+                    {/* Preset buttons */}
+                    <div className="grid grid-cols-5 gap-1.5 mb-2">
+                      {[1, 2, 3, 5, 10].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setIncreaseShares(preset);
+                            setIncreaseCustomInput(preset.toString());
+                          }}
+                          className={`py-2 px-1 rounded-xl text-xs font-bold border transition-all text-center cursor-pointer ${
+                            increaseShares === preset
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          +{preset} %
+                        </button>
+                      ))}
+                    </div>
 
-              {/* Notice */}
-              <div className="p-2 bg-amber-50 rounded-lg border border-amber-200 flex items-start gap-1.5 text-[10px] text-amber-800 leading-relaxed">
-                <Info className="w-3 h-3 text-amber-600 shrink-0 mt-0.5" />
-                <p>
-                  {language === 'bn'
-                    ? 'ইনস্ট্যান্ট গেটওয়েতে সফলভাবে পেমেন্ট করার পর স্বয়ংক্রিয়ভাবে অতিরিক্ত শেয়ার আপনার অ্যাকাউন্টে যুক্ত হবে।'
-                    : 'Instant Automatic Payment Gateway will verify your transaction immediately and update your portfolio.'}
-                </p>
-              </div>
+                    {/* Custom Input */}
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={increaseCustomInput}
+                        onChange={(e) => {
+                          setIncreaseCustomInput(e.target.value);
+                          const val = parseInt(e.target.value, 10);
+                          if (!isNaN(val) && val > 0) {
+                            setIncreaseShares(val);
+                          }
+                        }}
+                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
+                        placeholder="Custom %"
+                      />
+                      <span className="absolute right-3 top-2 text-[11px] font-bold text-slate-500">
+                        {increaseShares}% Equity (৳{(increaseShares * 2000).toLocaleString()})
+                      </span>
+                    </div>
+                  </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2 pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => setShowIncreaseSharesModal(false)}
-                  className="w-1/3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer text-center"
-                >
-                  {language === 'bn' ? 'বাতিল' : 'Cancel'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowIncreaseSharesModal(false);
-                    setShowPaymentSelectionModal(true);
-                  }}
-                  className="w-2/3 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs sm:text-sm shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1"
-                >
-                  <span>{language === 'bn' ? `পরবর্তী: ৳${(additionalSharePercent * 2000).toLocaleString()} পে করুন` : `Pay ৳${(additionalSharePercent * 2000).toLocaleString()}`}</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
+                  {/* Dynamic Calculation Card */}
+                  <div className="p-3 bg-gradient-to-br from-slate-900 to-sky-950 text-white rounded-2xl space-y-2 text-xs">
+                    <div className="text-[10px] text-slate-300 font-semibold uppercase tracking-wider pb-1 border-b border-slate-800 flex justify-between">
+                      <span>মালিকানা হিসাব (Cumulative Projection)</span>
+                      <span className="text-emerald-400 font-bold">স্বয়ংক্রিয়ভাবে যোগ হবে</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center pt-0.5">
+                      <div className="p-1.5 rounded-xl bg-white/5 border border-white/10">
+                        <span className="text-[9px] text-slate-400 block">বর্তমান শেয়ার</span>
+                        <span className="font-bold text-white text-xs sm:text-sm">
+                          {summary?.approvedSharePercentage || 1}%
+                        </span>
+                      </div>
+                      <div className="p-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30">
+                        <span className="text-[9px] text-emerald-300 block">নতুন বৃদ্ধি</span>
+                        <span className="font-bold text-emerald-400 text-xs sm:text-sm">
+                          +{increaseShares}%
+                        </span>
+                      </div>
+                      <div className="p-1.5 rounded-xl bg-amber-500/20 border border-amber-500/30">
+                        <span className="text-[9px] text-amber-300 block">মোট শেয়ার</span>
+                        <span className="font-bold text-amber-400 text-xs sm:text-sm">
+                          {(summary?.approvedSharePercentage || 1) + increaseShares}%
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 text-[11px] text-slate-300">
+                      <span>প্রদেয় অর্থ (Additional Payable):</span>
+                      <span className="font-black text-emerald-400 text-xs sm:text-sm">৳{(increaseShares * 2000).toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  {/* Step 2: Payment Method */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-1.5">
+                      <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] flex items-center justify-center font-bold">2</span>
+                      <span>{language === 'bn' ? 'পেমেন্ট মাধ্যম বেছে নিন' : 'Select Payment Method'}</span>
+                    </label>
+
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[
+                        { id: 'bKash', label: 'bKash', active: 'bg-pink-600 text-white' },
+                        { id: 'Nagad', label: 'Nagad', active: 'bg-orange-600 text-white' },
+                        { id: 'Rocket', label: 'Rocket', active: 'bg-purple-600 text-white' },
+                        { id: 'Upay', label: 'Upay', active: 'bg-amber-600 text-white' }
+                      ].map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setIncreasePaymentMethod(m.id as any)}
+                          className={`py-1.5 px-1 text-center font-bold text-xs rounded-xl border transition-all cursor-pointer ${
+                            increasePaymentMethod === m.id
+                              ? `${m.active} border-transparent shadow-xs`
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* MFS Account & Copy Details */}
+                    <div className="mt-2 p-2.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-semibold">
+                          {increasePaymentMethod} Personal (Send Money)
+                        </span>
+                        <span className="font-mono font-black text-slate-900 text-xs sm:text-sm">
+                          01712345678
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText('01712345678');
+                          toast.success('নম্বর কপি করা হয়েছে!');
+                        }}
+                        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-bold hover:bg-slate-100 flex items-center gap-1 cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Step 3: Transaction ID & Mobile */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] flex items-center justify-center font-bold">3</span>
+                      <span>{language === 'bn' ? 'পেমেন্ট তথ্য প্রদান করুন' : 'Enter Payment Details'}</span>
+                    </label>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        Transaction ID (TrxID) <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={increaseTrxId}
+                        onChange={(e) => setIncreaseTrxId(e.target.value.toUpperCase())}
+                        placeholder="e.g. BL9X7K2M19"
+                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono font-bold tracking-wider uppercase"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
+                        {language === 'bn' ? 'প্রেরক মোবাইল নম্বর (Sender Mobile)' : 'Sender Phone Number'}
+                      </label>
+                      <input
+                        type="tel"
+                        value={increaseSenderMobile}
+                        onChange={(e) => setIncreaseSenderMobile(e.target.value)}
+                        placeholder="01XXXXXXXXX"
+                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Submit Button */}
+                  <button
+                    type="submit"
+                    disabled={increaseSubmitting || !increaseTrxId.trim()}
+                    className="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.99] text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {increaseSubmitting ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>{language === 'bn' ? 'যাচাই ও রেকর্ড করা হচ্ছে...' : 'Verifying & Recording...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4" />
+                        <span>
+                          {language === 'bn'
+                            ? `পেমেন্ট নিশ্চিত করুন ও +${increaseShares}% শেয়ার যুক্ত করুন`
+                            : `Confirm Payment & Add +${increaseShares}% Shares`}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* =========================================================================
-          PAYMENT SELECTION & CHANNEL MODALS (Matching Reseller Registration Gateway)
-      ========================================================================== */}
-      {/* 1. Payment Method Selection Modal */}
-      <PaymentMethodSelectionModal
-        isOpen={showPaymentSelectionModal}
-        onClose={() => setShowPaymentSelectionModal(false)}
-        amount={additionalSharePercent * 2000}
-        invoiceId={currentInvoiceId}
-        paymentType="share_purchase"
-        onConfirmPayment={(channel) => {
-          setSelectedPaymentChannel(channel);
-          setShowPaymentSelectionModal(false);
-          setPaymentErrorMessage('');
-          if (channel === 'bkash') setShowBkashModal(true);
-          else if (channel === 'nagad') setShowNagadModal(true);
-          else if (channel === 'rocket') setShowRocketModal(true);
-          else if (channel === 'upay') setShowUpayModal(true);
-        }}
-      />
-
-      {/* 2. bKash Payment Modal */}
-      <BkashPaymentModal
-        isOpen={showBkashModal}
-        onClose={() => {
-          setShowBkashModal(false);
-          setPaymentErrorMessage('');
-        }}
-        onBack={() => {
-          setShowBkashModal(false);
-          setShowPaymentSelectionModal(true);
-        }}
-        amount={additionalSharePercent * 2000}
-        invoiceId={currentInvoiceId}
-        isSubmitting={increaseShareSubmitting}
-        errorMessage={paymentErrorMessage}
-        onVerify={(trxId) => handleCompleteIncreaseSharePayment('bkash', trxId)}
-      />
-
-      {/* 3. Nagad Payment Modal */}
-      <NagadPaymentModal
-        isOpen={showNagadModal}
-        onClose={() => {
-          setShowNagadModal(false);
-          setPaymentErrorMessage('');
-        }}
-        onBack={() => {
-          setShowNagadModal(false);
-          setShowPaymentSelectionModal(true);
-        }}
-        amount={additionalSharePercent * 2000}
-        invoiceId={currentInvoiceId}
-        isSubmitting={increaseShareSubmitting}
-        errorMessage={paymentErrorMessage}
-        onVerify={(trxId) => handleCompleteIncreaseSharePayment('nagad', trxId)}
-      />
-
-      {/* 4. Rocket Payment Modal */}
-      <RocketPaymentModal
-        isOpen={showRocketModal}
-        onClose={() => {
-          setShowRocketModal(false);
-          setPaymentErrorMessage('');
-        }}
-        onBack={() => {
-          setShowRocketModal(false);
-          setShowPaymentSelectionModal(true);
-        }}
-        amount={additionalSharePercent * 2000}
-        invoiceId={currentInvoiceId}
-        isSubmitting={increaseShareSubmitting}
-        errorMessage={paymentErrorMessage}
-        onVerify={(trxId) => handleCompleteIncreaseSharePayment('rocket', trxId)}
-      />
-
-      {/* 5. Upay Payment Modal */}
-      <UpayPaymentModal
-        isOpen={showUpayModal}
-        onClose={() => {
-          setShowUpayModal(false);
-          setPaymentErrorMessage('');
-        }}
-        onBack={() => {
-          setShowUpayModal(false);
-          setShowPaymentSelectionModal(true);
-        }}
-        amount={additionalSharePercent * 2000}
-        invoiceId={currentInvoiceId}
-        isSubmitting={increaseShareSubmitting}
-        errorMessage={paymentErrorMessage}
-        onVerify={(trxId) => handleCompleteIncreaseSharePayment('upay', trxId)}
+      {/* Official Printable Share Certificate Modal */}
+      <OfficialShareCertificateModal
+        isOpen={showCertificateModal}
+        onClose={() => setShowCertificateModal(false)}
+        certificate={certificate}
       />
 
       <Footer />
