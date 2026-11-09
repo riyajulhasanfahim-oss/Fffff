@@ -75,6 +75,7 @@ export default function LiveSupportChatBox({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Listen to unread counts across all support channels
   useEffect(() => {
@@ -126,10 +127,15 @@ export default function LiveSupportChatBox({
     return () => unsub();
   }, [threadId, selectedRole, user?.uid]);
 
-  // Auto scroll to bottom
+  // Auto scroll to bottom inside container
   useEffect(() => {
     if (messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTo({
+          top: messagesContainerRef.current.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
     }
   }, [messages.length]);
 
@@ -375,7 +381,7 @@ export default function LiveSupportChatBox({
       </div>
 
       {/* Messages Stream */}
-      <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto space-y-3 bg-slate-50/60">
+      <div ref={messagesContainerRef} className="flex-1 p-3.5 sm:p-4 overflow-y-auto space-y-3 bg-slate-50/60 overscroll-contain">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
             <Loader2 className="w-6 h-6 animate-spin text-primary-main" />

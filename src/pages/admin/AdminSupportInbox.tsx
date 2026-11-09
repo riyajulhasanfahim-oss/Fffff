@@ -84,6 +84,7 @@ export default function AdminSupportInbox({ defaultTab }: AdminSupportInboxProps
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Counts for tabs
   const [tabCounts, setTabCounts] = useState<Record<SupportRole, { total: number; unread: number }>>({
@@ -151,10 +152,15 @@ export default function AdminSupportInbox({ defaultTab }: AdminSupportInboxProps
     return () => unsub();
   }, [selectedThread?.threadId]);
 
-  // Auto-scroll to bottom of messages
+  // Auto-scroll to bottom of messages inside container
   useEffect(() => {
     if (messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTo({
+          top: messagesContainerRef.current.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
     }
   }, [messages.length]);
 
@@ -646,7 +652,7 @@ export default function AdminSupportInbox({ defaultTab }: AdminSupportInboxProps
               </div>
 
               {/* Messages Scroll Area */}
-              <div className="flex-1 p-4 overflow-y-auto space-y-3">
+              <div ref={messagesContainerRef} className="flex-1 p-4 overflow-y-auto space-y-3 overscroll-contain">
                 {loadingMessages ? (
                   <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
                     <Loader2 className="w-6 h-6 animate-spin text-primary-main" />

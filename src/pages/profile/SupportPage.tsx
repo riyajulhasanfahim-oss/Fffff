@@ -51,6 +51,7 @@ export default function SupportPage() {
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Tickets State
   const [tickets, setTickets] = useState<any[]>([]);
@@ -86,7 +87,12 @@ export default function SupportPage() {
 
   useEffect(() => {
     if (messages.length > 0 && activeTab === 'chat') {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTo({
+          top: messagesContainerRef.current.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
     }
   }, [messages.length, activeTab]);
 
@@ -351,7 +357,7 @@ export default function SupportPage() {
             </div>
 
             {/* Messages Area */}
-            <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto space-y-3 bg-slate-50/50">
+            <div ref={messagesContainerRef} className="flex-1 p-3.5 sm:p-4 overflow-y-auto space-y-3 bg-slate-50/50 overscroll-contain">
               {loadingChat ? (
                 <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
                   <Loader2 className="w-6 h-6 animate-spin text-primary-main" />

@@ -1,3 +1,18 @@
+import {
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  where,
+  orderBy,
+  limit
+} from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbUpdate, rtdbPush, rtdbSubscribe, rtdbRemove } from '../lib/rtdb';
 
 export type SupportRole = 'customer' | 'vendor' | 'reseller' | 'physical';
@@ -54,6 +69,7 @@ export function getThreadId(role: SupportRole, userId: string): string {
 
 /**
  * Send a message from a user (Customer, Vendor, or Reseller) to Admin
+ * Saved directly in Firestore with instant optimistic write and asynchronous RTDB backup
  */
 export async function sendUserSupportMessage(params: {
   role: SupportRole;
@@ -69,15 +85,33 @@ export async function sendUserSupportMessage(params: {
   const { role, userId, userName, userEmail, userPhone, userAvatar, subject, text, imageUrl } = params;
   const threadId = getThreadId(role, userId);
   const now = Date.now();
-
-  // 1. Get current thread info to preserve or increment counters
-  const currentThread = await rtdbGet<SupportThreadInfo>(`support_threads/${role}/${userId}`);
-  const currentUnreadAdmin = Number(currentThread?.unreadAdmin) || 0;
-
   const displayMessage = imageUrl && !text.trim() ? '📷 [ছবি সংযুক্ত করা হয়েছে]' : text.trim();
 
-  // 2. Push message to messages node
-  const messageData = {
+  // 1. Check existing thread in Firestore to maintain unread count
+  let currentUnreadAdmin = 0;
+  let existingCreatedAt = now;
+  try {
+    const threadDocRef = doc(db, 'support_threads', threadId);
+    const snap = await Promise.race([
+      getDoc(threadDocRef),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200))
+    ]);
+    if (snap && snap.exists()) {
+      const data = snap.data();
+      currentUnreadAdmin = Number(data?.unreadAdmin) || 0;
+      existingCreatedAt = Number(data?.createdAt) || now;
+    }
+  } catch (err) {
+    console.warn('[sendUserSupportMessage] Firestore read existing thread warning:', err);
+  }
+
+  // 2. Prepare message document in subcollection
+  const messagesColRef = collection(db, 'support_threads', threadId, 'messages');
+  const msgDocRef = doc(messagesColRef);
+  const msgId = msgDocRef.id;
+
+  const messageData: SupportMessage = {
+    id: msgId,
     threadId,
     senderId: userId,
     senderType: 'user',
@@ -87,34 +121,60 @@ export async function sendUserSupportMessage(params: {
     createdAt: now,
     read: false
   };
-  const msgKey = await rtdbPush(`support_messages/${threadId}`, messageData);
 
-  // 3. Update or create thread info
+  // 3. Prepare updated thread document
   const threadInfo: SupportThreadInfo = {
     threadId,
     role,
     userId,
-    userName: userName || currentThread?.userName || 'ব্যবহারকারী',
-    userEmail: userEmail || currentThread?.userEmail || '',
-    userPhone: userPhone || currentThread?.userPhone || '',
-    userAvatar: userAvatar || currentThread?.userAvatar || '',
-    subject: subject || currentThread?.subject || 'সহায়তা প্রয়োজন',
-    status: 'open', // New user message always re-opens or keeps thread open
+    userName: userName || 'ব্যবহারকারী',
+    userEmail: userEmail || '',
+    userPhone: userPhone || '',
+    userAvatar: userAvatar || '',
+    subject: subject || 'সহায়তা প্রয়োজন',
+    status: 'open',
     lastMessage: displayMessage,
     lastMessageTime: now,
     lastSenderType: 'user',
     unreadAdmin: currentUnreadAdmin + 1,
     unreadUser: 0,
-    createdAt: currentThread?.createdAt || now,
+    createdAt: existingCreatedAt,
     updatedAt: now
   };
 
-  await rtdbSet(`support_threads/${role}/${userId}`, threadInfo);
-  return msgKey;
+  // 4. Save to Firestore (Primary source of truth)
+  try {
+    await Promise.all([
+      setDoc(msgDocRef, messageData),
+      setDoc(doc(db, 'support_threads', threadId), threadInfo, { merge: true })
+    ]);
+  } catch (firestoreErr) {
+    console.error('[sendUserSupportMessage] Firestore write error:', firestoreErr);
+    // If strict rules reject, throw formatted error
+    handleFirestoreError(firestoreErr, OperationType.WRITE, `support_threads/${threadId}`);
+  }
+
+  // 5. Asynchronous background mirror to RTDB (Never blocks user UI or stalls network)
+  void (async () => {
+    try {
+      await Promise.race([
+        Promise.all([
+          rtdbSet(`support_messages/${threadId}/${msgId}`, messageData),
+          rtdbSet(`support_threads/${role}/${userId}`, threadInfo)
+        ]),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('RTDB mirror timeout')), 2500))
+      ]);
+    } catch (_) {
+      // Non-blocking background sync warning
+    }
+  })();
+
+  return msgId;
 }
 
 /**
  * Send a message from Admin to User
+ * Saved directly in Firestore with instant optimistic write and asynchronous RTDB backup
  */
 export async function sendAdminSupportMessage(params: {
   role: SupportRole;
@@ -127,12 +187,33 @@ export async function sendAdminSupportMessage(params: {
   const { role, userId, adminId, adminName = 'RJ Support Admin', text, imageUrl } = params;
   const threadId = getThreadId(role, userId);
   const now = Date.now();
-
-  const currentThread = await rtdbGet<SupportThreadInfo>(`support_threads/${role}/${userId}`);
-  const currentUnreadUser = Number(currentThread?.unreadUser) || 0;
   const displayMessage = imageUrl && !text.trim() ? '📷 [ছবি সংযুক্ত করা হয়েছে]' : text.trim();
 
-  const messageData = {
+  // 1. Check existing thread
+  let currentUnreadUser = 0;
+  let existingCreatedAt = now;
+  try {
+    const threadDocRef = doc(db, 'support_threads', threadId);
+    const snap = await Promise.race([
+      getDoc(threadDocRef),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200))
+    ]);
+    if (snap && snap.exists()) {
+      const data = snap.data();
+      currentUnreadUser = Number(data?.unreadUser) || 0;
+      existingCreatedAt = Number(data?.createdAt) || now;
+    }
+  } catch (err) {
+    console.warn('[sendAdminSupportMessage] Firestore read existing thread warning:', err);
+  }
+
+  // 2. Prepare message doc
+  const messagesColRef = collection(db, 'support_threads', threadId, 'messages');
+  const msgDocRef = doc(messagesColRef);
+  const msgId = msgDocRef.id;
+
+  const messageData: SupportMessage = {
+    id: msgId,
     threadId,
     senderId: adminId,
     senderType: 'admin',
@@ -142,73 +223,100 @@ export async function sendAdminSupportMessage(params: {
     createdAt: now,
     read: false
   };
-  const msgKey = await rtdbPush(`support_messages/${threadId}`, messageData);
 
-  if (currentThread) {
-    await rtdbUpdate(`support_threads/${role}/${userId}`, {
-      lastMessage: displayMessage,
-      lastMessageTime: now,
-      lastSenderType: 'admin',
-      unreadAdmin: 0,
-      unreadUser: currentUnreadUser + 1,
-      updatedAt: now
-    });
-  } else {
-    await rtdbSet(`support_threads/${role}/${userId}`, {
-      threadId,
-      role,
-      userId,
-      userName: 'ব্যবহারকারী',
-      status: 'open',
-      lastMessage: displayMessage,
-      lastMessageTime: now,
-      lastSenderType: 'admin',
-      unreadAdmin: 0,
-      unreadUser: currentUnreadUser + 1,
-      createdAt: now,
-      updatedAt: now
-    });
+  const threadUpdate = {
+    threadId,
+    role,
+    userId,
+    status: 'open',
+    lastMessage: displayMessage,
+    lastMessageTime: now,
+    lastSenderType: 'admin',
+    unreadAdmin: 0,
+    unreadUser: currentUnreadUser + 1,
+    updatedAt: now
+  };
+
+  // 3. Save to Firestore
+  try {
+    await Promise.all([
+      setDoc(msgDocRef, messageData),
+      setDoc(doc(db, 'support_threads', threadId), threadUpdate, { merge: true })
+    ]);
+  } catch (firestoreErr) {
+    console.error('[sendAdminSupportMessage] Firestore write error:', firestoreErr);
+    handleFirestoreError(firestoreErr, OperationType.WRITE, `support_threads/${threadId}`);
   }
 
-  // If this is a physical support reply, also sync with physical_support_requests node
+  // 4. Sync physical support requests if role is physical
   if (role === 'physical') {
-    try {
-      const physicalRequests = await rtdbGet<Record<string, any>>('physical_support_requests', 2500);
-      if (physicalRequests && typeof physicalRequests === 'object') {
-        const matchEntries = Object.entries(physicalRequests).filter(([_, val]) => val?.userId === userId);
+    void (async () => {
+      try {
+        const physicalCol = collection(db, 'physical_support_requests');
+        const q = query(physicalCol, where('userId', '==', userId));
+        const snap = await getDocs(q);
         const replySummary = text.trim() || (imageUrl ? '📷 এডমিন থেকে ছবি পাঠানো হয়েছে' : 'এডমিন সাপোর্ট রেসপন্স প্রদান করা হয়েছে');
-        for (const [key, val] of matchEntries) {
-          await rtdbUpdate(`physical_support_requests/${key}`, {
+        const updates = snap.docs.map((docSnap) =>
+          updateDoc(docSnap.ref, {
             adminNotes: replySummary,
-            status: val?.status === 'open' ? 'scheduled' : (val?.status || 'scheduled'),
+            status: docSnap.data().status === 'open' ? 'scheduled' : docSnap.data().status || 'scheduled',
             updatedAt: now
-          });
-        }
+          })
+        );
+        await Promise.all(updates);
+      } catch (e) {
+        console.warn('[sendAdminSupportMessage] Physical sync error:', e);
       }
-    } catch (err) {
-      console.warn('[sendAdminSupportMessage sync physical error]:', err);
-    }
+    })();
   }
 
-  return msgKey;
+  // 5. Asynchronous background mirror to RTDB
+  void (async () => {
+    try {
+      await Promise.race([
+        Promise.all([
+          rtdbSet(`support_messages/${threadId}/${msgId}`, messageData),
+          rtdbUpdate(`support_threads/${role}/${userId}`, {
+            lastMessage: displayMessage,
+            lastMessageTime: now,
+            lastSenderType: 'admin',
+            unreadAdmin: 0,
+            unreadUser: currentUnreadUser + 1,
+            updatedAt: now
+          })
+        ]),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('RTDB mirror timeout')), 2500))
+      ]);
+    } catch (_) {}
+  })();
+
+  return msgId;
 }
 
 /**
  * Mark thread as read for Admin
  */
 export async function markThreadReadByAdmin(role: SupportRole, userId: string): Promise<void> {
-  await rtdbUpdate(`support_threads/${role}/${userId}`, {
-    unreadAdmin: 0
-  });
+  const threadId = getThreadId(role, userId);
+  try {
+    await setDoc(doc(db, 'support_threads', threadId), { unreadAdmin: 0, updatedAt: Date.now() }, { merge: true });
+  } catch (err) {
+    console.warn('[markThreadReadByAdmin] Firestore error:', err);
+  }
+  void rtdbUpdate(`support_threads/${role}/${userId}`, { unreadAdmin: 0 }).catch(() => {});
 }
 
 /**
  * Mark thread as read for User
  */
 export async function markThreadReadByUser(role: SupportRole, userId: string): Promise<void> {
-  await rtdbUpdate(`support_threads/${role}/${userId}`, {
-    unreadUser: 0
-  });
+  const threadId = getThreadId(role, userId);
+  try {
+    await setDoc(doc(db, 'support_threads', threadId), { unreadUser: 0, updatedAt: Date.now() }, { merge: true });
+  } catch (err) {
+    console.warn('[markThreadReadByUser] Firestore error:', err);
+  }
+  void rtdbUpdate(`support_threads/${role}/${userId}`, { unreadUser: 0 }).catch(() => {});
 }
 
 /**
@@ -219,80 +327,223 @@ export async function updateThreadStatus(
   userId: string,
   status: 'open' | 'resolved'
 ): Promise<void> {
-  await rtdbUpdate(`support_threads/${role}/${userId}`, {
-    status,
-    updatedAt: Date.now()
-  });
+  const threadId = getThreadId(role, userId);
+  const now = Date.now();
+  try {
+    await setDoc(doc(db, 'support_threads', threadId), { status, updatedAt: now }, { merge: true });
+  } catch (err) {
+    console.warn('[updateThreadStatus] Firestore error:', err);
+  }
+  void rtdbUpdate(`support_threads/${role}/${userId}`, { status, updatedAt: now }).catch(() => {});
 }
 
 /**
  * Delete a specific message
  */
 export async function deleteSupportMessage(threadId: string, messageId: string): Promise<void> {
-  await rtdbRemove(`support_messages/${threadId}/${messageId}`);
+  try {
+    await deleteDoc(doc(db, 'support_threads', threadId, 'messages', messageId));
+  } catch (err) {
+    console.warn('[deleteSupportMessage] Firestore error:', err);
+  }
+  void rtdbRemove(`support_messages/${threadId}/${messageId}`).catch(() => {});
 }
 
 /**
  * Subscribe to messages in a thread
+ * Real-time listener on Firestore with fallback to RTDB for backwards compatibility
  */
 export function subscribeToThreadMessages(
   threadId: string,
   callback: (messages: SupportMessage[]) => void
 ): () => void {
-  return rtdbSubscribe<Record<string, any>>(`support_messages/${threadId}`, (data) => {
-    if (!data || typeof data !== 'object') {
-      callback([]);
+  const messagesColRef = collection(db, 'support_threads', threadId, 'messages');
+
+  let firestoreList: SupportMessage[] = [];
+  let rtdbListVal: SupportMessage[] = [];
+  let isFirestorePopulated = false;
+
+  const emitMerged = () => {
+    if (isFirestorePopulated && firestoreList.length > 0) {
+      callback(firestoreList);
       return;
     }
-    const list: SupportMessage[] = Object.entries(data).map(([id, val]) => ({
-      id,
-      threadId: val.threadId || threadId,
-      senderId: val.senderId || '',
-      senderType: val.senderType || 'user',
-      senderName: val.senderName || '',
-      text: val.text || '',
-      imageUrl: val.imageUrl || null,
-      createdAt: Number(val.createdAt) || 0,
-      read: !!val.read
-    }));
-    list.sort((a, b) => a.createdAt - b.createdAt);
-    callback(list);
+    // If Firestore has no messages yet, check if RTDB has legacy messages
+    if (rtdbListVal.length > 0) {
+      callback(rtdbListVal);
+      // Migrate legacy RTDB messages to Firestore in background
+      void (async () => {
+        try {
+          for (const m of rtdbListVal) {
+            await setDoc(doc(db, 'support_threads', threadId, 'messages', m.id), m, { merge: true });
+          }
+        } catch (_) {}
+      })();
+    } else {
+      callback(firestoreList);
+    }
+  };
+
+  // 1. Listen to Firestore
+  const unsubFirestore = onSnapshot(
+    messagesColRef,
+    (snapshot) => {
+      const list: SupportMessage[] = snapshot.docs.map((d) => {
+        const val = d.data();
+        return {
+          id: d.id,
+          threadId: val.threadId || threadId,
+          senderId: val.senderId || '',
+          senderType: (val.senderType || 'user') as 'user' | 'admin',
+          senderName: val.senderName || '',
+          text: val.text || '',
+          imageUrl: val.imageUrl || null,
+          createdAt: Number(val.createdAt) || 0,
+          read: !!val.read
+        };
+      });
+      list.sort((a, b) => a.createdAt - b.createdAt);
+      firestoreList = list;
+      isFirestorePopulated = true;
+      emitMerged();
+    },
+    (err) => {
+      console.warn('[subscribeToThreadMessages] Firestore snapshot warning:', err);
+      // Fallback silently if offline or rules error
+      if (!isFirestorePopulated) {
+        emitMerged();
+      }
+    }
+  );
+
+  // 2. Listen to RTDB as fallback
+  const unsubRtdb = rtdbSubscribe<Record<string, any>>(`support_messages/${threadId}`, (data) => {
+    if (!data || typeof data !== 'object') {
+      rtdbListVal = [];
+    } else {
+      const list: SupportMessage[] = Object.entries(data).map(([id, val]) => ({
+        id,
+        threadId: val.threadId || threadId,
+        senderId: val.senderId || '',
+        senderType: (val.senderType || 'user') as 'user' | 'admin',
+        senderName: val.senderName || '',
+        text: val.text || '',
+        imageUrl: val.imageUrl || null,
+        createdAt: Number(val.createdAt) || 0,
+        read: !!val.read
+      }));
+      list.sort((a, b) => a.createdAt - b.createdAt);
+      rtdbListVal = list;
+    }
+    emitMerged();
   });
+
+  return () => {
+    unsubFirestore();
+    unsubRtdb();
+  };
 }
 
 /**
- * Subscribe to threads for a specific role
+ * Subscribe to threads for a specific role (Customer, Vendor, Reseller, Physical)
+ * Real-time listener on Firestore with memory sorting to prevent composite index errors
  */
 export function subscribeToRoleThreads(
   role: SupportRole,
   callback: (threads: SupportThreadInfo[]) => void
 ): () => void {
-  return rtdbSubscribe<Record<string, any>>(`support_threads/${role}`, (data) => {
-    if (!data || typeof data !== 'object') {
-      callback([]);
-      return;
+  const threadsColRef = collection(db, 'support_threads');
+  const roleQuery = query(threadsColRef, where('role', '==', role));
+
+  let firestoreThreads: SupportThreadInfo[] = [];
+  let rtdbThreads: SupportThreadInfo[] = [];
+  let isFirestoreReady = false;
+
+  const emit = () => {
+    // Build unified map keyed by threadId
+    const threadMap = new Map<string, SupportThreadInfo>();
+
+    // Put RTDB legacy threads first
+    rtdbThreads.forEach((t) => threadMap.set(t.threadId, t));
+    // Overwrite / add Firestore threads
+    firestoreThreads.forEach((t) => threadMap.set(t.threadId, t));
+
+    const merged = Array.from(threadMap.values());
+    merged.sort((a, b) => (b.lastMessageTime || b.updatedAt) - (a.lastMessageTime || a.updatedAt));
+    callback(merged);
+  };
+
+  // 1. Firestore listener
+  const unsubFirestore = onSnapshot(
+    roleQuery,
+    (snapshot) => {
+      const list: SupportThreadInfo[] = snapshot.docs.map((d) => {
+        const val = d.data();
+        const tid = val.threadId || d.id;
+        const uid = val.userId || (tid.includes('_') ? tid.split('_')[1] : tid);
+        return {
+          threadId: tid,
+          role: (val.role || role) as SupportRole,
+          userId: uid,
+          userName: val.userName || 'ব্যবহারকারী',
+          userEmail: val.userEmail || '',
+          userPhone: val.userPhone || '',
+          userAvatar: val.userAvatar || '',
+          subject: val.subject || 'সহায়তা প্রয়োজন',
+          status: (val.status || 'open') as 'open' | 'resolved',
+          lastMessage: val.lastMessage || '',
+          lastMessageTime: Number(val.lastMessageTime) || Number(val.updatedAt) || 0,
+          lastSenderType: (val.lastSenderType || 'user') as 'user' | 'admin',
+          unreadAdmin: Number(val.unreadAdmin) || 0,
+          unreadUser: Number(val.unreadUser) || 0,
+          createdAt: Number(val.createdAt) || 0,
+          updatedAt: Number(val.updatedAt) || 0
+        };
+      });
+      firestoreThreads = list;
+      isFirestoreReady = true;
+      emit();
+    },
+    (err) => {
+      console.warn(`[subscribeToRoleThreads:${role}] Firestore snapshot warning:`, err);
+      if (!isFirestoreReady) {
+        emit();
+      }
     }
-    const list: SupportThreadInfo[] = Object.entries(data).map(([userId, val]) => ({
-      threadId: val.threadId || getThreadId(role, userId),
-      role: val.role || role,
-      userId: val.userId || userId,
-      userName: val.userName || 'ব্যবহারকারী',
-      userEmail: val.userEmail || '',
-      userPhone: val.userPhone || '',
-      userAvatar: val.userAvatar || '',
-      subject: val.subject || 'সহায়তা প্রয়োজন',
-      status: val.status || 'open',
-      lastMessage: val.lastMessage || '',
-      lastMessageTime: Number(val.lastMessageTime) || 0,
-      lastSenderType: val.lastSenderType || 'user',
-      unreadAdmin: Number(val.unreadAdmin) || 0,
-      unreadUser: Number(val.unreadUser) || 0,
-      createdAt: Number(val.createdAt) || 0,
-      updatedAt: Number(val.updatedAt) || 0
-    }));
-    list.sort((a, b) => (b.lastMessageTime || b.updatedAt) - (a.lastMessageTime || a.updatedAt));
-    callback(list);
+  );
+
+  // 2. RTDB listener
+  const unsubRtdb = rtdbSubscribe<Record<string, any>>(`support_threads/${role}`, (data) => {
+    if (!data || typeof data !== 'object') {
+      rtdbThreads = [];
+    } else {
+      const list: SupportThreadInfo[] = Object.entries(data).map(([userId, val]) => ({
+        threadId: val.threadId || getThreadId(role, userId),
+        role: val.role || role,
+        userId: val.userId || userId,
+        userName: val.userName || 'ব্যবহারকারী',
+        userEmail: val.userEmail || '',
+        userPhone: val.userPhone || '',
+        userAvatar: val.userAvatar || '',
+        subject: val.subject || 'সহায়তা প্রয়োজন',
+        status: val.status || 'open',
+        lastMessage: val.lastMessage || '',
+        lastMessageTime: Number(val.lastMessageTime) || 0,
+        lastSenderType: val.lastSenderType || 'user',
+        unreadAdmin: Number(val.unreadAdmin) || 0,
+        unreadUser: Number(val.unreadUser) || 0,
+        createdAt: Number(val.createdAt) || 0,
+        updatedAt: Number(val.updatedAt) || 0
+      }));
+      rtdbThreads = list;
+    }
+    emit();
   });
+
+  return () => {
+    unsubFirestore();
+    unsubRtdb();
+  };
 }
 
 /**
@@ -301,7 +552,52 @@ export function subscribeToRoleThreads(
 export function subscribeToAdminSupportUnreadCounts(
   callback: (counts: { total: number; customer: number; vendor: number; reseller: number; physical: number }) => void
 ): () => void {
-  return rtdbSubscribe<Record<string, Record<string, any>>>('support_threads', (data) => {
+  const threadsColRef = collection(db, 'support_threads');
+
+  let firestoreCounts = { customer: 0, vendor: 0, reseller: 0, physical: 0 };
+  let rtdbCounts = { customer: 0, vendor: 0, reseller: 0, physical: 0 };
+  let hasFirestore = false;
+
+  const emit = () => {
+    const c = hasFirestore ? firestoreCounts : rtdbCounts;
+    callback({
+      total: c.customer + c.vendor + c.reseller + c.physical,
+      customer: c.customer,
+      vendor: c.vendor,
+      reseller: c.reseller,
+      physical: c.physical
+    });
+  };
+
+  const unsubFirestore = onSnapshot(
+    threadsColRef,
+    (snapshot) => {
+      let cust = 0;
+      let vend = 0;
+      let resel = 0;
+      let phys = 0;
+
+      snapshot.docs.forEach((d) => {
+        const val = d.data();
+        const unread = Number(val.unreadAdmin) || 0;
+        if (unread > 0) {
+          if (val.role === 'customer') cust += unread;
+          else if (val.role === 'vendor') vend += unread;
+          else if (val.role === 'reseller') resel += unread;
+          else if (val.role === 'physical') phys += unread;
+        }
+      });
+
+      firestoreCounts = { customer: cust, vendor: vend, reseller: resel, physical: phys };
+      hasFirestore = true;
+      emit();
+    },
+    (err) => {
+      console.warn('[subscribeToAdminSupportUnreadCounts] Firestore error:', err);
+    }
+  );
+
+  const unsubRtdb = rtdbSubscribe<Record<string, Record<string, any>>>('support_threads', (data) => {
     let customerUnread = 0;
     let vendorUnread = 0;
     let resellerUnread = 0;
@@ -330,14 +626,19 @@ export function subscribeToAdminSupportUnreadCounts(
       }
     }
 
-    callback({
-      total: customerUnread + vendorUnread + resellerUnread + physicalUnread,
+    rtdbCounts = {
       customer: customerUnread,
       vendor: vendorUnread,
       reseller: resellerUnread,
       physical: physicalUnread
-    });
+    };
+    emit();
   });
+
+  return () => {
+    unsubFirestore();
+    unsubRtdb();
+  };
 }
 
 /**
@@ -356,8 +657,13 @@ export async function submitPhysicalSupportRequest(params: {
   const now = Date.now();
   const threadId = getThreadId('physical', userId);
 
-  // 1. Also store in a dedicated physical_support_requests collection for administrative audit
-  const requestKey = await rtdbPush('physical_support_requests', {
+  // 1. Create document in physical_support_requests collection in Firestore
+  const reqColRef = collection(db, 'physical_support_requests');
+  const reqDocRef = doc(reqColRef);
+  const requestId = reqDocRef.id;
+
+  const requestData: PhysicalSupportRequest = {
+    id: requestId,
     userId,
     userName: userName.trim(),
     userPhone: userPhone.trim(),
@@ -368,9 +674,15 @@ export async function submitPhysicalSupportRequest(params: {
     status: 'open',
     createdAt: now,
     updatedAt: now
-  });
+  };
 
-  // 2. Send through the unified support messaging pipeline under role 'physical'
+  try {
+    await setDoc(reqDocRef, requestData);
+  } catch (err) {
+    console.warn('[submitPhysicalSupportRequest] Firestore error:', err);
+  }
+
+  // 2. Also send message through support thread
   await sendUserSupportMessage({
     role: 'physical',
     userId,
@@ -382,7 +694,10 @@ export async function submitPhysicalSupportRequest(params: {
     imageUrl: imageUrl || null
   });
 
-  return { requestId: requestKey, threadId };
+  // 3. Background mirror to RTDB
+  void rtdbSet(`physical_support_requests/${requestId}`, requestData).catch(() => {});
+
+  return { requestId, threadId };
 }
 
 /**
@@ -401,16 +716,35 @@ export function subscribeUserRoleUnreads(
   };
   const unsubs: (() => void)[] = [];
 
-  roles.forEach(role => {
-    const unsub = rtdbSubscribe<SupportThreadInfo>(`support_threads/${role}/${userId}`, (thread) => {
-      unreads[role] = Number(thread?.unreadUser) || 0;
-      callback({ ...unreads });
-    });
-    unsubs.push(unsub);
+  roles.forEach((role) => {
+    const threadId = getThreadId(role, userId);
+    const docRef = doc(db, 'support_threads', threadId);
+
+    const unsubFirestore = onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          unreads[role] = Number(snap.data()?.unreadUser) || 0;
+        } else {
+          unreads[role] = 0;
+        }
+        callback({ ...unreads });
+      },
+      () => {
+        // Fallback to RTDB
+        rtdbGet<SupportThreadInfo>(`support_threads/${role}/${userId}`)
+          .then((t) => {
+            unreads[role] = Number(t?.unreadUser) || 0;
+            callback({ ...unreads });
+          })
+          .catch(() => {});
+      }
+    );
+    unsubs.push(unsubFirestore);
   });
 
   return () => {
-    unsubs.forEach(u => u());
+    unsubs.forEach((u) => u());
   };
 }
 
@@ -421,31 +755,62 @@ export function subscribeUserPhysicalRequests(
   userId: string,
   callback: (requests: PhysicalSupportRequest[]) => void
 ): () => void {
-  return rtdbSubscribe<Record<string, any>>('physical_support_requests', (data) => {
-    if (!data || typeof data !== 'object') {
-      callback([]);
-      return;
-    }
-    const list: PhysicalSupportRequest[] = Object.entries(data)
-      .map(([id, val]) => ({
-        id,
-        userId: val.userId || '',
-        userName: val.userName || '',
-        userPhone: val.userPhone || '',
-        userEmail: val.userEmail || '',
-        subject: val.subject || 'ফিজিক্যাল সাপোর্ট',
-        description: val.description || '',
-        imageUrl: val.imageUrl || null,
-        status: val.status || 'open',
-        adminNotes: val.adminNotes || '',
-        createdAt: Number(val.createdAt) || 0,
-        updatedAt: Number(val.updatedAt) || 0
-      }))
-      .filter(item => item.userId === userId)
-      .sort((a, b) => b.createdAt - a.createdAt);
+  const reqColRef = collection(db, 'physical_support_requests');
+  const userQuery = query(reqColRef, where('userId', '==', userId));
 
-    callback(list);
-  });
+  const unsub = onSnapshot(
+    userQuery,
+    (snapshot) => {
+      const list: PhysicalSupportRequest[] = snapshot.docs.map((d) => {
+        const val = d.data();
+        return {
+          id: d.id,
+          userId: val.userId || '',
+          userName: val.userName || '',
+          userPhone: val.userPhone || '',
+          userEmail: val.userEmail || '',
+          subject: val.subject || 'ফিজিক্যাল সাপোর্ট',
+          description: val.description || '',
+          imageUrl: val.imageUrl || null,
+          status: val.status || 'open',
+          adminNotes: val.adminNotes || '',
+          createdAt: Number(val.createdAt) || 0,
+          updatedAt: Number(val.updatedAt) || 0
+        };
+      });
+      list.sort((a, b) => b.createdAt - a.createdAt);
+      callback(list);
+    },
+    () => {
+      // Fallback to RTDB
+      rtdbSubscribe<Record<string, any>>('physical_support_requests', (data) => {
+        if (!data || typeof data !== 'object') {
+          callback([]);
+          return;
+        }
+        const list: PhysicalSupportRequest[] = Object.entries(data)
+          .map(([id, val]) => ({
+            id,
+            userId: val.userId || '',
+            userName: val.userName || '',
+            userPhone: val.userPhone || '',
+            userEmail: val.userEmail || '',
+            subject: val.subject || 'ফিজিক্যাল সাপোর্ট',
+            description: val.description || '',
+            imageUrl: val.imageUrl || null,
+            status: val.status || 'open',
+            adminNotes: val.adminNotes || '',
+            createdAt: Number(val.createdAt) || 0,
+            updatedAt: Number(val.updatedAt) || 0
+          }))
+          .filter((item) => item.userId === userId)
+          .sort((a, b) => b.createdAt - a.createdAt);
+        callback(list);
+      });
+    }
+  );
+
+  return () => unsub();
 }
 
 /**
@@ -461,7 +826,6 @@ export async function triggerAiSupportReply(params: {
 }): Promise<string | null> {
   const { role, userId, userName, message, history = [] } = params;
 
-  // STRICT REQUIREMENT: AI must never reply to physical support
   if (role === 'physical') {
     return null;
   }
@@ -482,7 +846,6 @@ export async function triggerAiSupportReply(params: {
     });
 
     if (!res.ok) {
-      console.warn('AI reply API returned status:', res.status);
       return null;
     }
 
@@ -493,7 +856,6 @@ export async function triggerAiSupportReply(params: {
 
     const replyText = data.reply;
 
-    // Send AI reply into the thread using the existing message pipeline
     await sendAdminSupportMessage({
       role,
       userId,

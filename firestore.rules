@@ -12,7 +12,7 @@ service cloud.firestore {
     function isUserAdmin() {
       return isSignedIn() && (
         request.auth.token.admin == true ||
-        request.auth.token.email in ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'limonshik07@gmail.com'] ||
+        request.auth.token.email in ['riyajulhasanfahim@gmail.com', 'frofficialbd1@gmail.com', 'limonshik07@gmail.com', 'jibo5142@gmail.com'] ||
         (
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
           (
@@ -569,6 +569,19 @@ service cloud.firestore {
       allow create: if isSignedIn();
       allow update: if isUserAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow delete: if isUserAdmin();
+    }
+
+    // Unified Support Threads & Real-Time Messages for Customer, Vendor, and Reseller
+    match /support_threads/{threadId} {
+      allow read, write: if true;
+
+      match /{document=**} {
+        allow read, write: if true;
+      }
+    }
+
+    match /physical_support_requests/{requestId} {
+      allow read, write: if true;
     }
 
     match /storage_accounts/{accountId} {

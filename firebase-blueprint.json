@@ -407,6 +407,15 @@
     },
     "shareholder_revenue_pools/{poolId}": {
       "description": "Configured shareholder revenue pool categories"
+    },
+    "support_threads/{threadId}": {
+      "description": "Customer, vendor, and reseller live support chat threads"
+    },
+    "support_threads/{threadId}/messages/{messageId}": {
+      "description": "Real-time support messages exchanged between user and admin"
+    },
+    "physical_support_requests/{requestId}": {
+      "description": "Customer physical support inquiry and service booking requests"
     }
   }
 }
