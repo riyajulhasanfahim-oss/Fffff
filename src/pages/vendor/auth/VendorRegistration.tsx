@@ -25,6 +25,7 @@ import NagadPaymentModal from '../../../components/checkout/NagadPaymentModal';
 import RocketPaymentModal from '../../../components/checkout/RocketPaymentModal';
 import UpayPaymentModal from '../../../components/checkout/UpayPaymentModal';
 import { verifyPaymentAutomatic, type VerificationResult } from '../../../services/automaticPaymentVerificationService';
+import YouTubeTutorialBanner from '../../../components/reseller/YouTubeTutorialBanner';
 import { checkAccountStatus } from '../../../services/accountStatusService';
 import { BANGLADESH_DISTRICTS } from '../../../data/bangladeshDistricts';
 import { getDivisionByDistrict } from '../../../utils/deliveryCalculator';
@@ -1096,7 +1097,7 @@ export default function VendorRegistration() {
       <div className="w-full max-w-sm sm:max-w-xl md:max-w-2xl lg:max-w-3xl bg-white rounded-2xl sm:rounded-3xl shadow-sm sm:shadow-lg p-4 sm:p-7 md:p-9 border border-slate-200/80 relative transition-all">
         
         {/* Top Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3 sm:pb-4 mb-4 sm:mb-6">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 sm:pb-4 mb-3 sm:mb-4">
           <button 
             type="button" 
             onClick={() => step > 1 ? setStep(step - 1) : navigate('/')} 
@@ -1123,6 +1124,13 @@ export default function VendorRegistration() {
             )}
           </div>
         </div>
+
+        {/* Compact YouTube Tutorial Banner */}
+        <YouTubeTutorialBanner
+          url="https://youtu.be/PzpDWCfD99U?si=x2fTJY-ncZk9NFQk"
+          title="▶️ কিভাবে স্টোর খুলবেন ও কাজ করবেন দেখুন"
+          className="mb-3.5 sm:mb-5"
+        />
 
         {/* Title & Icon Header */}
         <div className="text-center mb-5 sm:mb-7">
