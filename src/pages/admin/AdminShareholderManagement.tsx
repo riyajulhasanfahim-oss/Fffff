@@ -40,7 +40,8 @@ import {
   Save,
   ArrowDown,
   ArrowUp,
-  Info
+  Info,
+  PlusCircle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { isAllowedAdminEmail } from '../../constants/adminAllowlist';
@@ -50,6 +51,7 @@ import {
   getAllShareholderApplicationsFromFirestore, 
   getAllShareholdersFromFirestore,
   adminUpdateShareholderPaymentInFirestore,
+  adminAddShareholderBalanceInFirestore,
   adminUpdateResellerFee,
   adminUpdatePlatformFee,
   getFinancialOverviewData,
@@ -105,6 +107,12 @@ export default function AdminShareholderManagement() {
   const [editPaymentEarned, setEditPaymentEarned] = useState<string>('0');
   const [editPaymentNotes, setEditPaymentNotes] = useState<string>('');
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
+
+  // Add Balance Modal (Direct Balance Increase)
+  const [addBalanceModalShareholder, setAddBalanceModalShareholder] = useState<any | null>(null);
+  const [addBalanceAmountInput, setAddBalanceAmountInput] = useState<string>('');
+  const [addBalanceNotesInput, setAddBalanceNotesInput] = useState<string>('');
+  const [addingBalance, setAddingBalance] = useState<boolean>(false);
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -718,6 +726,39 @@ export default function AdminShareholderManagement() {
       toast.error(err.message || 'Error updating payment');
     } finally {
       setSavingPayment(false);
+    }
+  };
+
+  // Handle Shareholder Direct Balance Add/Increase
+  const handleAddBalanceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addBalanceModalShareholder || !user) return;
+    const amt = Number(addBalanceAmountInput);
+    if (isNaN(amt) || amt <= 0) {
+      toast.error('অনুগ্রহ করে সঠিক পরিমাণ লিখুন (ন্যূনতম ১ টাকা)');
+      return;
+    }
+    try {
+      setAddingBalance(true);
+      const result = await adminAddShareholderBalanceInFirestore({
+        userId: addBalanceModalShareholder.userId,
+        amountToAdd: amt,
+        adminEmail: user.email || 'admin',
+        notes: addBalanceNotesInput.trim() || 'অ্যাডমিন কর্তৃক ব্যালেন্স বৃদ্ধি'
+      });
+      if (result.success) {
+        toast.success(`${addBalanceModalShareholder.shareholderName}-এর ব্যালেন্সে ৳${amt.toLocaleString()} সফলভাবে যোগ করা হয়েছে! নতুন ব্যালেন্স: ৳${result.newBalance.toLocaleString()}`);
+        setAddBalanceModalShareholder(null);
+        setAddBalanceAmountInput('');
+        setAddBalanceNotesInput('');
+        await fetchOverview();
+      } else {
+        toast.error('ব্যালেন্স যোগ করতে সমস্যা হয়েছে');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'ব্যালেন্স আপডেট ব্যর্থ হয়েছে');
+    } finally {
+      setAddingBalance(false);
     }
   };
 
@@ -1363,6 +1404,21 @@ export default function AdminShareholderManagement() {
 
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            {/* ব্যালেন্স সরাসরি বৃদ্ধি / যোগ বাটন */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAddBalanceModalShareholder(sh);
+                                setAddBalanceAmountInput('');
+                                setAddBalanceNotesInput('');
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-[11px] shadow-2xs transition-colors cursor-pointer"
+                              title="শেয়ারহোল্ডারের অ্যাকাউন্টে ব্যালেন্স যোগ / বৃদ্ধি করুন"
+                            >
+                              <PlusCircle className="w-3 h-3" />
+                              <span>+ ব্যালেন্স যোগ</span>
+                            </button>
+
                             {/* পেমেন্ট এডিট বাটন (Payment Edit Button) */}
                             <button
                               type="button"
@@ -2864,6 +2920,158 @@ export default function AdminShareholderManagement() {
                 >
                   <Save className="w-4 h-4" />
                   <span>{savingPayment ? 'সংরক্ষণ হচ্ছে...' : 'পেমেন্ট সংরক্ষণ করুন'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          ADD BALANCE MODAL (Requirement 3: Admin Direct Balance Add/Increase)
+      ========================================================================== */}
+      {addBalanceModalShareholder && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-teal-700 to-emerald-800 text-white p-4 sm:p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
+                  <PlusCircle className="w-6 h-6 text-emerald-300" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base sm:text-lg">
+                    ব্যালেন্স যোগ / বৃদ্ধি করুন
+                  </h3>
+                  <p className="text-xs text-teal-100">
+                    শেয়ারহোল্ডারের অ্যাকাউন্টে সরাসরি ব্যালেন্স যুক্ত করুন
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddBalanceModalShareholder(null)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleAddBalanceSubmit} className="p-5 sm:p-6 space-y-4 text-xs sm:text-sm">
+              {/* Shareholder Info Badge */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                    শেয়ারহোল্ডার
+                  </span>
+                  <span className="font-bold text-slate-900 text-sm">
+                    {addBalanceModalShareholder.shareholderName}
+                  </span>
+                  <span className="text-[11px] font-mono text-slate-500 block">
+                    ID: {addBalanceModalShareholder.shareholderId}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                    বর্তমান ব্যালেন্স
+                  </span>
+                  <span className="font-black text-emerald-700 text-base">
+                    ৳{Number(addBalanceModalShareholder.availableWithdrawBalance || 0).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div>
+                <span className="block text-[11px] font-bold text-slate-600 mb-1.5">
+                  দ্রুত অ্যামাউন্ট নির্বাচন:
+                </span>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[500, 1000, 2000, 5000, 10000].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setAddBalanceAmountInput(String(preset))}
+                      className={`py-1.5 px-1 rounded-lg text-center font-bold text-[11px] border transition-colors cursor-pointer ${
+                        addBalanceAmountInput === String(preset)
+                          ? 'bg-teal-700 text-white border-teal-700'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      +৳{preset.toLocaleString()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Amount to Add */}
+              <div>
+                <label className="block text-slate-800 font-bold mb-1">
+                  যোগ করার পরিমাণ (টাকায়) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-2.5 font-bold text-slate-400">৳</span>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={addBalanceAmountInput}
+                    onChange={(e) => setAddBalanceAmountInput(e.target.value)}
+                    placeholder="যেমন: 5000"
+                    className="w-full pl-8 pr-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600 text-base"
+                  />
+                </div>
+              </div>
+
+              {/* Live Preview Card */}
+              <div className="p-3 bg-gradient-to-r from-teal-50 to-emerald-50 rounded-xl border border-teal-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800 block">
+                    নতুন সমন্বিত ব্যালেন্স হবে
+                  </span>
+                  <span className="text-xs text-teal-700">
+                    (বর্তমান ৳{(addBalanceModalShareholder.availableWithdrawBalance || 0).toLocaleString()} + বৃদ্ধি ৳{(Number(addBalanceAmountInput) || 0).toLocaleString()})
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-lg font-black text-emerald-800">
+                    ৳{((Number(addBalanceModalShareholder.availableWithdrawBalance) || 0) + (Number(addBalanceAmountInput) || 0)).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Admin Notes */}
+              <div>
+                <label className="block text-slate-800 font-bold mb-1">
+                  বিবরণ / রেফারেন্স নোট (ঐচ্ছিক)
+                </label>
+                <input
+                  type="text"
+                  value={addBalanceNotesInput}
+                  onChange={(e) => setAddBalanceNotesInput(e.target.value)}
+                  placeholder="যেমন: মাসিক কোম্পানি লভ্যাংশ বরাদ্দ, বোনাস ইত্যাদি..."
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setAddBalanceModalShareholder(null)}
+                  disabled={addingBalance}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  disabled={addingBalance || !addBalanceAmountInput || Number(addBalanceAmountInput) <= 0}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-md transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>{addingBalance ? 'যুক্ত হচ্ছে...' : 'ব্যালেন্স যুক্ত করুন'}</span>
                 </button>
               </div>
             </form>

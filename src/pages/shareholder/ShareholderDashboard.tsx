@@ -17,8 +17,13 @@ import {
   activateVerifiedShareholderInFirestore,
   saveShareholderApplicationToFirestore
 } from '../../services/shareholderFirestoreService';
-import { verifyPaymentAutomatic } from '../../services/automaticPaymentVerificationService';
+import { verifyPaymentAutomatic, type VerificationResult } from '../../services/automaticPaymentVerificationService';
 import OfficialShareCertificateModal, { CertificateData } from '../../components/shareholder/OfficialShareCertificateModal';
+import PaymentMethodSelectionModal from '../../components/checkout/PaymentMethodSelectionModal';
+import BkashPaymentModal from '../../components/checkout/BkashPaymentModal';
+import NagadPaymentModal from '../../components/checkout/NagadPaymentModal';
+import RocketPaymentModal from '../../components/checkout/RocketPaymentModal';
+import UpayPaymentModal from '../../components/checkout/UpayPaymentModal';
 import { 
   Building2, 
   PieChart, 
@@ -190,6 +195,16 @@ export default function ShareholderDashboard() {
     transactionId: string;
     isInstant: boolean;
   } | null>(null);
+
+  // Reseller-style automatic payment flow states
+  const [showPaymentSelectionModal, setShowPaymentSelectionModal] = useState<boolean>(false);
+  const [selectedPaymentChannel, setSelectedPaymentChannel] = useState<'bkash' | 'nagad' | 'rocket' | 'upay'>('bkash');
+  const [showBkashModal, setShowBkashModal] = useState<boolean>(false);
+  const [showNagadModal, setShowNagadModal] = useState<boolean>(false);
+  const [showRocketModal, setShowRocketModal] = useState<boolean>(false);
+  const [showUpayModal, setShowUpayModal] = useState<boolean>(false);
+  const [paymentErrorMessage, setPaymentErrorMessage] = useState<string>('');
+  const [currentInvoiceId, setCurrentInvoiceId] = useState<string>('');
 
   // Live polling ref for pending verification
   const pendingPollRef = useRef<any>(null);
@@ -549,90 +564,99 @@ export default function ShareholderDashboard() {
     }
   };
 
-  // Handle Increase Shares Submission (Requirement 2)
-  const handleIncreaseSharesSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Proceed from Share Quantity selection to Reseller-Style Payment System
+  const handleProceedToPayment = () => {
     if (!user) return;
     const additionalPercent = Math.max(1, Number(increaseShares) || 1);
-    const pricePerUnit = 2000;
-    const additionalAmount = additionalPercent * pricePerUnit;
-    const cleanTrx = increaseTrxId.trim().toUpperCase();
+    const invoiceId = `RJ-SH-INC-${user.uid.slice(0, 4).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+    setCurrentInvoiceId(invoiceId);
+    setPaymentErrorMessage('');
+    setShowIncreaseModal(false);
+    setShowPaymentSelectionModal(true);
+  };
 
+  // Complete Automatic Payment Verification and Share Addition (Requirement 1 & 2)
+  const handleCompleteIncreasePayment = async (
+    channel: 'bkash' | 'nagad' | 'rocket' | 'upay',
+    trxId: string
+  ) => {
+    if (!user) return;
+    const cleanTrx = (trxId || '').trim().toUpperCase();
     if (!cleanTrx) {
-      toast.error(language === 'bn' ? 'অনুগ্রহ করে Transaction ID (TrxID) প্রদান করুন।' : 'Please enter Transaction ID.');
+      setPaymentErrorMessage('অনুগ্রহ করে Transaction ID প্রদান করুন');
       return;
     }
 
+    const additionalPercent = Math.max(1, Number(increaseShares) || 1);
+    const pricePerUnit = 2000;
+    const additionalAmount = additionalPercent * pricePerUnit;
+    const currentOwnedPercent = summary?.approvedSharePercentage || 1;
+    const currentCapitalPaid = summary?.totalAmountPaidForApprovedShares || (currentOwnedPercent * pricePerUnit);
+    const applicantFullName = profile?.fullName || profile?.applicantName || userData?.name || user.displayName || 'Shareholder Investor';
+
     try {
       setIncreaseSubmitting(true);
-      const currentOwnedPercent = summary?.approvedSharePercentage || 1;
-      const currentCapitalPaid = summary?.totalAmountPaidForApprovedShares || (currentOwnedPercent * pricePerUnit);
+      setPaymentErrorMessage('');
 
-      const targetAppId = `RJ-SH-INC-${user.uid.slice(0, 4).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
-      const applicantFullName = profile?.fullName || profile?.applicantName || userData?.name || user.displayName || 'Shareholder Investor';
-
-      // 1. Run automatic verification against SMS reader records
-      const verifyResult = await verifyPaymentAutomatic({
-        transactionId: cleanTrx,
-        paymentMethod: increasePaymentMethod.toLowerCase() as any,
-        expectedAmount: additionalAmount,
-        invoiceId: targetAppId,
-        userId: user.uid,
-        userType: 'shareholder',
-        contextData: {
-          applicationId: targetAppId,
-          applicantName: applicantFullName,
-          fullName: applicantFullName,
-          sharePercent: additionalPercent,
-          shareUnits: additionalPercent,
-          payerMobile: increaseSenderMobile || userData?.phone || '',
-          email: user.email || '',
-          phone: increaseSenderMobile || userData?.phone || '',
-          isAdditionalPurchase: true,
-          previousSharesPercent: currentOwnedPercent
-        }
+      // Call Automatic Payment Verification with 12-second safety timeout
+      const timeoutPromise = new Promise<VerificationResult>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Payment verification timed out. Please try again or check your Transaction ID.'));
+        }, 12000);
       });
 
-      const token = await user.getIdToken().catch(() => '');
+      const verifyResult = await Promise.race([
+        verifyPaymentAutomatic({
+          transactionId: cleanTrx,
+          paymentMethod: channel,
+          expectedAmount: additionalAmount,
+          invoiceId: currentInvoiceId,
+          userId: user.uid,
+          userType: 'shareholder',
+          contextData: {
+            invoiceId: currentInvoiceId,
+            applicationId: currentInvoiceId,
+            applicantName: applicantFullName,
+            fullName: applicantFullName,
+            sharePercent: additionalPercent,
+            shareUnits: additionalPercent,
+            payerMobile: user.phoneNumber || userData?.phone || '',
+            email: user.email || '',
+            phone: user.phoneNumber || userData?.phone || '',
+            isAdditionalPurchase: true,
+            previousSharesPercent: currentOwnedPercent
+          }
+        }),
+        timeoutPromise
+      ]);
 
       if (verifyResult.status === 'verified') {
-        // Payment verified! Add cumulatively into Firestore
+        const formattedMethod = 
+          channel === 'bkash' ? 'bKash' :
+          channel === 'nagad' ? 'Nagad' :
+          channel === 'rocket' ? 'Rocket' : 'Upay';
+
+        // Direct write to Cloud Firestore as authoritative Single Source of Truth
         await activateVerifiedShareholderInFirestore({
           userId: user.uid,
-          applicationId: targetAppId,
+          applicationId: currentInvoiceId,
           applicantName: applicantFullName,
           sharePercent: additionalPercent,
           totalAmount: additionalAmount,
-          paymentMethod: increasePaymentMethod,
+          paymentMethod: formattedMethod,
           transactionId: cleanTrx,
-          payerMobile: increaseSenderMobile || userData?.phone || '',
+          payerMobile: user.phoneNumber || userData?.phone || '',
           email: user.email || '',
-          phone: increaseSenderMobile || userData?.phone || ''
+          phone: user.phoneNumber || userData?.phone || ''
         });
 
-        // Also sync to server endpoint
-        try {
-          await fetch('/api/shareholders/submit-payment', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-user-id': user.uid,
-              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-            },
-            body: JSON.stringify({
-              applicationId: targetAppId,
-              userId: user.uid,
-              applicantName: applicantFullName,
-              sharePercent: additionalPercent,
-              totalAmount: additionalAmount,
-              paymentMethod: increasePaymentMethod,
-              transactionId: cleanTrx,
-              payerMobile: increaseSenderMobile || userData?.phone || '',
-              status: 'approved',
-              paymentStatus: 'Approved'
-            })
-          });
-        } catch (_) {}
+        // Close all payment modals
+        setShowBkashModal(false);
+        setShowNagadModal(false);
+        setShowRocketModal(false);
+        setShowUpayModal(false);
+        setShowPaymentSelectionModal(false);
+        setPaymentErrorMessage('');
 
         const newTotalShares = currentOwnedPercent + additionalPercent;
         const newTotalCapital = currentCapitalPaid + additionalAmount;
@@ -647,6 +671,7 @@ export default function ShareholderDashboard() {
           transactionId: cleanTrx,
           isInstant: true
         });
+        setShowIncreaseModal(true);
 
         toast.success(
           language === 'bn' 
@@ -656,75 +681,13 @@ export default function ShareholderDashboard() {
 
         await fetchDashboardData();
       } else {
-        // Pending admin verification - save separate verified purchase record
-        await saveShareholderApplicationToFirestore({
-          id: targetAppId,
-          applicationId: targetAppId,
-          userId: user.uid,
-          applicantName: applicantFullName,
-          phone: increaseSenderMobile || userData?.phone || '',
-          email: user.email || '',
-          sharePercent: additionalPercent,
-          sharePrice: pricePerUnit,
-          shareUnits: additionalPercent,
-          totalAmount: additionalAmount,
-          paymentMethod: increasePaymentMethod,
-          transactionId: cleanTrx,
-          payerMobile: increaseSenderMobile || userData?.phone || '',
-          submissionTimestamp: Date.now(),
-          paymentStatus: 'Pending Verification',
-          status: 'pending_verification',
-          isShareholderActive: true,
-          isOfficialCertificateIssued: false,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        } as any);
-
-        try {
-          await fetch('/api/shareholders/submit-payment', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-user-id': user.uid,
-              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-            },
-            body: JSON.stringify({
-              applicationId: targetAppId,
-              userId: user.uid,
-              applicantName: applicantFullName,
-              sharePercent: additionalPercent,
-              totalAmount: additionalAmount,
-              paymentMethod: increasePaymentMethod,
-              transactionId: cleanTrx,
-              payerMobile: increaseSenderMobile || userData?.phone || '',
-              status: 'pending_verification',
-              paymentStatus: 'Pending Verification'
-            })
-          });
-        } catch (_) {}
-
-        setIncreaseSuccessData({
-          previousShares: currentOwnedPercent,
-          addedShares: additionalPercent,
-          newTotalShares: currentOwnedPercent + additionalPercent,
-          previousCapital: currentCapitalPaid,
-          addedCapital: additionalAmount,
-          newTotalCapital: currentCapitalPaid + additionalAmount,
-          transactionId: cleanTrx,
-          isInstant: false
-        });
-
-        toast.success(
-          language === 'bn'
-            ? 'অতিরিক্ত শেয়ারের পেমেন্ট তথ্য জমা দেওয়া হয়েছে। যাচাই সম্পন্ন হওয়া মাত্রই স্বয়ংক্রিয়ভাবে ব্যালেন্সে যুক্ত হবে।'
-            : 'Additional share payment submitted. It will be added to your ownership immediately upon verification.'
-        );
-
-        await fetchDashboardData();
+        // Verification failed or record not found: strictly reject and DO NOT add shares!
+        const errMsg = verifyResult.message || 'আপনার ট্রানজেকশন আইডি ভুল সঠিক ট্রানজাকশন আইডি দিয়ে আবার চেষ্টা করুন অথবা RJ WORLD BD Whatsapp সাপোর্টে যোগাযোগ করুন';
+        setPaymentErrorMessage(errMsg);
       }
     } catch (err: any) {
       console.error('Error submitting additional shares:', err);
-      toast.error(err.message || 'Error processing share purchase');
+      setPaymentErrorMessage(err.message || 'পেমেন্ট যাচাইয়ের সময় সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
     } finally {
       setIncreaseSubmitting(false);
     }
@@ -2270,13 +2233,12 @@ export default function ShareholderDashboard() {
                   </div>
                 </div>
               ) : (
-                /* SHARE PURCHASE FORM */
-                <form onSubmit={handleIncreaseSharesSubmit} className="space-y-4">
-                  {/* Step 1: Select Shares */}
+                /* STEP 1: SHARE QUANTITY SELECTION */
+                <div className="space-y-4">
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                        <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] flex items-center justify-center font-bold">1</span>
+                        <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[11px] flex items-center justify-center font-bold">1</span>
                         <span>{language === 'bn' ? 'অতিরিক্ত শেয়ার সংখ্যা নির্বাচন করুন' : 'Select Additional Shares'}</span>
                       </label>
                       <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
@@ -2360,122 +2322,155 @@ export default function ShareholderDashboard() {
                     </div>
                   </div>
 
-                  {/* Step 2: Payment Method */}
-                  <div>
-                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-1.5">
-                      <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] flex items-center justify-center font-bold">2</span>
-                      <span>{language === 'bn' ? 'পেমেন্ট মাধ্যম বেছে নিন' : 'Select Payment Method'}</span>
-                    </label>
-
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {[
-                        { id: 'bKash', label: 'bKash', active: 'bg-pink-600 text-white' },
-                        { id: 'Nagad', label: 'Nagad', active: 'bg-orange-600 text-white' },
-                        { id: 'Rocket', label: 'Rocket', active: 'bg-purple-600 text-white' },
-                        { id: 'Upay', label: 'Upay', active: 'bg-amber-600 text-white' }
-                      ].map((m) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setIncreasePaymentMethod(m.id as any)}
-                          className={`py-1.5 px-1 text-center font-bold text-xs rounded-xl border transition-all cursor-pointer ${
-                            increasePaymentMethod === m.id
-                              ? `${m.active} border-transparent shadow-xs`
-                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {m.label}
-                        </button>
-                      ))}
+                  {/* Payment System Info Card */}
+                  <div className="p-3 bg-emerald-50 border border-emerald-200/80 rounded-2xl text-xs space-y-1.5">
+                    <div className="flex items-center gap-2 text-emerald-800 font-bold text-[11px]">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{language === 'bn' ? 'অটোমেটিক ইনস্ট্যান্ট পেমেন্ট সিস্টেম' : 'Automatic Instant Payment Gateway'}</span>
                     </div>
-
-                    {/* MFS Account & Copy Details */}
-                    <div className="mt-2 p-2.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] text-slate-400 block font-semibold">
-                          {increasePaymentMethod} Personal (Send Money)
-                        </span>
-                        <span className="font-mono font-black text-slate-900 text-xs sm:text-sm">
-                          01712345678
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText('01712345678');
-                          toast.success('নম্বর কপি করা হয়েছে!');
-                        }}
-                        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-bold hover:bg-slate-100 flex items-center gap-1 cursor-pointer"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy</span>
-                      </button>
-                    </div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      {language === 'bn'
+                        ? 'আমাদের Reseller Registration-এ ব্যবহৃত একই নিরাপদ পেমেন্ট সিস্টেমের মাধ্যমে bKash, Nagad, Rocket বা Upay দিয়ে পেমেন্ট করুন। ট্রানজেকশন আইডি যাচাই হওয়ামাত্রই শেয়ার যোগ হবে।'
+                        : 'Pay instantly via bKash, Nagad, Rocket, or Upay using our official automatic verification system. Shares will be added as soon as the TrxID is verified.'}
+                    </p>
                   </div>
 
-                  {/* Step 3: Transaction ID & Mobile */}
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] flex items-center justify-center font-bold">3</span>
-                      <span>{language === 'bn' ? 'পেমেন্ট তথ্য প্রদান করুন' : 'Enter Payment Details'}</span>
-                    </label>
-
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
-                        Transaction ID (TrxID) <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={increaseTrxId}
-                        onChange={(e) => setIncreaseTrxId(e.target.value.toUpperCase())}
-                        placeholder="e.g. BL9X7K2M19"
-                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono font-bold tracking-wider uppercase"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-600 block mb-0.5">
-                        {language === 'bn' ? 'প্রেরক মোবাইল নম্বর (Sender Mobile)' : 'Sender Phone Number'}
-                      </label>
-                      <input
-                        type="tel"
-                        value={increaseSenderMobile}
-                        onChange={(e) => setIncreaseSenderMobile(e.target.value)}
-                        placeholder="01XXXXXXXXX"
-                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Submit Button */}
+                  {/* Proceed to Payment Button */}
                   <button
-                    type="submit"
-                    disabled={increaseSubmitting || !increaseTrxId.trim()}
-                    className="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.99] text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    type="button"
+                    onClick={handleProceedToPayment}
+                    className="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.99] text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
                   >
-                    {increaseSubmitting ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>{language === 'bn' ? 'যাচাই ও রেকর্ড করা হচ্ছে...' : 'Verifying & Recording...'}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-4 h-4" />
-                        <span>
-                          {language === 'bn'
-                            ? `পেমেন্ট নিশ্চিত করুন ও +${increaseShares}% শেয়ার যুক্ত করুন`
-                            : `Confirm Payment & Add +${increaseShares}% Shares`}
-                        </span>
-                      </>
-                    )}
+                    <Coins className="w-4 h-4" />
+                    <span>
+                      {language === 'bn'
+                        ? `পেমেন্টে এগিয়ে যান • ৳${(increaseShares * 2000).toLocaleString()}`
+                        : `Proceed to Payment • ৳${(increaseShares * 2000).toLocaleString()}`}
+                    </span>
+                    <ChevronRight className="w-4 h-4" />
                   </button>
-                </form>
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
+
+      {/* =========================================================================
+          RESELLER-STYLE AUTOMATIC PAYMENT MODALS (Requirement 1 & 2)
+      ========================================================================== */}
+      {/* 1. Payment Method Selection Modal */}
+      <PaymentMethodSelectionModal
+        isOpen={showPaymentSelectionModal}
+        onClose={() => setShowPaymentSelectionModal(false)}
+        amount={increaseShares * 2000}
+        paymentType="shareholder_increase_shares"
+        invoiceId={currentInvoiceId}
+        isSubmitting={increaseSubmitting}
+        selectedChannel={selectedPaymentChannel}
+        onSelectChannel={setSelectedPaymentChannel}
+        onConfirmPayment={(channel) => {
+          setPaymentErrorMessage('');
+          setShowPaymentSelectionModal(false);
+          if (channel === 'bkash') {
+            setShowBkashModal(true);
+          } else if (channel === 'nagad') {
+            setShowNagadModal(true);
+          } else if (channel === 'rocket') {
+            setShowRocketModal(true);
+          } else if (channel === 'upay') {
+            setShowUpayModal(true);
+          }
+        }}
+      />
+
+      {/* 2. bKash Payment Instruction Modal */}
+      <BkashPaymentModal
+        isOpen={showBkashModal}
+        onClose={() => {
+          setShowBkashModal(false);
+          setPaymentErrorMessage('');
+        }}
+        onBack={() => {
+          setShowBkashModal(false);
+          setPaymentErrorMessage('');
+          setShowPaymentSelectionModal(true);
+        }}
+        amount={increaseShares * 2000}
+        invoiceId={currentInvoiceId}
+        bkashNumber="01864670673"
+        isSubmitting={increaseSubmitting}
+        errorMessage={paymentErrorMessage}
+        onVerify={(trxId) => {
+          handleCompleteIncreasePayment('bkash', trxId);
+        }}
+      />
+
+      {/* 3. Nagad Payment Instruction Modal */}
+      <NagadPaymentModal
+        isOpen={showNagadModal}
+        onClose={() => {
+          setShowNagadModal(false);
+          setPaymentErrorMessage('');
+        }}
+        onBack={() => {
+          setShowNagadModal(false);
+          setPaymentErrorMessage('');
+          setShowPaymentSelectionModal(true);
+        }}
+        amount={increaseShares * 2000}
+        invoiceId={currentInvoiceId}
+        nagadNumber="01864670673"
+        isSubmitting={increaseSubmitting}
+        errorMessage={paymentErrorMessage}
+        onVerify={(trxId) => {
+          handleCompleteIncreasePayment('nagad', trxId);
+        }}
+      />
+
+      {/* 4. Rocket Payment Instruction Modal */}
+      <RocketPaymentModal
+        isOpen={showRocketModal}
+        onClose={() => {
+          setShowRocketModal(false);
+          setPaymentErrorMessage('');
+        }}
+        onBack={() => {
+          setShowRocketModal(false);
+          setPaymentErrorMessage('');
+          setShowPaymentSelectionModal(true);
+        }}
+        amount={increaseShares * 2000}
+        invoiceId={currentInvoiceId}
+        rocketNumber="01864670673"
+        isSubmitting={increaseSubmitting}
+        errorMessage={paymentErrorMessage}
+        onVerify={(trxId) => {
+          handleCompleteIncreasePayment('rocket', trxId);
+        }}
+      />
+
+      {/* 5. Upay Payment Instruction Modal */}
+      <UpayPaymentModal
+        isOpen={showUpayModal}
+        onClose={() => {
+          setShowUpayModal(false);
+          setPaymentErrorMessage('');
+        }}
+        onBack={() => {
+          setShowUpayModal(false);
+          setPaymentErrorMessage('');
+          setShowPaymentSelectionModal(true);
+        }}
+        amount={increaseShares * 2000}
+        invoiceId={currentInvoiceId}
+        upayNumber="01864670673"
+        isSubmitting={increaseSubmitting}
+        errorMessage={paymentErrorMessage}
+        onVerify={(trxId) => {
+          handleCompleteIncreasePayment('upay', trxId);
+        }}
+      />
 
       {/* Official Printable Share Certificate Modal */}
       <OfficialShareCertificateModal

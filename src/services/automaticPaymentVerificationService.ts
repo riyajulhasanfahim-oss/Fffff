@@ -803,6 +803,32 @@ export async function verifyPaymentAutomatic(
         }
       }
 
+      // Check if this transaction has already been credited for a shareholder purchase
+      if (req.userType === 'shareholder') {
+        try {
+          const { getDocs, query, collection, where } = await import('firebase/firestore');
+          const { db } = await import('../lib/firebase');
+          const qSharePay = query(
+            collection(db, 'share_payments'),
+            where('transactionId', '==', cleanTrxId),
+            where('paymentStatus', '==', 'Approved')
+          );
+          const snap = await getDocs(qSharePay).catch(() => null);
+          if (snap && !snap.empty) {
+            console.warn(`[VERIFY] Duplicate check failed: TrxID=${cleanTrxId} already used for share purchase`);
+            console.log('[VERIFY] Final response sent');
+            return {
+              success: false,
+              status: 'rejected',
+              message: `এই Transaction ID (${cleanTrxId}) দিয়ে ইতিপূর্বে শেয়ার কেনা সম্পন্ন হয়েছে। পুনরায় ব্যবহার করা যাবে না।`,
+              rejectionReason: 'duplicate_transaction'
+            };
+          }
+        } catch (dupCheckErr) {
+          console.warn('[VERIFY] Shareholder duplicate query warning:', dupCheckErr);
+        }
+      }
+
       // 4. Service / Order Activation
       console.log('[VERIFY] Service/order validation started');
       try {

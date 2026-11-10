@@ -1114,6 +1114,140 @@ export async function adminUpdateShareholderPaymentInFirestore(params: {
 }
 
 /**
+ * Admin: Directly Add/Increase balance for a specific shareholder in Cloud Firestore.
+ * Updates availableWithdrawBalance and totalEarnedCommission, registers in ledger and audit logs,
+ * and notifies the shareholder.
+ */
+export async function adminAddShareholderBalanceInFirestore(params: {
+  userId: string;
+  amountToAdd: number;
+  adminEmail: string;
+  notes?: string;
+}): Promise<{ success: boolean; newBalance: number }> {
+  const targetUserId = params.userId.trim();
+  const addAmt = Number(params.amountToAdd) || 0;
+  if (!targetUserId || addAmt <= 0) return { success: false, newBalance: 0 };
+
+  const now = Date.now();
+  try {
+    const docRef = doc(db, 'shareholders', targetUserId);
+    const snap = await getDoc(docRef);
+    let currentBal = 0;
+    let currentEarned = 0;
+    let currentPaid = 0;
+
+    if (snap.exists()) {
+      const data = snap.data();
+      currentBal = Number(data.availableWithdrawBalance) || 0;
+      currentEarned = Number(data.totalEarnedCommission) || 0;
+      currentPaid = Number(data.paidCommission) || 0;
+    }
+
+    const newBalance = currentBal + addAmt;
+    const newEarned = currentEarned + addAmt;
+    const pending = Math.max(0, newEarned - currentPaid);
+
+    const payload: Partial<ShareholderPortfolioDoc> = {
+      availableWithdrawBalance: newBalance,
+      totalEarnedCommission: newEarned,
+      pendingCommission: pending,
+      lastPaymentUpdate: now,
+      lastUpdatedBy: params.adminEmail || 'admin',
+      lastUpdateNotes: (params.notes || `অ্যাডমিন কর্তৃক ব্যালেন্স বৃদ্ধি ৳${addAmt.toLocaleString()}`).trim(),
+      updatedAt: now
+    };
+
+    // 1. Authoritative Cloud Firestore write
+    await setDoc(docRef, payload, { merge: true });
+
+    // 2. Audit Trail & Financial Ledger entry
+    try {
+      const ledgerId = `LEDGER-ADD-${now}-${targetUserId.slice(0, 6)}`;
+      await setDoc(doc(db, 'shareholder_ledger', ledgerId), {
+        id: ledgerId,
+        userId: targetUserId,
+        shareholderId: `RJ-SH-${targetUserId.slice(0, 8).toUpperCase()}`,
+        type: 'admin_balance_credit',
+        amountAdded: addAmt,
+        availableWithdrawBalance: newBalance,
+        totalEarnedCommission: newEarned,
+        paidCommission: currentPaid,
+        pendingCommission: pending,
+        notes: (params.notes || `অ্যাডমিন কর্তৃক ব্যালেন্স বৃদ্ধি ৳${addAmt.toLocaleString()}`).trim(),
+        adminEmail: params.adminEmail,
+        timestamp: now,
+        status: 'ratified'
+      }, { merge: true });
+    } catch (_) {}
+
+    // 3. Administrative Audit Log
+    try {
+      const logId = `AUDIT-ADD-${now}-${Math.random().toString(36).substring(2, 6)}`;
+      await setDoc(doc(db, 'shareholder_audit_logs', logId), {
+        id: logId,
+        action: 'ADMIN_SHAREHOLDER_BALANCE_ADD',
+        userId: targetUserId,
+        performedBy: params.adminEmail,
+        timestamp: now,
+        changes: {
+          previousBalance: currentBal,
+          amountAdded: addAmt,
+          newBalance: newBalance
+        },
+        notes: params.notes || ''
+      }, { merge: true });
+    } catch (_) {}
+
+    // 4. In-App Notification
+    try {
+      const notifId = `NOTIF-${now}-${Math.random().toString(36).substring(2, 6)}`;
+      await setDoc(doc(db, 'notifications', notifId), {
+        id: notifId,
+        userId: targetUserId,
+        targetUserId: targetUserId,
+        type: 'shareholder_balance_added',
+        title: 'Shareholder Balance Increased',
+        titleBn: 'শেয়ারহোল্ডার ব্যালেন্স বৃদ্ধি করা হয়েছে',
+        message: `Admin added ৳${addAmt.toLocaleString()} to your shareholder account. New available balance: ৳${newBalance.toLocaleString()}`,
+        messageBn: `অ্যাডমিন আপনার একাউন্টে ৳${addAmt.toLocaleString()} যোগ করেছেন। বর্তমান ব্যালেন্স: ৳${newBalance.toLocaleString()}`,
+        timestamp: now,
+        read: false,
+        status: 'active'
+      }, { merge: true });
+    } catch (_) {}
+
+    // 5. Mirror to RTDB
+    try {
+      await rtdbUpdate(`shareholders/${targetUserId}/wallet`, {
+        availableWithdrawBalance: newBalance,
+        totalEarnedCommission: newEarned,
+        updatedAt: now
+      });
+      await rtdbUpdate(`shareholders/${targetUserId}/portfolio`, {
+        availableWithdrawBalance: newBalance,
+        totalEarnedCommission: newEarned,
+        pendingCommission: pending,
+        updatedAt: now
+      });
+    } catch (_) {}
+
+    // 6. Update local cache
+    try {
+      const cachedStr = localStorage.getItem(`rj_shareholder_active_${targetUserId}`);
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        localStorage.setItem(`rj_shareholder_active_${targetUserId}`, JSON.stringify({ ...cached, ...payload }));
+      }
+    } catch (_) {}
+
+    return { success: true, newBalance };
+  } catch (err) {
+    console.error('[Admin Add Shareholder Balance Error]:', err);
+    return { success: false, newBalance: 0 };
+  }
+}
+
+/**
  * Admin: Update Reseller Verification Fee across RTDB and Firestore
  */
 export async function adminUpdateResellerFee(fee: number, adminEmail: string): Promise<boolean> {
