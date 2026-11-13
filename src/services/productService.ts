@@ -4,7 +4,7 @@ import { enrichProductsWithRealMetrics, getCachedProductMetrics } from './produc
 import { isStoreDeletedFromCache } from './storeCache';
 import { formatDirectImageUrl } from '../utils/imageUrl';
 import { generateProductSlug } from '../utils/seo';
-import { GADGET_PULSE_DEMO_PRODUCTS, getDemoProductByIdOrSlug } from '../data/demoProducts';
+import { ALL_DEMO_PRODUCTS, getDemoProductByIdOrSlug } from '../data/demoProducts';
 
 /**
  * Normalizes any raw product from RTDB into standard Product interface
@@ -572,10 +572,10 @@ export async function fetchProductById(identifier: string): Promise<Product | nu
   if (!identifier) return null;
   const cleanId = String(identifier).trim().toLowerCase();
 
-  // 0. Resolve built-in Gadget Pulse demo store product by ID, slug, or generated slug
+  // 0. Resolve built-in demo store product by ID, slug, or generated slug
   const directDemo =
     getDemoProductByIdOrSlug(cleanId) ||
-    GADGET_PULSE_DEMO_PRODUCTS.find((p) => {
+    ALL_DEMO_PRODUCTS.find((p) => {
       const pId = String(p.id).toLowerCase();
       const pSlug = String(p.slug || '').toLowerCase();
       const genSlug = generateProductSlug(p.name, p.id).toLowerCase();

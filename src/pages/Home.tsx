@@ -9,6 +9,7 @@ import ProductSection from '../components/home/ProductSection';
 import AllProductsFeed from '../components/home/AllProductsFeed';
 import ProductCard, { Product } from '../components/ui/ProductCard';
 import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts } from '../services/productService';
+import { GADGET_PULSE_DEMO_PRODUCTS } from '../data/demoProducts';
 import { subscribeToActiveFlashSaleProducts } from '../services/flashSaleService';
 import { subscribeToActiveAds, recordAdImpression, recordAdClick, AdCampaignRecord } from '../services/adCampaignService';
 import { 
@@ -122,9 +123,37 @@ export default function Home() {
     };
   }, []);
 
+  // Include the 10 Gadget Pulse (demo-store-004) demo products on the homepage without duplicates
+  const homepageProducts = useMemo(() => {
+    const merged: Product[] = [];
+    const seenIds = new Set<string>();
+    const seenSlugs = new Set<string>();
+
+    for (const p of allProducts) {
+      if (!p || !p.id) continue;
+      const pId = String(p.id).trim().toLowerCase();
+      const pSlug = String(p.slug || '').trim().toLowerCase();
+      if (seenIds.has(pId)) continue;
+      seenIds.add(pId);
+      if (pSlug) seenSlugs.add(pSlug);
+      merged.push(p);
+    }
+
+    for (const demoProd of GADGET_PULSE_DEMO_PRODUCTS) {
+      const dId = String(demoProd.id).trim().toLowerCase();
+      const dSlug = String(demoProd.slug || '').trim().toLowerCase();
+      if (seenIds.has(dId) || (dSlug && seenSlugs.has(dSlug))) continue;
+      seenIds.add(dId);
+      if (dSlug) seenSlugs.add(dSlug);
+      merged.push(demoProd as unknown as Product);
+    }
+
+    return merged;
+  }, [allProducts]);
+
   // Derived: Best Selling / Top Products from all vendors (Boosted products rank on top!)
   const bestSelling = useMemo(() => {
-    const sorted = [...allProducts].sort((a, b) => {
+    const sorted = [...homepageProducts].sort((a, b) => {
       const isBoostedA = (a as any).boosted && (!(a as any).boostExpiresAt || (a as any).boostExpiresAt > Date.now());
       const isBoostedB = (b as any).boosted && (!(b as any).boostExpiresAt || (b as any).boostExpiresAt > Date.now());
       if (isBoostedA && !isBoostedB) return -1;
@@ -138,7 +167,7 @@ export default function Home() {
       return bScore - aScore;
     });
     return sorted;
-  }, [allProducts]);
+  }, [homepageProducts]);
 
   // Derived: Strictly Active Flash Sale Products (Approved, within start/end time, stock > 0)
   const flashSaleProducts = useMemo(() => {
@@ -147,13 +176,13 @@ export default function Home() {
 
   // Derived: New Arrivals from all vendors (sorted by newest created or updated)
   const newArrivals = useMemo(() => {
-    const sorted = [...allProducts].sort((a, b) => {
+    const sorted = [...homepageProducts].sort((a, b) => {
       const aTime = a.createdAt || 0;
       const bTime = b.createdAt || 0;
       return bTime - aTime;
     });
     return sorted;
-  }, [allProducts]);
+  }, [homepageProducts]);
 
   const displayedFlashSale = isFlashExpanded 
     ? flashSaleProducts 
@@ -321,7 +350,7 @@ export default function Home() {
         />
 
         {/* 7. ALL VENDOR PRODUCTS FEED (সকল ভেন্ডরের সকল পণ্য ও স্ক্রলিং মার্কেটপ্লেস ফিড) */}
-        <AllProductsFeed products={allProducts} />
+        <AllProductsFeed products={homepageProducts} />
 
       </main>
 

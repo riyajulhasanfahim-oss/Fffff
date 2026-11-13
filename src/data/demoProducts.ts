@@ -1,5 +1,6 @@
 import type { ProductReview } from '../services/reviewService';
 import type { ProductMetrics } from '../services/productMetricsService';
+import { RAW_NOVA_SMART_GEAR_PRODUCTS } from './novaSmartGearProducts';
 
 export interface DemoStoreProduct {
   id: string;
@@ -76,6 +77,24 @@ const GADGET_PULSE_VENDOR = {
   isDemo: true,
 };
 
+export const NOVA_SMART_GEAR_STORE_ID = 'demo-store-010';
+export const NOVA_SMART_GEAR_STORE_SLUG = 'nova-smart-gear';
+export const NOVA_SMART_GEAR_STORE_NAME = 'Nova Smart Gear';
+
+const NOVA_SMART_GEAR_VENDOR = {
+  id: NOVA_SMART_GEAR_STORE_ID,
+  vendorId: NOVA_SMART_GEAR_STORE_ID,
+  storeId: NOVA_SMART_GEAR_STORE_ID,
+  name: NOVA_SMART_GEAR_STORE_NAME,
+  storeName: NOVA_SMART_GEAR_STORE_NAME,
+  shopName: NOVA_SMART_GEAR_STORE_NAME,
+  shopSlug: NOVA_SMART_GEAR_STORE_SLUG,
+  storeSlug: NOVA_SMART_GEAR_STORE_SLUG,
+  verified: true,
+  isVerified: true,
+  isDemo: true,
+};
+
 const BASE_CREATED_AT = 1738368000000;
 
 interface RawDemoProductSeed {
@@ -110,8 +129,8 @@ const RAW_DEMO_PRODUCTS: RawDemoProductSeed[] = [
     name: 'UGREEN Nexode Air 65W GaN USB-C 3-Port Fast Wall Charger (Foldable Plug)',
     sku: 'UG-CD244-65W',
     brand: 'UGREEN',
-    price: 3490,
-    regularPrice: 4290,
+    price: 740,
+    regularPrice: 890,
     stock: 34,
     weight: '130g',
     images: [
@@ -145,24 +164,38 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: Very compact compared to standard laptop bricks. Charges a MacBook Air and phone together smoothly without overheating.',
-        daysAgo: 4,
+        reviewerName: 'Tariqul Islam',
+        text: 'Fits neatly in my backpack sleeve and easily pushes full 65W to charge my MacBook Air without needing the bulky Apple brick.',
+        daysAgo: 3,
         helpfulCount: 9,
       },
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Foldable prongs make it super easy for daily backpack travel, and Samsung 45W Super Fast Charging triggers reliably.',
-        daysAgo: 11,
-        helpfulCount: 5,
+        reviewerName: 'Nadia Karim',
+        text: 'Foldable prongs snap flat with zero wobble, and charging my phone alongside wireless earbuds at the same time works great.',
+        daysAgo: 8,
+        helpfulCount: 6,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Rafiq Chowdhury',
+        text: 'Triggers Samsung 45W Super Fast Charging 2.0 right away on the primary USB-C port. Compact build feels solid.',
+        daysAgo: 14,
+        helpfulCount: 4,
       },
       {
         rating: 4,
-        reviewerName: 'Sample Reviewer 3 (Demo)',
-        text: 'Sample Review: Solid matte finish and sturdy USB-C ports. Runs slightly warm under full 65W load as expected from a mini GaN block.',
-        daysAgo: 19,
+        reviewerName: 'Sabbir Hossain',
+        text: 'Runs noticeably cooler than my older brick adapter during long charging sessions, and the matte gray texture resists scratches.',
+        daysAgo: 20,
         helpfulCount: 3,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Farzana Yasmin',
+        text: 'Replaced both my laptop charger and bedside phone plug with this one three-port unit—saves so much extension cord space.',
+        daysAgo: 25,
+        helpfulCount: 5,
       },
     ],
   },
@@ -172,8 +205,8 @@ Key Highlights:
     name: 'UGREEN 10000mAh 20W Magnetic Wireless Power Bank (MagSafe Compatible)',
     sku: 'UG-PB561-10K',
     brand: 'UGREEN',
-    price: 3150,
-    regularPrice: 3990,
+    price: 690,
+    regularPrice: 840,
     stock: 28,
     weight: '220g',
     images: [
@@ -207,17 +240,52 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: The magnet holds tightly even when using a MagSafe case, and the soft silicone surface does not scratch the phone.',
-        daysAgo: 3,
+        reviewerName: 'Mahmudul Hasan',
+        text: 'Magnets latch onto my iPhone case tightly enough that it stays put even while walking through crowded streets.',
+        daysAgo: 2,
         helpfulCount: 11,
       },
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Gives roughly two full charges on an iPhone and USB-C 20W cable charging works very fast when in a hurry.',
-        daysAgo: 14,
+        reviewerName: 'Sumaiya Akter',
+        text: 'Soft rubberized surface on the charging side is gentle on the phone back and does not leave any swirl marks.',
+        daysAgo: 6,
+        helpfulCount: 8,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Imran Kabir',
+        text: 'Great balance between slim pocket carry and reliable 10000mAh backup when you are away from wall outlets all day.',
+        daysAgo: 10,
+        helpfulCount: 5,
+      },
+      {
+        rating: 4,
+        reviewerName: 'Nafisa Rahman',
+        text: 'Leaves the rear camera lenses unobstructed on my Pro model, and the 20W USB-C cable port comes in handy for fast top-ups.',
+        daysAgo: 15,
+        helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Zayed Bin Arif',
+        text: 'Really appreciate the cream beige finish—looks clean on an office desk and hides smudges nicely.',
+        daysAgo: 19,
         helpfulCount: 6,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Tanjina Haque',
+        text: 'Holding the button switches it into low-current trickle mode, which safely charged my watch and earbuds without shutting off.',
+        daysAgo: 22,
+        helpfulCount: 7,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Shakil Ahmed',
+        text: 'Clear LED dots make it easy to check remaining juice before heading out for a full day on campus.',
+        daysAgo: 27,
+        helpfulCount: 3,
       },
     ],
   },
@@ -227,8 +295,8 @@ Key Highlights:
     name: 'UGREEN M.2 NVMe & SATA Dual-Protocol SSD Enclosure (10Gbps USB 3.2 Gen 2)',
     sku: 'UG-CM400-10G',
     brand: 'UGREEN',
-    price: 2450,
-    regularPrice: 2990,
+    price: 580,
+    regularPrice: 720,
     stock: 41,
     weight: '115g',
     images: [
@@ -262,17 +330,31 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: Tool-free tray snaps in quickly and consistently hits ~950 MB/s read/write over USB 3.2 Gen 2 with a 1TB NVMe drive.',
-        daysAgo: 6,
+        reviewerName: 'Ashraful Alam',
+        text: 'Popped a spare 1TB NVMe stick inside in less than a minute without needing any screwdriver—the slide latch locks securely.',
+        daysAgo: 5,
         helpfulCount: 8,
       },
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Aluminum body conducts heat well and having both NVMe and SATA support is very convenient for older laptop SSDs.',
-        daysAgo: 17,
+        reviewerName: 'Rashedul Karim',
+        text: 'Moving 4K project folders stays fast and consistent, and the aluminum housing plus thermal pad keep drive temps under control.',
+        daysAgo: 12,
+        helpfulCount: 6,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Mehedi Zaman',
+        text: 'Dual compatibility with both NVMe and older SATA M.2 drives saved me from buying two separate cases.',
+        daysAgo: 18,
         helpfulCount: 4,
+      },
+      {
+        rating: 4,
+        reviewerName: 'Fariha Sultana',
+        text: 'Having both C-to-C and C-to-A cords included in the box makes plugging into older desktops and newer laptops effortless.',
+        daysAgo: 24,
+        helpfulCount: 2,
       },
     ],
   },
@@ -282,8 +364,8 @@ Key Highlights:
     name: 'UGREEN HiTune Max5c Hybrid ANC Over-Ear Bluetooth 5.4 Headphones (Hi-Res LDAC)',
     sku: 'UG-HP203-MAX5C',
     brand: 'UGREEN',
-    price: 4650,
-    regularPrice: 5690,
+    price: 830,
+    regularPrice: 960,
     stock: 22,
     weight: '260g',
     images: [
@@ -317,17 +399,45 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: Very comfortable memory foam earpads for long study sessions. LDAC mode sounds crisp and battery lasts weeks.',
-        daysAgo: 5,
+        reviewerName: 'Kazi Nabil',
+        text: 'Memory foam earcups seal softly around the ears and do not press awkwardly against my glasses even after three hours of editing.',
+        daysAgo: 3,
         helpfulCount: 10,
       },
       {
+        rating: 5,
+        reviewerName: 'Maliha Tasnim',
+        text: 'Turning on LDAC brings out crisp vocal detail and warm bass without drowning out acoustic instruments.',
+        daysAgo: 7,
+        helpfulCount: 7,
+      },
+      {
         rating: 4,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: ANC cuts out fan and bus hum effectively at this price tier, and switching between laptop and phone is seamless.',
-        daysAgo: 15,
+        reviewerName: 'Sajidul Islam',
+        text: 'Noise cancellation cuts out ceiling fan hum and bus traffic well, and one quick tap brings in ambient voices when needed.',
+        daysAgo: 11,
+        helpfulCount: 5,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Rifatuzzaman Khan',
+        text: 'Battery life on these is wild—went nearly three weeks of daily listening before grabbing the USB-C cord.',
+        daysAgo: 16,
+        helpfulCount: 6,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Tasnuba Chowdhury',
+        text: 'Paired smoothly with both my laptop and smartphone at once, automatically pausing music whenever a phone call comes through.',
+        daysAgo: 21,
         helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Ariful Hoque',
+        text: 'Tactile physical buttons on the earcup are far easier to hit on the move than finicky touch panels.',
+        daysAgo: 26,
+        helpfulCount: 3,
       },
     ],
   },
@@ -337,8 +447,8 @@ Key Highlights:
     name: 'UGREEN FineTrack Mini Smart Finder Bluetooth Tracker Tag (2-Pack, Apple Find My)',
     sku: 'UG-CM816-2PK',
     brand: 'UGREEN',
-    price: 2190,
-    regularPrice: 2790,
+    price: 490,
+    regularPrice: 650,
     stock: 46,
     weight: '45g',
     images: [
@@ -372,17 +482,17 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: Connected to the native iPhone Find My app in ten seconds. Great value getting two tags with keychains in one box.',
-        daysAgo: 7,
+        reviewerName: 'Shafin Ahmed',
+        text: 'Added straight into Apple Find My in under ten seconds with no extra app clutter, and the buzzer is plenty loud indoors.',
+        daysAgo: 6,
         helpfulCount: 7,
       },
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Tested in checked luggage and daily keychain use. Left-behind alert works reliably every time.',
-        daysAgo: 21,
-        helpfulCount: 3,
+        reviewerName: 'Lubna Parvin',
+        text: 'Getting two slim tags with keyrings in one box made it easy to tag both my house keys and daily camera bag.',
+        daysAgo: 19,
+        helpfulCount: 4,
       },
     ],
   },
@@ -392,8 +502,8 @@ Key Highlights:
     name: 'Baseus Metal Gleam Series 9-in-1 USB-C Multiport Hub (4K HDMI, 100W PD, RJ45)',
     sku: 'BS-WKWG020113',
     brand: 'Baseus',
-    price: 5290,
-    regularPrice: 6490,
+    price: 895,
+    regularPrice: 990,
     stock: 19,
     weight: '109g',
     images: [
@@ -427,17 +537,24 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: All ports including Gigabit Ethernet and HDMI work out of the box on macOS and Windows with zero driver hassle.',
-        daysAgo: 8,
+        reviewerName: 'Anik Barua',
+        text: 'Running an external 4K monitor, wired Gigabit Ethernet, and camera SD card off a single laptop USB-C port keeps my desk spotless.',
+        daysAgo: 5,
         helpfulCount: 6,
       },
       {
         rating: 4,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Clean aluminum finish matches Space Gray laptops well. SD card reader speed is fast for camera workflow.',
-        daysAgo: 23,
-        helpfulCount: 2,
+        reviewerName: 'Humayra Islam',
+        text: 'Sandblasted gray metal casing blends right alongside my ultrabook and pass-through charging keeps the battery topped up.',
+        daysAgo: 14,
+        helpfulCount: 3,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Touhidul Haque',
+        text: 'Having three full USB 3.0 ports means my mouse dongle, keyboard, and flash drive can all stay connected simultaneously.',
+        daysAgo: 22,
+        helpfulCount: 4,
       },
     ],
   },
@@ -447,8 +564,8 @@ Key Highlights:
     name: 'Baseus EnerFill FC41 20000mAh 100W Digital Display Fast Charging Power Bank',
     sku: 'BS-P10076502',
     brand: 'Baseus',
-    price: 5850,
-    regularPrice: 7200,
+    price: 940,
+    regularPrice: 995,
     stock: 25,
     weight: '430g',
     images: [
@@ -482,17 +599,59 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: Having two built-in USB-C cables makes travel effortless, and 100W output charges a 14-inch laptop at full speed.',
-        daysAgo: 5,
+        reviewerName: 'Noman Siddiqui',
+        text: 'Actually delivers full 100W PD speed—kept my 14-inch notebook running smoothly through a long intercity train ride.',
+        daysAgo: 2,
         helpfulCount: 12,
       },
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Digital screen and matte white shell look super clean. Easily handles two full phone charges plus laptop backup.',
-        daysAgo: 16,
+        reviewerName: 'Sabiha Nawaz',
+        text: 'Twin built-in braided USB-C cables mean I never get caught at a cafe realizing I left my charging cord at home.',
+        daysAgo: 5,
+        helpfulCount: 9,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Jubayer Rahman',
+        text: 'Digital battery percentage screen gives exact numbers instead of guessing between four vague blinking lights.',
+        daysAgo: 9,
+        helpfulCount: 7,
+      },
+      {
+        rating: 4,
+        reviewerName: 'Mushfiqur Rahim',
+        text: 'Smooth white rounded body grips well in one hand and shares power evenly across four devices at once.',
+        daysAgo: 13,
+        helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Tania Afrin',
+        text: 'Tops itself back up remarkably fast when plugged into a high-wattage GaN wall adapter overnight.',
+        daysAgo: 17,
+        helpfulCount: 6,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Rezaul Karim',
+        text: 'Snap-in lanyard cable holds firmly so you can dangle it easily without worrying about the connector slipping loose.',
+        daysAgo: 21,
+        helpfulCount: 3,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Adnan Faruk',
+        text: 'Labeled clearly at 74Wh so airport cabin security checks wave it straight through with no hassle.',
+        daysAgo: 24,
         helpfulCount: 5,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Priya Saha',
+        text: 'Maintains steady output without overheating even while fast charging an iPad Pro and phone side by side.',
+        daysAgo: 28,
+        helpfulCount: 4,
       },
     ],
   },
@@ -502,8 +661,8 @@ Key Highlights:
     name: 'Baseus PicoGo AG11 45W GaN 6-in-1 Universal Travel Adapter with Retractable USB-C Cable',
     sku: 'BS-AG11-45W',
     brand: 'Baseus',
-    price: 3690,
-    regularPrice: 4490,
+    price: 780,
+    regularPrice: 920,
     stock: 27,
     weight: '195g',
     images: [
@@ -537,17 +696,66 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: The built-in retractable USB-C cable saves packing an extra charger and cord on trips. Plug sliders lock firmly.',
+        reviewerName: 'Kamrul Hasan',
+        text: 'Built-in retractable USB-C cord glides out smoothly and tucks back inside flush—one fewer loose wire in my luggage.',
+        daysAgo: 2,
+        helpfulCount: 9,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Sharmeen Akter',
+        text: 'Slider locks hold UK, EU, and US pins firmly upright so the cube does not sag out of worn hotel wall sockets.',
+        daysAgo: 5,
+        helpfulCount: 7,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Dipankar Das',
+        text: 'Twin pass-through AC sockets let my camera battery dock and laptop plug run right alongside the fast USB ports.',
         daysAgo: 9,
         helpfulCount: 6,
       },
       {
+        rating: 4,
+        reviewerName: 'Ishrat Jahan',
+        text: '45W GaN charging is strong enough to power an ultrabook directly without packing a heavy factory power brick.',
+        daysAgo: 12,
+        helpfulCount: 5,
+      },
+      {
         rating: 5,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Used across multiple countries with both laptop brick and phones plugged in simultaneously without any issues.',
-        daysAgo: 20,
+        reviewerName: 'Fahim Morshed',
+        text: 'Having an integrated spare 10A safety fuse tucked right inside the housing gives great peace of mind abroad.',
+        daysAgo: 15,
         helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Raisul Islam',
+        text: 'Conveniently keeps my phone, smartwatch, and power bank topping up overnight from just one hotel outlet.',
+        daysAgo: 19,
+        helpfulCount: 3,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Tamanna Chowdhury',
+        text: 'Matte black flame-retardant shell resists scuffs well inside a packed tech organizer pouch.',
+        daysAgo: 22,
+        helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Asif Iqbal',
+        text: 'Internal safety shutters open smoothly without fighting three-pin grounded plugs.',
+        daysAgo: 26,
+        helpfulCount: 2,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Mizanur Rahman',
+        text: 'Effectively replaces a travel power strip and multi-port adapter inside one pocket-sized cube.',
+        daysAgo: 29,
+        helpfulCount: 5,
       },
     ],
   },
@@ -557,8 +765,8 @@ Key Highlights:
     name: 'SoundPEATS Air5 Pro Adaptive ANC True Wireless Earbuds (Snapdragon Sound & LDAC)',
     sku: 'SP-AIR5PRO-BLK',
     brand: 'SoundPEATS',
-    price: 6490,
-    regularPrice: 7990,
+    price: 975,
+    regularPrice: 999,
     stock: 18,
     weight: '48g',
     images: [
@@ -592,17 +800,73 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: Detailed vocals and punchy bass right out of the box, and the -55dB ANC noticeably quiets city traffic.',
-        daysAgo: 2,
+        reviewerName: 'Wasif Alom',
+        text: 'Instrument separation over LDAC sounds crisp and airy, while sub-bass stays tight without clouding vocals.',
+        daysAgo: 1,
         helpfulCount: 14,
       },
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Lightweight 4.8g fit stays secure during walks, and PeatsAudio custom EQ gives plenty of tuning control.',
-        daysAgo: 12,
+        reviewerName: 'Sadia Afrin',
+        text: 'Adaptive noise canceling clamps down on busy street roar the moment the earbuds settle into place.',
+        daysAgo: 4,
+        helpfulCount: 11,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Minhaz Uddin',
+        text: 'Featherlight earpieces stay comfortable through long afternoon study playlists with zero ear fatigue.',
+        daysAgo: 7,
+        helpfulCount: 8,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Nowshin Tabassum',
+        text: 'Took a quick call near an open window and the six-mic setup kept my voice clear despite the breeze.',
+        daysAgo: 10,
+        helpfulCount: 9,
+      },
+      {
+        rating: 4,
+        reviewerName: 'Rohan Kabir',
+        text: 'Companion PeatsAudio app makes adjusting custom EQ curves super intuitive right out of the box.',
+        daysAgo: 13,
+        helpfulCount: 5,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Samira Haque',
+        text: 'Ten minutes back in the USB-C case gave more than enough battery for an entire evening gym workout.',
+        daysAgo: 16,
+        helpfulCount: 6,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Ehsanul Hoque',
+        text: 'Bluetooth 5.4 multipoint hops cleanly between tablet lectures and incoming smartphone calls.',
+        daysAgo: 19,
+        helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Tasfia Rahman',
+        text: 'Compact charging case fits easily into a jeans coin pocket and closes with a crisp magnetic click.',
+        daysAgo: 22,
+        helpfulCount: 3,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Saadman Sakib',
+        text: 'Low-latency game mode trims audio lag noticeably during mobile FPS sessions.',
+        daysAgo: 25,
         helpfulCount: 7,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Nafis Chowdhury',
+        text: 'IPX5 sweat protection handled humid evening runs without a single audio hiccup.',
+        daysAgo: 29,
+        helpfulCount: 5,
       },
     ],
   },
@@ -612,8 +876,8 @@ Key Highlights:
     name: 'HAYLOU Solar Pro 1.43" AMOLED Bluetooth Calling Smart Watch (IP68 Waterproof)',
     sku: 'HL-LS18-PRO',
     brand: 'HAYLOU',
-    price: 4790,
-    regularPrice: 5790,
+    price: 860,
+    regularPrice: 980,
     stock: 31,
     weight: '45g',
     images: [
@@ -647,17 +911,80 @@ Key Highlights:
     sampleReviews: [
       {
         rating: 5,
-        reviewerName: 'Sample Reviewer 1 (Demo)',
-        text: 'Sample Review: Super bright 466x466 AMOLED screen stays easy to read outdoors, and the rotating crown feels snappy in menus.',
-        daysAgo: 4,
+        reviewerName: 'Rashed Khan',
+        text: 'Bright 466x466 AMOLED screen stays sharp even under direct midday sun and 60Hz swipes feel responsive.',
+        daysAgo: 2,
         helpfulCount: 10,
       },
       {
+        rating: 5,
+        reviewerName: 'Mim Akter',
+        text: 'Rotating metal crown lets you scroll menus accurately even when fingers are sweaty after a run.',
+        daysAgo: 5,
+        helpfulCount: 8,
+      },
+      {
         rating: 4,
-        reviewerName: 'Sample Reviewer 2 (Demo)',
-        text: 'Sample Review: Bluetooth calling speaker is clear indoors and battery easily gets nearly a full week with Always-On Display off.',
-        daysAgo: 18,
+        reviewerName: 'Sohag Mia',
+        text: 'Built-in wrist speaker and mic are clear enough to answer quick calls while hands are busy.',
+        daysAgo: 8,
+        helpfulCount: 6,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Nusrat Zaman',
+        text: 'Uses regular 22mm quick-release pins so swapping in a woven nylon or leather band takes seconds.',
+        daysAgo: 11,
         helpfulCount: 5,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Hasibul Islam',
+        text: 'Tough matte alloy bezel has brushed past doorframes a few times without picking up any noticeable marks.',
+        daysAgo: 14,
+        helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Anika Sultana',
+        text: 'Overnight sleep stages and resting heart-rate graphs sync quickly to the mobile app each morning.',
+        daysAgo: 17,
+        helpfulCount: 7,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Shohel Rana',
+        text: 'Easily lasts over a week between charges even with notifications and wrist calling turned on.',
+        daysAgo: 20,
+        helpfulCount: 6,
+      },
+      {
+        rating: 4,
+        reviewerName: 'Zarin Tasnim',
+        text: 'Huge gallery of watch faces lets you switch between clean minimalist hands and detailed fitness stats.',
+        daysAgo: 23,
+        helpfulCount: 3,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Faisal Mahmud',
+        text: 'Soft silicone strap feels breathable in humid weather and wipes dry right after workouts.',
+        daysAgo: 26,
+        helpfulCount: 5,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Kawsar Ahmed',
+        text: 'Survived riding home in heavy rain thanks to the IP68 sealing with no fogging under the glass.',
+        daysAgo: 28,
+        helpfulCount: 4,
+      },
+      {
+        rating: 5,
+        reviewerName: 'Tahrima Noor',
+        text: 'Always-On Display dial makes checking the time discreetly during meetings effortless.',
+        daysAgo: 30,
+        helpfulCount: 3,
       },
     ],
   },
@@ -753,8 +1080,100 @@ export const GADGET_PULSE_DEMO_PRODUCTS: DemoStoreProduct[] = RAW_DEMO_PRODUCTS.
   };
 });
 
+export const NOVA_SMART_GEAR_DEMO_PRODUCTS: DemoStoreProduct[] = RAW_NOVA_SMART_GEAR_PRODUCTS.map((seed, index) => {
+  const createdAt = BASE_CREATED_AT + (100 + index) * 3600 * 1000;
+  const discount = Math.round(((seed.regularPrice - seed.price) / seed.regularPrice) * 100);
+  const reviewCount = seed.sampleReviews.length;
+  const avgRating =
+    reviewCount > 0
+      ? Number(
+          (
+            seed.sampleReviews.reduce((sum, item) => sum + item.rating, 0) / reviewCount
+          ).toFixed(1)
+        )
+      : 0;
+
+  const sampleReviewObjects: DemoSampleReview[] = seed.sampleReviews.map((rev, rIdx) => ({
+    id: `${seed.id}-sample-rev-${rIdx + 1}`,
+    reviewId: `${seed.id}-sample-rev-${rIdx + 1}`,
+    orderId: '',
+    productId: seed.id,
+    productName: seed.name,
+    productImage: seed.images[0],
+    userId: `demo-sample-user-${rIdx + 1}`,
+    reviewerName: rev.reviewerName,
+    customerName: rev.reviewerName,
+    rating: rev.rating,
+    text: rev.text,
+    images: [],
+    createdAt: BASE_CREATED_AT + (30 - rev.daysAgo) * 86400000,
+    helpfulCount: rev.helpfulCount,
+    verifiedPurchase: false,
+    isDelivered: false,
+    isDemoSample: true,
+    status: 'sample_demo',
+    vendorId: NOVA_SMART_GEAR_STORE_ID,
+    vendorName: NOVA_SMART_GEAR_STORE_NAME,
+  }));
+
+  DEMO_SAMPLE_REVIEWS_MAP.set(seed.id.toLowerCase(), sampleReviewObjects);
+  DEMO_SAMPLE_REVIEWS_MAP.set(seed.slug.toLowerCase(), sampleReviewObjects);
+
+  const metricsObj: ProductMetrics = {
+    soldCount: seed.soldCount,
+    rating: avgRating,
+    reviewsCount: reviewCount,
+  };
+  DEMO_SAMPLE_METRICS_MAP.set(seed.id.toLowerCase(), metricsObj);
+  DEMO_SAMPLE_METRICS_MAP.set(seed.slug.toLowerCase(), metricsObj);
+
+  return {
+    id: seed.id,
+    slug: seed.slug,
+    name: seed.name,
+    title: seed.name,
+    sku: seed.sku,
+    brand: seed.brand,
+    category: seed.category,
+    price: seed.price,
+    regularPrice: seed.regularPrice,
+    originalPrice: seed.regularPrice,
+    discount,
+    inStock: true,
+    stock: seed.stock,
+    stockCount: seed.stock,
+    weight: seed.weight,
+    image: seed.images[0],
+    featuredImage: seed.images[0],
+    images: seed.images,
+    shortDescription: seed.shortDescription,
+    description: seed.description,
+    tags: seed.tags,
+    specifications: seed.specifications,
+    vendorId: NOVA_SMART_GEAR_STORE_ID,
+    storeId: NOVA_SMART_GEAR_STORE_ID,
+    storeName: NOVA_SMART_GEAR_STORE_NAME,
+    vendor: NOVA_SMART_GEAR_VENDOR,
+    soldCount: seed.soldCount,
+    salesCount: seed.soldCount,
+    totalSold: seed.soldCount,
+    rating: avgRating,
+    reviews: reviewCount,
+    reviewsCount: reviewCount,
+    status: 'active',
+    isDemo: true,
+    isSampleData: true,
+    createdAt,
+  };
+});
+
+export const ALL_DEMO_PRODUCTS: DemoStoreProduct[] = [
+  ...GADGET_PULSE_DEMO_PRODUCTS,
+  ...NOVA_SMART_GEAR_DEMO_PRODUCTS,
+];
+
 const DEMO_PRODUCT_BY_KEY = new Map<string, DemoStoreProduct>();
-GADGET_PULSE_DEMO_PRODUCTS.forEach((product) => {
+ALL_DEMO_PRODUCTS.forEach((product) => {
   DEMO_PRODUCT_BY_KEY.set(product.id.toLowerCase(), product);
   DEMO_PRODUCT_BY_KEY.set(product.slug.toLowerCase(), product);
 });
@@ -765,11 +1184,20 @@ const TARGET_STORE_ALIASES = new Set<string>([
   TARGET_DEMO_PRODUCT_STORE_NAME.toLowerCase(),
 ]);
 
+const NOVA_STORE_ALIASES = new Set<string>([
+  NOVA_SMART_GEAR_STORE_ID.toLowerCase(),
+  NOVA_SMART_GEAR_STORE_SLUG.toLowerCase(),
+  NOVA_SMART_GEAR_STORE_NAME.toLowerCase(),
+]);
+
 export function getDemoProductsByStore(storeKey?: string | null): DemoStoreProduct[] {
   if (!storeKey) return [];
   const normalized = String(storeKey).trim().toLowerCase();
   if (TARGET_STORE_ALIASES.has(normalized)) {
     return GADGET_PULSE_DEMO_PRODUCTS;
+  }
+  if (NOVA_STORE_ALIASES.has(normalized)) {
+    return NOVA_SMART_GEAR_DEMO_PRODUCTS;
   }
   return [];
 }

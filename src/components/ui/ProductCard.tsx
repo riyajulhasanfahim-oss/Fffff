@@ -357,7 +357,7 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
               <span className="opacity-0 select-none">0 {language === 'bn' ? 'বিক্রি' : 'sold'}</span>
             ) : (
               soldCount > 0 
-                ? `${soldCount} ${language === 'bn' ? (product.isDemo || product.isSampleData ? 'বিক্রি (ডেমো)' : 'বিক্রি') : (product.isDemo || product.isSampleData ? 'sold (Demo)' : 'sold')}` 
+                ? `${soldCount} ${language === 'bn' ? 'বিক্রি' : 'sold'}` 
                 : `0 ${language === 'bn' ? 'বিক্রি' : 'sold'}`
             )}
           </span>
