@@ -2,7 +2,7 @@ import { auth } from '../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbPush, rtdbList } from '../lib/rtdb';
 import { Product } from '../components/ui/ProductCard';
 import { INITIAL_CATEGORIES, INITIAL_BANNERS, INITIAL_COUPONS } from '../lib/firebaseSeed';
-import { fetchAllMarketplaceProducts, fetchProductById, normalizeProduct, getCachedMarketplaceProducts } from './productService';
+import { fetchAllMarketplaceProducts, fetchProductById, normalizeProduct, getCachedMarketplaceProducts, sortRealProductsFirst } from './productService';
 import { matchProductsDarazStyle } from '../utils/searchEngine';
 
 // 1. PRODUCTS
@@ -44,9 +44,9 @@ export async function searchFirestoreProducts(searchQuery: string): Promise<Prod
     if (!allProducts || allProducts.length === 0) {
       allProducts = await fetchAllMarketplaceProducts();
     }
-    if (!searchQuery || !searchQuery.trim()) return allProducts;
+    if (!searchQuery || !searchQuery.trim()) return sortRealProductsFirst(allProducts);
 
-    return matchProductsDarazStyle(allProducts, searchQuery);
+    return sortRealProductsFirst(matchProductsDarazStyle(allProducts, searchQuery));
   } catch (error) {
     console.warn('Error searching marketplace products:', error);
     return [];

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { rtdbGet } from '../lib/rtdb';
-import { db } from '../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
 import ShopNotFound from './ShopNotFound';
 import { 
   extractVendorSubdomain, 
   slugifyVendorName, 
   PRIMARY_DOMAIN 
 } from '../utils/subdomain';
+import { getDemoStoreByIdOrSlug } from '../data/demoStores';
+import { isStoreDeletedFromCache } from '../services/storeCache';
 
 interface ShopDomainContextType {
   vendorId: string | null;
@@ -124,19 +124,6 @@ export default function ShopDomainWrapper({ children }: { children: React.ReactN
             ...safeProfiles
           };
 
-          // Also check Firestore collections (vendors and stores)
-          try {
-            const fsSnap = await getDocs(collection(db, 'vendors'));
-            fsSnap.forEach(docSnap => {
-              allRecords[docSnap.id] = {
-                ...(allRecords[docSnap.id] || {}),
-                ...docSnap.data(),
-                id: docSnap.id,
-                vendorId: docSnap.id
-              };
-            });
-          } catch (_) {}
-
           let matchedVendorId: string | null = null;
           const expectedDomain = `${targetSlug}.${PRIMARY_DOMAIN}`;
           const expectedLegacyDomain = `${targetSlug}.rjworld.com`;
@@ -166,6 +153,13 @@ export default function ShopDomainWrapper({ children }: { children: React.ReactN
             if (rawName && (slugifyVendorName(rawName) === targetSlug || rawName.toLowerCase().replace(/\s+/g, '-') === targetSlug)) {
               matchedVendorId = recId || key;
               break;
+            }
+          }
+
+          if (!matchedVendorId) {
+            const demoStore = getDemoStoreByIdOrSlug(targetSlug);
+            if (demoStore && !isStoreDeletedFromCache(demoStore.id)) {
+              matchedVendorId = demoStore.id;
             }
           }
 

@@ -1,6 +1,5 @@
-import React from 'react';
-import { motion } from 'motion/react';
-import { ArrowRight, Flame, Sparkles, TrendingUp, Clock } from 'lucide-react';
+import React, { memo } from 'react';
+import { ArrowRight, Flame, Sparkles, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import ProductCard, { Product } from '../ui/ProductCard';
 
@@ -16,7 +15,7 @@ interface ProductSectionProps {
   initialLimit?: number;
 }
 
-export default function ProductSection({ 
+const ProductSection = memo(function ProductSection({ 
   title, 
   subtitle, 
   products, 
@@ -87,20 +86,16 @@ export default function ProductSection({
 
         {/* Responsive Product Grid: 2 cols on mobile, 3 on tablet, 4 on desktop */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-5">
-          {displayedProducts.map((product, index) => (
-            <motion.div
-              key={product.id}
-              initial={{ opacity: 0, y: 15 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-40px" }}
-              transition={{ duration: 0.35, delay: Math.min(index * 0.05, 0.3) }}
-            >
+          {displayedProducts.map((product) => (
+            <div key={product.id}>
               <ProductCard product={product} />
-            </motion.div>
+            </div>
           ))}
         </div>
 
       </div>
     </section>
   );
-}
+});
+
+export default ProductSection;

@@ -1,5 +1,3 @@
-import { collection, getDocs, onSnapshot } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { rtdbGet, rtdbSubscribe } from '../lib/rtdb';
 import { getDemoSampleMetrics } from '../data/demoProducts';
 
@@ -12,12 +10,10 @@ export interface ProductMetrics {
 const LOCAL_STORAGE_METRICS_KEY = 'rj_cached_product_metrics_v2';
 const inMemoryMetricsCache = new Map<string, ProductMetrics>();
 let cacheLastFetched = 0;
-const CACHE_TTL_MS = 20 * 1000; // 20 second freshness
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minute freshness to avoid excessive Firestore reads
 let isMetricsInitialLoaded = false;
 let inflightMetricsPromise: Promise<Map<string, ProductMetrics>> | null = null;
 const metricsListeners = new Set<(metricsMap: Map<string, ProductMetrics>) => void>();
-let ordersUnsubscribe: (() => void) | null = null;
-let reviewsUnsubscribe: (() => void) | null = null;
 let rtdbReviewsUnsubscribe: (() => void) | null = null;
 
 // Track active reviews in memory across RTDB & Firestore
@@ -262,51 +258,22 @@ export async function fetchAllProductsMetricsFromRTDB(forceRefresh = false): Pro
 
   inflightMetricsPromise = (async () => {
     try {
-      // Fetch directly from Cloud Firestore and RTDB collections with strict timeout protection
-      const timeoutFs = <T>(p: Promise<T>, ms = 2500): Promise<T | null> =>
-        Promise.race([
-          p,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))
-        ]).catch(() => null);
-
-      const [fsOrdersSnap, fsProductsSnap, fsReviewsSnap, rtdbOrders, rtdbOrderItems, rtdbReviews] = await Promise.all([
-        timeoutFs(getDocs(collection(db, 'orders'))),
-        timeoutFs(getDocs(collection(db, 'products'))),
-        timeoutFs(getDocs(collection(db, 'reviews'))),
+      const [rtdbOrders, rtdbProducts, rtdbOrderItems, rtdbReviews] = await Promise.all([
         rtdbGet<Record<string, any>>('orders', 2500).catch(() => null),
+        rtdbGet<Record<string, any>>('products', 2500).catch(() => null),
         rtdbGet<Record<string, any>>('orderItems', 2500).catch(() => null),
         rtdbGet<Record<string, any>>('reviews', 2500).catch(() => null)
       ]);
 
-      const ordersList: any[] = [];
-      if (fsOrdersSnap && !fsOrdersSnap.empty) {
-        fsOrdersSnap.forEach(docSnap => {
-          ordersList.push({ id: docSnap.id, ...docSnap.data() });
-        });
-      } else if (rtdbOrders && typeof rtdbOrders === 'object') {
-        ordersList.push(...Object.values(rtdbOrders));
-      }
-
-      const productsList: any[] = [];
-      if (fsProductsSnap && !fsProductsSnap.empty) {
-        fsProductsSnap.forEach(docSnap => {
-          productsList.push({ id: docSnap.id, ...docSnap.data() });
-        });
-      }
+      const ordersList: any[] = rtdbOrders && typeof rtdbOrders === 'object' ? Object.values(rtdbOrders) : [];
+      const productsList: any[] = rtdbProducts && typeof rtdbProducts === 'object'
+        ? Object.entries(rtdbProducts).map(([id, data]) => ({ id, ...(data as any) }))
+        : [];
 
       if (rtdbReviews && typeof rtdbReviews === 'object') {
         Object.entries(rtdbReviews).forEach(([k, v]) => {
           if (v && typeof v === 'object' && (v as any).productId) {
             cachedReviewsMap.set(k, { id: k, ...(v as any) });
-          }
-        });
-      }
-
-      if (fsReviewsSnap && !fsReviewsSnap.empty) {
-        fsReviewsSnap.forEach(docSnap => {
-          const data = docSnap.data();
-          if (data && data.productId) {
-            cachedReviewsMap.set(docSnap.id, { id: docSnap.id, ...data });
           }
         });
       }
@@ -338,7 +305,7 @@ export async function fetchAllProductsMetricsFromRTDB(forceRefresh = false): Pro
 export function initProductMetricsRealtimeListener(): void {
   if (typeof window === 'undefined') return;
 
-  // 1. RTDB Reviews real-time listener
+  // Multiplexed RTDB + Firestore Reviews listener (avoid duplicate standalone collection listeners)
   if (!rtdbReviewsUnsubscribe) {
     try {
       rtdbReviewsUnsubscribe = rtdbSubscribe<Record<string, any>>('reviews', (data) => {
@@ -354,56 +321,6 @@ export function initProductMetricsRealtimeListener(): void {
       });
     } catch (e) {
       console.warn('[RTDB reviews subscribe exception]:', e);
-    }
-  }
-
-  // 2. Firestore Reviews onSnapshot
-  if (!reviewsUnsubscribe) {
-    try {
-      reviewsUnsubscribe = onSnapshot(
-        collection(db, 'reviews'),
-        (snap) => {
-          if (!snap || snap.empty) return;
-          snap.forEach(docSnap => {
-            const data = docSnap.data();
-            if (data && data.productId) {
-              cachedReviewsMap.set(docSnap.id, { id: docSnap.id, ...data });
-            }
-          });
-          const currentProducts = Array.from(inMemoryMetricsCache.keys()).map(id => ({ id }));
-          processMetricsData([], currentProducts, Array.from(cachedReviewsMap.values()));
-        },
-        (err) => {
-          console.warn('[Firestore reviews onSnapshot notice]:', err?.message);
-        }
-      );
-    } catch (e) {
-      console.warn('[Firestore reviews onSnapshot exception]:', e);
-    }
-  }
-
-  // 3. Firestore Orders onSnapshot
-  if (!ordersUnsubscribe) {
-    try {
-      ordersUnsubscribe = onSnapshot(
-        collection(db, 'orders'),
-        (snap) => {
-          if (!snap || snap.empty) return;
-          const ordersList: any[] = [];
-          snap.forEach(docSnap => {
-            ordersList.push({ id: docSnap.id, ...docSnap.data() });
-          });
-
-          // Re-compute with cached products and cached reviews (never empty!)
-          const currentProducts = Array.from(inMemoryMetricsCache.keys()).map(id => ({ id }));
-          processMetricsData(ordersList, currentProducts, Array.from(cachedReviewsMap.values()));
-        },
-        (err) => {
-          console.warn('[Firestore orders onSnapshot notice]:', err?.message);
-        }
-      );
-    } catch (e) {
-      console.warn('[initProductMetricsRealtimeListener exception]:', e);
     }
   }
 }

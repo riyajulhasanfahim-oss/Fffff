@@ -1,6 +1,10 @@
 import type { ProductReview } from '../services/reviewService';
 import type { ProductMetrics } from '../services/productMetricsService';
-import { RAW_NOVA_SMART_GEAR_PRODUCTS } from './novaSmartGearProducts';
+import {
+  FASHION_DEMO_PRODUCTS,
+  FASHION_SAMPLE_REVIEWS_MAP,
+  FASHION_SAMPLE_METRICS_MAP,
+} from './fashionProducts';
 
 export interface DemoStoreProduct {
   id: string;
@@ -72,24 +76,6 @@ const GADGET_PULSE_VENDOR = {
   shopName: TARGET_DEMO_PRODUCT_STORE_NAME,
   shopSlug: TARGET_DEMO_PRODUCT_STORE_SLUG,
   storeSlug: TARGET_DEMO_PRODUCT_STORE_SLUG,
-  verified: true,
-  isVerified: true,
-  isDemo: true,
-};
-
-export const NOVA_SMART_GEAR_STORE_ID = 'demo-store-010';
-export const NOVA_SMART_GEAR_STORE_SLUG = 'nova-smart-gear';
-export const NOVA_SMART_GEAR_STORE_NAME = 'Nova Smart Gear';
-
-const NOVA_SMART_GEAR_VENDOR = {
-  id: NOVA_SMART_GEAR_STORE_ID,
-  vendorId: NOVA_SMART_GEAR_STORE_ID,
-  storeId: NOVA_SMART_GEAR_STORE_ID,
-  name: NOVA_SMART_GEAR_STORE_NAME,
-  storeName: NOVA_SMART_GEAR_STORE_NAME,
-  shopName: NOVA_SMART_GEAR_STORE_NAME,
-  shopSlug: NOVA_SMART_GEAR_STORE_SLUG,
-  storeSlug: NOVA_SMART_GEAR_STORE_SLUG,
   verified: true,
   isVerified: true,
   isDemo: true,
@@ -1080,96 +1066,9 @@ export const GADGET_PULSE_DEMO_PRODUCTS: DemoStoreProduct[] = RAW_DEMO_PRODUCTS.
   };
 });
 
-export const NOVA_SMART_GEAR_DEMO_PRODUCTS: DemoStoreProduct[] = RAW_NOVA_SMART_GEAR_PRODUCTS.map((seed, index) => {
-  const createdAt = BASE_CREATED_AT + (100 + index) * 3600 * 1000;
-  const discount = Math.round(((seed.regularPrice - seed.price) / seed.regularPrice) * 100);
-  const reviewCount = seed.sampleReviews.length;
-  const avgRating =
-    reviewCount > 0
-      ? Number(
-          (
-            seed.sampleReviews.reduce((sum, item) => sum + item.rating, 0) / reviewCount
-          ).toFixed(1)
-        )
-      : 0;
-
-  const sampleReviewObjects: DemoSampleReview[] = seed.sampleReviews.map((rev, rIdx) => ({
-    id: `${seed.id}-sample-rev-${rIdx + 1}`,
-    reviewId: `${seed.id}-sample-rev-${rIdx + 1}`,
-    orderId: '',
-    productId: seed.id,
-    productName: seed.name,
-    productImage: seed.images[0],
-    userId: `demo-sample-user-${rIdx + 1}`,
-    reviewerName: rev.reviewerName,
-    customerName: rev.reviewerName,
-    rating: rev.rating,
-    text: rev.text,
-    images: [],
-    createdAt: BASE_CREATED_AT + (30 - rev.daysAgo) * 86400000,
-    helpfulCount: rev.helpfulCount,
-    verifiedPurchase: false,
-    isDelivered: false,
-    isDemoSample: true,
-    status: 'sample_demo',
-    vendorId: NOVA_SMART_GEAR_STORE_ID,
-    vendorName: NOVA_SMART_GEAR_STORE_NAME,
-  }));
-
-  DEMO_SAMPLE_REVIEWS_MAP.set(seed.id.toLowerCase(), sampleReviewObjects);
-  DEMO_SAMPLE_REVIEWS_MAP.set(seed.slug.toLowerCase(), sampleReviewObjects);
-
-  const metricsObj: ProductMetrics = {
-    soldCount: seed.soldCount,
-    rating: avgRating,
-    reviewsCount: reviewCount,
-  };
-  DEMO_SAMPLE_METRICS_MAP.set(seed.id.toLowerCase(), metricsObj);
-  DEMO_SAMPLE_METRICS_MAP.set(seed.slug.toLowerCase(), metricsObj);
-
-  return {
-    id: seed.id,
-    slug: seed.slug,
-    name: seed.name,
-    title: seed.name,
-    sku: seed.sku,
-    brand: seed.brand,
-    category: seed.category,
-    price: seed.price,
-    regularPrice: seed.regularPrice,
-    originalPrice: seed.regularPrice,
-    discount,
-    inStock: true,
-    stock: seed.stock,
-    stockCount: seed.stock,
-    weight: seed.weight,
-    image: seed.images[0],
-    featuredImage: seed.images[0],
-    images: seed.images,
-    shortDescription: seed.shortDescription,
-    description: seed.description,
-    tags: seed.tags,
-    specifications: seed.specifications,
-    vendorId: NOVA_SMART_GEAR_STORE_ID,
-    storeId: NOVA_SMART_GEAR_STORE_ID,
-    storeName: NOVA_SMART_GEAR_STORE_NAME,
-    vendor: NOVA_SMART_GEAR_VENDOR,
-    soldCount: seed.soldCount,
-    salesCount: seed.soldCount,
-    totalSold: seed.soldCount,
-    rating: avgRating,
-    reviews: reviewCount,
-    reviewsCount: reviewCount,
-    status: 'active',
-    isDemo: true,
-    isSampleData: true,
-    createdAt,
-  };
-});
-
 export const ALL_DEMO_PRODUCTS: DemoStoreProduct[] = [
   ...GADGET_PULSE_DEMO_PRODUCTS,
-  ...NOVA_SMART_GEAR_DEMO_PRODUCTS,
+  ...FASHION_DEMO_PRODUCTS,
 ];
 
 const DEMO_PRODUCT_BY_KEY = new Map<string, DemoStoreProduct>();
@@ -1184,36 +1083,43 @@ const TARGET_STORE_ALIASES = new Set<string>([
   TARGET_DEMO_PRODUCT_STORE_NAME.toLowerCase(),
 ]);
 
-const NOVA_STORE_ALIASES = new Set<string>([
-  NOVA_SMART_GEAR_STORE_ID.toLowerCase(),
-  NOVA_SMART_GEAR_STORE_SLUG.toLowerCase(),
-  NOVA_SMART_GEAR_STORE_NAME.toLowerCase(),
-]);
+function normalizeDemoLookupKey(key?: string | null): string {
+  if (!key) return '';
+  let normalized = String(key).trim();
+  try {
+    normalized = decodeURIComponent(normalized);
+  } catch (_) {}
+  return normalized.replace(/^\/+|\/+$/g, '').trim().toLowerCase();
+}
 
 export function getDemoProductsByStore(storeKey?: string | null): DemoStoreProduct[] {
-  if (!storeKey) return [];
-  const normalized = String(storeKey).trim().toLowerCase();
+  const normalized = normalizeDemoLookupKey(storeKey);
+  if (!normalized) return [];
   if (TARGET_STORE_ALIASES.has(normalized)) {
     return GADGET_PULSE_DEMO_PRODUCTS;
   }
-  if (NOVA_STORE_ALIASES.has(normalized)) {
-    return NOVA_SMART_GEAR_DEMO_PRODUCTS;
-  }
-  return [];
+  return FASHION_DEMO_PRODUCTS.filter((p) => {
+    const vId = String(p.vendorId || '').toLowerCase();
+    const sSlug = String(p.vendor?.shopSlug || '').toLowerCase();
+    const sName = String(p.storeName || '').toLowerCase();
+    return vId === normalized || sSlug === normalized || sName === normalized;
+  });
 }
 
 export function getDemoProductByIdOrSlug(identifier?: string | null): DemoStoreProduct | null {
-  if (!identifier) return null;
-  const clean = String(identifier).trim().toLowerCase();
+  const clean = normalizeDemoLookupKey(identifier);
+  if (!clean) return null;
   return DEMO_PRODUCT_BY_KEY.get(clean) || null;
 }
 
 export function getDemoSampleReviews(productId?: string | null): DemoSampleReview[] {
-  if (!productId) return [];
-  return DEMO_SAMPLE_REVIEWS_MAP.get(String(productId).trim().toLowerCase()) || [];
+  const clean = normalizeDemoLookupKey(productId);
+  if (!clean) return [];
+  return DEMO_SAMPLE_REVIEWS_MAP.get(clean) || FASHION_SAMPLE_REVIEWS_MAP.get(clean) || [];
 }
 
 export function getDemoSampleMetrics(productId?: string | null): ProductMetrics | null {
-  if (!productId) return null;
-  return DEMO_SAMPLE_METRICS_MAP.get(String(productId).trim().toLowerCase()) || null;
+  const clean = normalizeDemoLookupKey(productId);
+  if (!clean) return null;
+  return DEMO_SAMPLE_METRICS_MAP.get(clean) || FASHION_SAMPLE_METRICS_MAP.get(clean) || null;
 }

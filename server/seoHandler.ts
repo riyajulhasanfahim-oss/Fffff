@@ -40,6 +40,8 @@ interface RtdbProduct {
 }
 
 import config from '../firebase-applet-config.json';
+import { ALL_DEMO_PRODUCTS, getDemoProductByIdOrSlug } from '../src/data/demoProducts';
+import { generateProductSlug } from '../src/utils/seo';
 
 const RTDB_URL = (config as any).databaseURL || `https://${(config as any).projectId || 'gen-lang-client-0902472299'}-default-rtdb.firebaseio.com`;
 
@@ -74,7 +76,7 @@ export async function fetchProductsFromRtdb(forceRefresh = false): Promise<Recor
 }
 
 /**
- * Finds a product in RTDB by ID, slug, or productId.
+ * Finds a product in RTDB or built-in demo catalog by ID, slug, or productId.
  */
 export async function findProductByIdOrSlug(identifier: string): Promise<{ id: string; product: RtdbProduct } | null> {
   if (!identifier) return null;
@@ -97,6 +99,20 @@ export async function findProductByIdOrSlug(identifier: string): Promise<{ id: s
     if (itemSlug === decoded || itemId === decoded || itemProdId === decoded) {
       return { id: key, product: { ...item, id: key } };
     }
+  }
+
+  // 3. Fallback to built-in demo store products by ID, slug, or generated slug
+  const demoMatch =
+    getDemoProductByIdOrSlug(decoded) ||
+    ALL_DEMO_PRODUCTS.find((p) => {
+      const pId = String(p.id || '').trim().toLowerCase();
+      const pSlug = String(p.slug || '').trim().toLowerCase();
+      const genSlug = generateProductSlug(p.name, p.id).trim().toLowerCase();
+      return pId === decoded || pSlug === decoded || genSlug === decoded;
+    });
+
+  if (demoMatch) {
+    return { id: demoMatch.id, product: demoMatch as unknown as RtdbProduct };
   }
 
   return null;

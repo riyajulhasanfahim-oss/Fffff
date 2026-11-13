@@ -1,10 +1,172 @@
 import { rtdbList, rtdbSubscribe, rtdbGet } from '../lib/rtdb';
+import { auth } from '../lib/firebase';
 import { Product } from '../components/ui/ProductCard';
 import { enrichProductsWithRealMetrics, getCachedProductMetrics } from './productMetricsService';
 import { isStoreDeletedFromCache } from './storeCache';
 import { formatDirectImageUrl } from '../utils/imageUrl';
 import { generateProductSlug } from '../utils/seo';
 import { ALL_DEMO_PRODUCTS, getDemoProductByIdOrSlug } from '../data/demoProducts';
+
+/**
+ * Identifies whether a product is a built-in demo/sample item rather than a real vendor product.
+ */
+export function isDemoOrSampleProduct(product: any): boolean {
+  if (!product || typeof product !== 'object') return false;
+  if (product.isDemo === true || product.isSampleData === true || product.isDemoSample === true) {
+    return true;
+  }
+  const idStr = String(product.id || '').trim().toLowerCase();
+  const vendorIdStr = String(
+    product.vendorId || product.storeId || product.vendor?.id || product.vendor?.storeId || ''
+  ).trim().toLowerCase();
+  return idStr.startsWith('demo-prod-') || idStr.startsWith('fashion-prod-') || vendorIdStr.startsWith('demo-store-');
+}
+
+const FOOD_CATEGORY_SLUGS = new Set([
+  'grocery-food',
+  'grocery & food',
+  'grocery and food',
+  'grocery',
+  'food',
+  'foods',
+  'food-beverage',
+  'food & beverage',
+  'beverages',
+  'snacks',
+  'dairy',
+  'baby food',
+  'খাদ্য',
+  'মুদি',
+  'খাবার',
+]);
+
+const NON_FOOD_TOILETRY_OR_WEAR_REGEX = /\b(soap|shampoo|conditioner|dishwash|dishwashing|detergent|toothpaste|toothbrush|mouthwash|lotion|moisturizer|face\s*wash|body\s*wash|cleanser|serum|toner|sunscreen|perfume|deodorant|sanitary|napkin|diaper|hair\s*oil|coconut\s*oil|t-?shirt|shirt|polo|hoodie|sweater|jacket|pant|pants|trouser|jogger|jeans|panjabi|saree|kurti|kameez|hijab|abaya|shoe|shoes|sneaker|bag|backpack|charger|headphone|earbuds|watch|keyboard|mouse)\b/i;
+
+const STRICT_FOOD_KEYWORDS_REGEX = /\b(oats|oatmeal|rolled oats|baby oats|cerelac|infant formula|milk powder|condensed milk|biscuit|biscuits|cookie|cookies|chocolate bar|wafer|chips|noodles|pasta|ramen|vermicelli|semolina|basmati|miniket|chinigura|atta|maida|suji|lentil|mosur|cooking oil|soybean oil|mustard oil|olive oil|ghee|cheese|yogurt|curd|tea bag|green tea|black tea|tea leaves|instant coffee|coffee beans|mango juice|orange juice|fruit juice|soft drink|energy drink|dates|khejur|almonds|cashews|walnuts|raisins|jam|jelly|marmalade|ketchup|mayonnaise|pickle|achar|bread|cake|pastry|candy|toffee|mithai|cornflakes|muesli|granola|edible)\b/i;
+
+const BENGALI_FOOD_REGEX = /(চাল|ডাল|আটা|ময়দা|সুজি|সয়াবিন তেল|সরিষার তেল|ভোজ্যতেল|ঘি|মাখন|চিনি|মসলা|হলুদ গুঁড়া|মরিচ গুঁড়া|চা পাতা|কফি|বিস্কুট|চকলেট|চিপস|নুডলস|সেমাই|মধু|খেজুর|গুঁড়া দুধ|পানীয়|খাবার|খাদ্যসামগ্রী|আচার|মিষ্টি|কেক|রুটি|ওটস)/;
+
+/**
+ * Filters out edible / food / grocery products so only usable non-food items remain.
+ */
+export function isFoodOrEdibleProduct(raw: any): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const cat = String(raw.category || '').trim().toLowerCase();
+  const catSlug = String(raw.categorySlug || '').trim().toLowerCase();
+  if (FOOD_CATEGORY_SLUGS.has(cat) || FOOD_CATEGORY_SLUGS.has(catSlug)) {
+    return true;
+  }
+
+  const name = String(raw.name || raw.productName || raw.title || '').trim();
+  const lowerName = name.toLowerCase();
+
+  // Protect personal care, cleaning, apparel, and electronics from false positives
+  if (NON_FOOD_TOILETRY_OR_WEAR_REGEX.test(lowerName)) {
+    return false;
+  }
+
+  if (STRICT_FOOD_KEYWORDS_REGEX.test(lowerName) || BENGALI_FOOD_REGEX.test(name)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Deduplicates a product list strictly so the same product never appears twice or three times.
+ */
+export function deduplicateProducts<T>(products: T[]): T[] {
+  const result: T[] = [];
+  const seenIds = new Set<string>();
+  const seenSlugs = new Set<string>();
+  const seenOriginalIds = new Set<string>();
+  const seenNormalizedNames = new Set<string>();
+
+  for (const item of products) {
+    if (!item || typeof item !== 'object') continue;
+    const p = item as any;
+    const pId = String(p.id || '').trim().toLowerCase();
+    const pSlug = String(p.slug || '').trim().toLowerCase();
+    const origId = String(p.originalProductId || '').trim().toLowerCase();
+    const normName = String(p.name || p.productName || p.title || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\u0980-\u09ff]+/g, '')
+      .trim();
+
+    if (pId && seenIds.has(pId)) continue;
+    if (pSlug && seenSlugs.has(pSlug)) continue;
+    if (origId && (seenIds.has(origId) || seenOriginalIds.has(origId))) continue;
+    if (normName && seenNormalizedNames.has(normName)) continue;
+
+    if (pId) seenIds.add(pId);
+    if (pSlug) seenSlugs.add(pSlug);
+    if (origId) seenOriginalIds.add(origId);
+    if (normName) seenNormalizedNames.add(normName);
+
+    result.push(item);
+  }
+
+  return result;
+}
+
+/**
+ * Sorts a product list so real/genuine vendor products always appear first, before any demo/sample products.
+ */
+export function sortRealProductsFirst<T>(products: T[]): T[] {
+  return [...products].sort((a, b) => {
+    const isDemoA = isDemoOrSampleProduct(a);
+    const isDemoB = isDemoOrSampleProduct(b);
+    if (!isDemoA && isDemoB) return -1;
+    if (isDemoA && !isDemoB) return 1;
+    return 0;
+  });
+}
+
+const preloadedImageUrls = new Set<string>();
+
+/**
+ * Warms browser image cache in the background for product thumbnails so cards render
+ * immediately without blank image wait when scrolling down the page.
+ */
+export function preloadProductImages(products: Product[], maxCount = 80): void {
+  if (typeof window === 'undefined' || typeof Image === 'undefined' || !Array.isArray(products) || products.length === 0) {
+    return;
+  }
+
+  const queue: string[] = [];
+  for (let i = 0; i < products.length && queue.length < maxCount; i++) {
+    const p = products[i];
+    if (!p) continue;
+    const rawUrl = p.featuredImage || p.image || (Array.isArray(p.images) ? p.images[0] : '') || '';
+    const formatted = formatDirectImageUrl(rawUrl);
+    if (!formatted || preloadedImageUrls.has(formatted)) continue;
+    preloadedImageUrls.add(formatted);
+    queue.push(formatted);
+  }
+
+  if (queue.length === 0) return;
+
+  let cursor = 0;
+  const concurrency = 6;
+  const pump = () => {
+    if (cursor >= queue.length) return;
+    const src = queue[cursor++];
+    try {
+      const img = new Image();
+      img.referrerPolicy = 'no-referrer';
+      img.decoding = 'async';
+      img.onload = pump;
+      img.onerror = pump;
+      img.src = src;
+    } catch {
+      pump();
+    }
+  };
+
+  for (let w = 0; w < Math.min(concurrency, queue.length); w++) {
+    pump();
+  }
+}
 
 /**
  * Normalizes any raw product from RTDB into standard Product interface
@@ -154,7 +316,7 @@ let inflightMarketplaceFetch: Promise<Product[]> | null = null;
  */
 export function getCachedMarketplaceProducts(): Product[] {
   if (globalMarketplaceProducts && globalMarketplaceProducts.length > 0) {
-    return [...globalMarketplaceProducts];
+    return sortRealProductsFirst(deduplicateProducts(globalMarketplaceProducts.filter(p => !isFoodOrEdibleProduct(p))));
   }
   try {
     if (typeof window !== 'undefined') {
@@ -162,8 +324,8 @@ export function getCachedMarketplaceProducts(): Product[] {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          globalMarketplaceProducts = parsed;
-          return [...parsed];
+          globalMarketplaceProducts = sortRealProductsFirst(deduplicateProducts(parsed.filter(p => !isFoodOrEdibleProduct(p))));
+          return [...globalMarketplaceProducts];
         }
       }
     }
@@ -259,11 +421,22 @@ function parseRTDBProducts(rtdbData: Record<string, any>, vendors: Record<string
       ) {
         continue;
       }
+      // Filter out edible/food items so only usable products remain
+      if (isFoodOrEdibleProduct(val)) {
+        continue;
+      }
       const norm = normalizeProduct(val, key);
       const vId = norm.vendorId || val.storeId;
       if (vId) {
         const vStore = vendors[vId];
-        const isActivelyRegistered = vStore && (vStore.status === 'active' || vStore.status === 'approved' || vStore.isVerified);
+        const isActivelyRegistered = vStore && (
+          vStore.status === 'active' ||
+          vStore.status === 'approved' ||
+          vStore.status === 'verified' ||
+          vStore.verified === true ||
+          vStore.isVerified === true ||
+          vStore.verificationStatus === 'verified'
+        );
         if (!isActivelyRegistered && isStoreDeletedFromCache(vId)) {
           continue;
         }
@@ -276,9 +449,15 @@ function parseRTDBProducts(rtdbData: Record<string, any>, vendors: Record<string
 
   const list = Array.from(combinedMap.values());
   const enriched = enrichWithVendors(list, vendors);
-  // Sort newest first
-  enriched.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  return enriched;
+  // Real products strictly first, then newest first
+  enriched.sort((a, b) => {
+    const isDemoA = isDemoOrSampleProduct(a);
+    const isDemoB = isDemoOrSampleProduct(b);
+    if (!isDemoA && isDemoB) return -1;
+    if (isDemoA && !isDemoB) return 1;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+  return deduplicateProducts(enriched);
 }
 
 /**
@@ -310,7 +489,11 @@ function ensureGlobalRTDBListener(): void {
     try {
       const c = new AbortController();
       const t = setTimeout(() => c.abort(), 2000);
-      const res = await fetch('/api/products', { signal: c.signal });
+      const token = auth?.currentUser ? await auth.currentUser.getIdToken(false).catch(() => null) : null;
+      const res = await fetch('/api/products', {
+        signal: c.signal,
+        headers: token ? { 'Authorization': `Bearer ${token}` } : undefined
+      });
       clearTimeout(t);
       if (res.ok) serverProds = await res.json();
     } catch (_) {}
@@ -322,7 +505,19 @@ function ensureGlobalRTDBListener(): void {
       }
     } catch (_) {}
 
+    const nestedVendorProducts: Record<string, any> = {};
+    for (const [vId, vData] of Object.entries(globalVendorsMap)) {
+      if (vData && typeof vData === 'object' && vData.products && typeof vData.products === 'object') {
+        for (const [pId, pVal] of Object.entries(vData.products)) {
+          if (pVal && typeof pVal === 'object') {
+            nestedVendorProducts[pId] = { vendorId: vId, id: pId, ...(pVal as any) };
+          }
+        }
+      }
+    }
+
     const mergedProducts: Record<string, any> = {
+      ...nestedVendorProducts,
       ...(rtdbData && typeof rtdbData === 'object' ? rtdbData : {}),
       ...(serverProds && typeof serverProds === 'object' ? serverProds : {}),
       ...(localProds && typeof localProds === 'object' ? localProds : {})
@@ -337,6 +532,7 @@ function ensureGlobalRTDBListener(): void {
 
     globalMarketplaceProducts = parsed;
     lastFetchTime = Date.now();
+    preloadProductImages(parsed);
 
     // Persist to localStorage for 0ms next load
     try {
@@ -397,6 +593,9 @@ export function notifyMarketplaceProductChange(rawProduct: any, id?: string): vo
   ) {
     return;
   }
+  if (isFoodOrEdibleProduct(rawProduct)) {
+    return;
+  }
   const norm = normalizeProduct(rawProduct, id || rawProduct.id || rawProduct.productId);
   if (!norm || !norm.id) return;
 
@@ -407,9 +606,10 @@ export function notifyMarketplaceProductChange(rawProduct: any, id?: string): vo
   } else {
     current.unshift(norm);
   }
-  globalMarketplaceProducts = current;
+  const sortedCurrent = sortRealProductsFirst(deduplicateProducts(current));
+  globalMarketplaceProducts = sortedCurrent;
   subscribers.forEach(cb => {
-    try { cb([...current]); } catch (_) {}
+    try { cb([...sortedCurrent]); } catch (_) {}
   });
 }
 
@@ -433,9 +633,14 @@ export function notifyMarketplaceProductRemoved(productId: string): void {
 export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise<Product[]> {
   ensureGlobalRTDBListener();
 
-  // If in-memory products exist and forceRefresh is false, return instantly (0ms latency)
-  // The real-time WebSocket listener (ensureGlobalRTDBListener) will automatically keep this up to date
-  if (!forceRefresh && globalMarketplaceProducts !== null && globalMarketplaceProducts.length > 0) {
+  // If in-memory products exist and forceRefresh is false (within 60s), return instantly (0ms latency)
+  if (
+    !forceRefresh &&
+    globalMarketplaceProducts !== null &&
+    globalMarketplaceProducts.length > 0 &&
+    lastFetchTime > 0 &&
+    (Date.now() - lastFetchTime < 60000)
+  ) {
     if (typeof window !== 'undefined' && typeof (window as any).markAppReady === 'function') {
       (window as any).markAppReady();
     }
@@ -449,6 +654,7 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
 
   const fetchPromise = (async () => {
     try {
+      const token = auth?.currentUser ? await auth.currentUser.getIdToken(false).catch(() => null) : null;
       const [rawProducts, rawStores, rawVendors, serverProds] = await Promise.all([
         rtdbGet<Record<string, any>>('products', 4000),
         rtdbGet<Record<string, any>>('stores', 4000),
@@ -456,13 +662,16 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
         (async () => {
           try {
             // First check if early background preloader from index.html resolved
-            if (typeof window !== 'undefined' && (window as any).__RJ_PREFETCHED_PRODUCTS_PROMISE__) {
+            if (!token && typeof window !== 'undefined' && (window as any).__RJ_PREFETCHED_PRODUCTS_PROMISE__) {
               const pre = await (window as any).__RJ_PREFETCHED_PRODUCTS_PROMISE__;
-              if (pre && typeof pre === 'object') return pre;
+              if (pre && typeof pre === 'object' && Object.keys(pre).length > 0) return pre;
             }
             const c = new AbortController();
             const t = setTimeout(() => c.abort(), 2000);
-            const r = await fetch('/api/products', { signal: c.signal });
+            const r = await fetch('/api/products', {
+              signal: c.signal,
+              headers: token ? { 'Authorization': `Bearer ${token}` } : undefined
+            });
             clearTimeout(t);
             return r.ok ? await r.json() : null;
           } catch { return null; }
@@ -473,7 +682,19 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
       const safeVendors = rawVendors && typeof rawVendors === 'object' && !('error' in rawVendors) ? rawVendors : {};
       globalVendorsMap = { ...safeStores, ...safeVendors, ...globalVendorsMap };
 
+      const nestedVendorProducts: Record<string, any> = {};
+      for (const [vId, vData] of Object.entries(globalVendorsMap)) {
+        if (vData && typeof vData === 'object' && vData.products && typeof vData.products === 'object') {
+          for (const [pId, pVal] of Object.entries(vData.products)) {
+            if (pVal && typeof pVal === 'object') {
+              nestedVendorProducts[pId] = { vendorId: vId, id: pId, ...(pVal as any) };
+            }
+          }
+        }
+      }
+
       const mergedProducts: Record<string, any> = {
+        ...nestedVendorProducts,
         ...(rawProducts && typeof rawProducts === 'object' ? rawProducts : {}),
         ...(serverProds && typeof serverProds === 'object' ? serverProds : {})
       };
@@ -492,6 +713,7 @@ export async function fetchAllMarketplaceProducts(forceRefresh = false): Promise
       if (parsed.length > 0 || !globalMarketplaceProducts) {
         globalMarketplaceProducts = parsed;
         lastFetchTime = Date.now();
+        preloadProductImages(parsed);
         try {
           if (typeof window !== 'undefined' && parsed.length > 0) {
             localStorage.setItem(CACHED_PRODUCTS_KEY, JSON.stringify(parsed));

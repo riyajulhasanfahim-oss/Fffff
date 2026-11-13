@@ -380,7 +380,12 @@ DEMO_STORES.forEach((store) => {
 
 export function getDemoStoreByIdOrSlug(key?: string | null): DemoStoreDefinition | null {
   if (!key) return null;
-  return DEMO_STORE_BY_KEY.get(String(key).trim().toLowerCase()) || null;
+  let normalized = String(key).trim();
+  try {
+    normalized = decodeURIComponent(normalized);
+  } catch (_) {}
+  normalized = normalized.replace(/^\/+|\/+$/g, '').trim().toLowerCase();
+  return DEMO_STORE_BY_KEY.get(normalized) || null;
 }
 
 export const LEGACY_DEMO_STORE_IDS = new Set<string>([

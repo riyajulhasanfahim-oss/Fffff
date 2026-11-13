@@ -27,6 +27,8 @@ import {
   type ApprovedCourier
 } from './courierVerificationService';
 import { analyzeImageForProductMatch } from './visualSearchService';
+import { ALL_DEMO_PRODUCTS, getDemoProductByIdOrSlug } from '../src/data/demoProducts';
+import { generateProductSlug } from '../src/utils/seo';
 
 let appletFirebaseConfig: any = {};
 try {
@@ -405,65 +407,110 @@ app.use((req, res, next) => {
     return null;
   };
 
+  // Server-side TTL + stale fallback cache to prevent redundant Firestore reads and survive quota bursts
+  const rtdbNodeCache = new Map<string, { data: any; fetchedAt: number }>();
+  const RTDB_NODE_CACHE_TTL_MS = 60 * 1000;
+  let serverFirestoreQuotaBlockedUntil = 0;
+
+  const invalidateServerNodeCache = (nodePrefix?: string) => {
+    if (!nodePrefix) {
+      rtdbNodeCache.clear();
+      return;
+    }
+    for (const k of rtdbNodeCache.keys()) {
+      if (k === nodePrefix || k.startsWith(`${nodePrefix}/`)) {
+        rtdbNodeCache.delete(k);
+      }
+    }
+  };
+
   // Helper to fetch RTDB node directly with automatic Cloud Firestore fallback
-  const fetchRtdbNode = async (node: string) => {
+  const fetchRtdbNode = async (node: string, bearerToken?: string) => {
+    const clean = node.replace(/^\/+|\/+$/g, '').trim();
+    const cached = rtdbNodeCache.get(clean);
+    if (cached && (Date.now() - cached.fetchedAt) < RTDB_NODE_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
     try {
-      const res = await fetch(`${CURRENT_RTDB_BASE}/${node}.json`);
+      const authQuery = bearerToken ? `?auth=${encodeURIComponent(bearerToken)}` : '';
+      const res = await fetch(`${CURRENT_RTDB_BASE}/${clean}.json${authQuery}`);
       if (res.ok) {
         const json = await res.json();
         if (json && typeof json === 'object' && !('error' in json)) {
+          rtdbNodeCache.set(clean, { data: json, fetchedAt: Date.now() });
           return json;
         }
       }
     } catch (e) {
-      console.warn(`[RTDB node ${node} fetch warning]:`, e);
+      console.warn(`[RTDB node ${clean} fetch warning]:`, e);
     }
 
     // Fallback to Cloud Firestore REST API (ai-studio-fffff-7c4582d2-5500-4f2c-b20c-2484bf6b633c)
-    try {
-      const clean = node.replace(/^\/+|\/+$/g, '').trim();
-      const parts = clean.split('/').filter(Boolean);
-      const fsBase = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents`;
-      if (parts.length === 1) {
-        const rq = await fetch(`${fsBase}:runQuery`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            structuredQuery: {
-              from: [{ collectionId: parts[0] }],
-              limit: 200
-            }
-          })
-        });
-        if (rq.ok) {
-          const rows = await rq.json();
-          if (Array.isArray(rows)) {
-            const mapObj: Record<string, any> = {};
-            for (const row of rows) {
-              if (row?.document?.name && row?.document?.fields) {
-                const docId = row.document.name.split('/').pop()!;
-                const docData = fromFirestoreValue({ mapValue: { fields: row.document.fields } });
-                mapObj[docId] = { id: docId, ...docData };
+    if (Date.now() >= serverFirestoreQuotaBlockedUntil) {
+      try {
+        const parts = clean.split('/').filter(Boolean);
+        const fsBase = `https://firestore.googleapis.com/v1/projects/${CURRENT_FIREBASE_PROJECT_ID}/databases/${CURRENT_FIRESTORE_DATABASE_ID}/documents`;
+        const fsHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (bearerToken) {
+          fsHeaders['Authorization'] = `Bearer ${bearerToken}`;
+        }
+        if (parts.length === 1) {
+          const rq = await fetch(`${fsBase}:runQuery`, {
+            method: 'POST',
+            headers: fsHeaders,
+            body: JSON.stringify({
+              structuredQuery: {
+                from: [{ collectionId: parts[0] }],
+                limit: 1000
+              }
+            })
+          });
+          if (rq.status === 429) {
+            serverFirestoreQuotaBlockedUntil = Date.now() + 60 * 1000;
+            console.warn(`[Firestore 429 Quota Exceeded] Backing off server Firestore queries for 60s.`);
+          } else if (rq.ok) {
+            const rows = await rq.json();
+            if (Array.isArray(rows)) {
+              const mapObj: Record<string, any> = {};
+              for (const row of rows) {
+                if (row?.document?.name && row?.document?.fields) {
+                  const docId = row.document.name.split('/').pop()!;
+                  const docData = fromFirestoreValue({ mapValue: { fields: row.document.fields } });
+                  mapObj[docId] = { id: docId, ...docData };
+                }
+              }
+              if (Object.keys(mapObj).length > 0) {
+                rtdbNodeCache.set(clean, { data: mapObj, fetchedAt: Date.now() });
+                return mapObj;
               }
             }
-            if (Object.keys(mapObj).length > 0) {
-              return mapObj;
+          }
+        } else if (parts.length === 2) {
+          const docRes = await fetch(`${fsBase}/${parts[0]}/${parts[1]}`, {
+            headers: bearerToken ? { 'Authorization': `Bearer ${bearerToken}` } : undefined
+          });
+          if (docRes.status === 429) {
+            serverFirestoreQuotaBlockedUntil = Date.now() + 60 * 1000;
+          } else if (docRes.ok) {
+            const docJson = await docRes.json();
+            if (docJson?.fields) {
+              const out = {
+                id: parts[1],
+                ...fromFirestoreValue({ mapValue: { fields: docJson.fields } })
+              };
+              rtdbNodeCache.set(clean, { data: out, fetchedAt: Date.now() });
+              return out;
             }
           }
         }
-      } else if (parts.length === 2) {
-        const docRes = await fetch(`${fsBase}/${parts[0]}/${parts[1]}`);
-        if (docRes.ok) {
-          const docJson = await docRes.json();
-          if (docJson?.fields) {
-            return {
-              id: parts[1],
-              ...fromFirestoreValue({ mapValue: { fields: docJson.fields } })
-            };
-          }
-        }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
+
+    // Serve stale cached data if available rather than returning empty on transient error/quota limit
+    if (cached && cached.data) {
+      return cached.data;
+    }
 
     return null;
   };
@@ -603,9 +650,11 @@ app.use((req, res, next) => {
 
   // Public Marketplace Data API Endpoints (ensures 100% data delivery on custom domains)
   app.get('/api/products', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
     const [rtdbProducts, rtdbVendors] = await Promise.all([
-      fetchRtdbNode('products').catch(() => null),
-      fetchRtdbNode('vendors').catch(() => null)
+      fetchRtdbNode('products', token).catch(() => null),
+      fetchRtdbNode('vendors', token).catch(() => null)
     ]);
     const localProducts = readLocalProducts();
 
@@ -664,6 +713,19 @@ app.use((req, res, next) => {
           }
         }
       }
+      const demoMatch =
+        getDemoProductByIdOrSlug(id) ||
+        ALL_DEMO_PRODUCTS.find((p) => {
+          const clean = String(id || '').trim().toLowerCase();
+          return (
+            String(p.id || '').toLowerCase() === clean ||
+            String(p.slug || '').toLowerCase() === clean ||
+            generateProductSlug(p.name, p.id).toLowerCase() === clean
+          );
+        });
+      if (demoMatch) {
+        return res.json(demoMatch);
+      }
       return res.status(404).json({ error: 'Product not found' });
     } catch (e: any) {
       return res.status(500).json({ error: e.message });
@@ -681,6 +743,7 @@ app.use((req, res, next) => {
 
       // Always save locally first so client never loses data
       saveLocalProduct(key, payload);
+      invalidateServerNodeCache('products');
 
       // Attempt async write to RTDB
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
@@ -709,6 +772,7 @@ app.use((req, res, next) => {
 
       // Always save locally so client is never blocked by permission errors
       saveLocalProduct(id, payload);
+      invalidateServerNodeCache('products');
 
       // Attempt async write to RTDB
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
@@ -759,6 +823,7 @@ app.use((req, res, next) => {
       const { id } = req.params;
 
       removeLocalProduct(id);
+      invalidateServerNodeCache('products');
 
       const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
       fetch(`${CURRENT_RTDB_BASE}/products/${id}.json${authQuery}`, {
@@ -772,9 +837,11 @@ app.use((req, res, next) => {
   });
 
   app.get(['/api/stores', '/api/vendors'], async (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
     const [stores, vendors] = await Promise.all([
-      fetchRtdbNode('stores'),
-      fetchRtdbNode('vendors')
+      fetchRtdbNode('stores', token),
+      fetchRtdbNode('vendors', token)
     ]);
     const merged = { ...(stores || {}), ...(vendors || {}) };
     res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
@@ -782,7 +849,9 @@ app.use((req, res, next) => {
   });
 
   app.get('/api/vendor_profiles', async (req, res) => {
-    const data = await fetchRtdbNode('vendor_profiles');
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    const data = await fetchRtdbNode('vendor_profiles', token);
     res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30');
     res.json(data || {});
   });

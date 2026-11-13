@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { motion } from 'motion/react';
-import { ShoppingCart, Heart, Star, Check, Sparkles, Flame, Eye, Zap, Rocket, Clock } from 'lucide-react';
+import React, { useState, useEffect, memo } from 'react';
+import { ShoppingCart, Heart, Star, Check, Flame, Zap, Rocket, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useCart } from '../../contexts/CartContext';
 import { useWishlist } from '../../contexts/WishlistContext';
@@ -101,7 +100,7 @@ function CardFlashTimer({ endTime }: { endTime: number }) {
   );
 }
 
-export default function ProductCard({ product, showAddToCart = false, badgeText }: ProductCardProps) {
+const ProductCard = memo(function ProductCard({ product, showAddToCart = false, badgeText }: ProductCardProps) {
   const { addToCart } = useCart();
   const { addToWishlist, removeFromWishlist, isInWishlist } = useWishlist();
   const { userData } = useAuth();
@@ -232,17 +231,16 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
       : (reviewsCount > 0 ? Number(product.rating || 0) : 0));
 
   return (
-    <motion.div 
-      whileHover={{ y: -4 }}
-      transition={{ duration: 0.25, ease: 'easeOut' }}
-      className="group bg-white rounded-2xl border border-slate-200/90 hover:border-sky-400/80 shadow-2xs hover:shadow-xl transition-all duration-300 h-full flex flex-col overflow-hidden relative"
+    <div 
+      className="group bg-white rounded-2xl border border-slate-200/90 hover:border-sky-400/80 shadow-2xs hover:shadow-xl hover:-translate-y-1 transition-all duration-300 h-full flex flex-col overflow-hidden relative"
     >
       {/* 1. Image & Badges Container */}
       <div className="relative aspect-square overflow-hidden bg-slate-100 block">
         <Link to={getProductPath(product)} state={{ product }} className="block w-full h-full relative">
           <img 
             referrerPolicy="no-referrer" 
-            loading="lazy" 
+            loading="eager"
+            decoding="async"
             src={formatDirectImageUrl(product.featuredImage || product.image || (product.images && product.images.length > 0 ? product.images[0] : '')) || PLACEHOLDER_PRODUCT_IMAGE} 
             alt={`${product.name} - ${product.brand || 'RJ WORLD BD'}`}
             onError={(e) => handleProductImageError(e)}
@@ -464,6 +462,8 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
         </div>
 
       </div>
-    </motion.div>
+    </div>
   );
-}
+});
+
+export default ProductCard;

@@ -5,28 +5,66 @@ import Footer from '../components/layout/Footer';
 import CoverFlashBanner from '../components/home/CoverFlashBanner';
 import Categories from '../components/home/Categories';
 import BrandList from '../components/home/BrandList';
-import ProductSection from '../components/home/ProductSection';
 import AllProductsFeed from '../components/home/AllProductsFeed';
 import ProductCard, { Product } from '../components/ui/ProductCard';
-import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts } from '../services/productService';
-import { GADGET_PULSE_DEMO_PRODUCTS } from '../data/demoProducts';
+import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts, sortRealProductsFirst, preloadProductImages, isFoodOrEdibleProduct, deduplicateProducts } from '../services/productService';
+import { ALL_DEMO_PRODUCTS } from '../data/demoProducts';
 import { subscribeToActiveFlashSaleProducts } from '../services/flashSaleService';
 import { subscribeToActiveAds, recordAdImpression, recordAdClick, AdCampaignRecord } from '../services/adCampaignService';
 import { 
-  ArrowRight, Flame, Clock, ChevronDown, ChevronUp, Megaphone, Zap
+  ArrowRight, Flame, Clock, ChevronDown, ChevronUp, Megaphone
 } from 'lucide-react';
-import { motion } from 'motion/react';
+
+function FlashSaleCountdown({ earliestEndTime }: { earliestEndTime?: number }) {
+  const computeRemaining = (endTime?: number) => {
+    if (!endTime) return { hours: 6, minutes: 34, seconds: 20 };
+    const diff = Math.max(0, endTime - Date.now());
+    const totalSec = Math.floor(diff / 1000);
+    return {
+      hours: Math.floor(totalSec / 3600),
+      minutes: Math.floor((totalSec % 3600) / 60),
+      seconds: totalSec % 60
+    };
+  };
+
+  const [timeLeft, setTimeLeft] = useState(() => computeRemaining(earliestEndTime));
+
+  useEffect(() => {
+    if (earliestEndTime) {
+      setTimeLeft(computeRemaining(earliestEndTime));
+    }
+  }, [earliestEndTime]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev.seconds > 0) return { ...prev, seconds: prev.seconds - 1 };
+        if (prev.minutes > 0) return { ...prev, minutes: 59, seconds: 59 };
+        if (prev.hours > 0) return { hours: prev.hours - 1, minutes: 59, seconds: 59 };
+        return { hours: 8, minutes: 0, seconds: 0 };
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 text-amber-300 text-xs sm:text-sm font-bold shadow-xs border border-slate-900">
+      <Clock className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+      <span className="text-slate-300 text-[11px] hidden xs:inline">বাকি:</span>
+      <span className="font-mono font-black text-amber-300 tracking-wider">
+        {String(timeLeft.hours).padStart(2, '0')}:{String(timeLeft.minutes).padStart(2, '0')}:{String(timeLeft.seconds).padStart(2, '0')}
+      </span>
+    </div>
+  );
+}
 
 export default function Home() {
   const navigate = useNavigate();
   const [allProducts, setAllProducts] = useState<Product[]>(() => getCachedMarketplaceProducts());
-  const [loading, setLoading] = useState<boolean>(() => allProducts.length === 0);
+  const [, setLoading] = useState<boolean>(() => allProducts.length === 0);
   const [isFlashExpanded, setIsFlashExpanded] = useState<boolean>(false);
   const [activeFlashProducts, setActiveFlashProducts] = useState<Product[]>([]);
   const [activeAdBanners, setActiveAdBanners] = useState<AdCampaignRecord[]>([]);
-
-  // Flash Sale Countdown Timer
-  const [timeLeft, setTimeLeft] = useState({ hours: 6, minutes: 34, seconds: 20 });
 
   useEffect(() => {
     document.title = "RJ WORLD BD - E-commerce & Reseller Marketplace";
@@ -47,22 +85,14 @@ export default function Home() {
   useEffect(() => {
     const unsub = subscribeToActiveFlashSaleProducts((list) => {
       setActiveFlashProducts(list);
-      if (list.length > 0) {
-        const endTimes = list.map(p => p.flashSale?.endTime).filter(Boolean) as number[];
-        if (endTimes.length > 0) {
-          const earliest = Math.min(...endTimes);
-          const diff = Math.max(0, earliest - Date.now());
-          const totalSec = Math.floor(diff / 1000);
-          setTimeLeft({
-            hours: Math.floor(totalSec / 3600),
-            minutes: Math.floor((totalSec % 3600) / 60),
-            seconds: totalSec % 60
-          });
-        }
-      }
     });
     return () => unsub();
   }, []);
+
+  const earliestFlashEndTime = useMemo(() => {
+    const endTimes = activeFlashProducts.map(p => p.flashSale?.endTime).filter(Boolean) as number[];
+    return endTimes.length > 0 ? Math.min(...endTimes) : undefined;
+  }, [activeFlashProducts]);
 
   // Subscribe to active Ads (Banners, Sliders, Spotlights)
   useEffect(() => {
@@ -74,18 +104,6 @@ export default function Home() {
       });
     });
     return () => unsub();
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev.seconds > 0) return { ...prev, seconds: prev.seconds - 1 };
-        if (prev.minutes > 0) return { ...prev, minutes: 59, seconds: 59 };
-        if (prev.hours > 0) return { hours: prev.hours - 1, minutes: 59, seconds: 59 };
-        return { hours: 8, minutes: 0, seconds: 0 };
-      });
-    }, 1000);
-    return () => clearInterval(timer);
   }, []);
 
   // Fetch all products across all vendors and set up real-time live sync
@@ -123,66 +141,42 @@ export default function Home() {
     };
   }, []);
 
-  // Include the 10 Gadget Pulse (demo-store-004) demo products on the homepage without duplicates
+  // Include real products + demo Gadget Pulse & Fashion products strictly once (no duplicates, no food items)
   const homepageProducts = useMemo(() => {
-    const merged: Product[] = [];
-    const seenIds = new Set<string>();
-    const seenSlugs = new Set<string>();
+    const combined: Product[] = [];
 
     for (const p of allProducts) {
-      if (!p || !p.id) continue;
-      const pId = String(p.id).trim().toLowerCase();
-      const pSlug = String(p.slug || '').trim().toLowerCase();
-      if (seenIds.has(pId)) continue;
-      seenIds.add(pId);
-      if (pSlug) seenSlugs.add(pSlug);
-      merged.push(p);
+      if (!p || !p.id || isFoodOrEdibleProduct(p)) continue;
+      combined.push(p);
     }
 
-    for (const demoProd of GADGET_PULSE_DEMO_PRODUCTS) {
-      const dId = String(demoProd.id).trim().toLowerCase();
-      const dSlug = String(demoProd.slug || '').trim().toLowerCase();
-      if (seenIds.has(dId) || (dSlug && seenSlugs.has(dSlug))) continue;
-      seenIds.add(dId);
-      if (dSlug) seenSlugs.add(dSlug);
-      merged.push(demoProd as unknown as Product);
+    for (const demoProd of ALL_DEMO_PRODUCTS) {
+      if (!demoProd || !demoProd.id || isFoodOrEdibleProduct(demoProd)) continue;
+      combined.push(demoProd as unknown as Product);
     }
 
-    return merged;
+    const deduped = deduplicateProducts(combined);
+    return sortRealProductsFirst(deduped);
   }, [allProducts]);
 
-  // Derived: Best Selling / Top Products from all vendors (Boosted products rank on top!)
-  const bestSelling = useMemo(() => {
-    const sorted = [...homepageProducts].sort((a, b) => {
-      const isBoostedA = (a as any).boosted && (!(a as any).boostExpiresAt || (a as any).boostExpiresAt > Date.now());
-      const isBoostedB = (b as any).boosted && (!(b as any).boostExpiresAt || (b as any).boostExpiresAt > Date.now());
-      if (isBoostedA && !isBoostedB) return -1;
-      if (!isBoostedA && isBoostedB) return 1;
-
-      const aScore = (a.soldCount || 0) * 2 + (a.rating || 0) + (a.reviewsCount || 0);
-      const bScore = (b.soldCount || 0) * 2 + (b.rating || 0) + (b.reviewsCount || 0);
-      if (aScore === bScore) {
-        return (b.createdAt || 0) - (a.createdAt || 0);
-      }
-      return bScore - aScore;
-    });
-    return sorted;
+  // Preload homepage product thumbnails immediately so scrolling shows pre-cached images
+  useEffect(() => {
+    if (homepageProducts.length > 0) {
+      preloadProductImages(homepageProducts);
+    }
   }, [homepageProducts]);
 
-  // Derived: Strictly Active Flash Sale Products (Approved, within start/end time, stock > 0)
+  // Derived: Strictly Active Flash Sale Products (Approved, within start/end time, stock > 0, no food items)
   const flashSaleProducts = useMemo(() => {
-    return activeFlashProducts;
+    return sortRealProductsFirst(deduplicateProducts(activeFlashProducts.filter(p => !isFoodOrEdibleProduct(p))));
   }, [activeFlashProducts]);
 
-  // Derived: New Arrivals from all vendors (sorted by newest created or updated)
-  const newArrivals = useMemo(() => {
-    const sorted = [...homepageProducts].sort((a, b) => {
-      const aTime = a.createdAt || 0;
-      const bTime = b.createdAt || 0;
-      return bTime - aTime;
-    });
-    return sorted;
-  }, [homepageProducts]);
+  // Exclude active flash sale IDs from the single main list so no product appears twice on the page
+  const singleFeedProducts = useMemo(() => {
+    if (flashSaleProducts.length === 0) return homepageProducts;
+    const flashIds = new Set(flashSaleProducts.map(p => String(p.id).trim().toLowerCase()));
+    return homepageProducts.filter(p => !flashIds.has(String(p.id).trim().toLowerCase()));
+  }, [homepageProducts, flashSaleProducts]);
 
   const displayedFlashSale = isFlashExpanded 
     ? flashSaleProducts 
@@ -202,16 +196,6 @@ export default function Home() {
 
         {/* 3. Popular Categories */}
         <Categories />
-
-        {/* 4. TOP PRODUCTS (টপ প্রোডাক্ট) */}
-        <div id="top-products" className="scroll-mt-20">
-          <ProductSection 
-            title="টপ প্রোডাক্ট" 
-            products={bestSelling}
-            bgWhite={true}
-            icon="sparkles"
-          />
-        </div>
 
         {/* 5. FLASH SALE (হলুদ ও আকর্ষণীয় ফ্ল্যাশ সেল) */}
         {flashSaleProducts.length > 0 && (
@@ -238,13 +222,7 @@ export default function Home() {
                     </div>
 
                     {/* Live Countdown Timer in High-Contrast Black & Yellow */}
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 text-amber-300 text-xs sm:text-sm font-bold shadow-xs border border-slate-900">
-                      <Clock className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
-                      <span className="text-slate-300 text-[11px] hidden xs:inline">বাকি:</span>
-                      <span className="font-mono font-black text-amber-300 tracking-wider">
-                        {String(timeLeft.hours).padStart(2, '0')}:{String(timeLeft.minutes).padStart(2, '0')}:{String(timeLeft.seconds).padStart(2, '0')}
-                      </span>
-                    </div>
+                    <FlashSaleCountdown earliestEndTime={earliestFlashEndTime} />
 
                     <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-slate-950 text-amber-300 shadow-2xs">
                       ৫০% পর্যন্ত ছাড়!
@@ -264,15 +242,10 @@ export default function Home() {
 
               {/* Product Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4 lg:gap-5">
-                {displayedFlashSale.map((product, index) => (
-                  <motion.div
-                    key={product.id}
-                    initial={{ opacity: 0, scale: 0.96 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.25) }}
-                  >
+                {displayedFlashSale.map((product) => (
+                  <div key={product.id}>
                     <ProductCard product={product} badgeText="ফ্ল্যাশ ডিল" />
-                  </motion.div>
+                  </div>
                 ))}
               </div>
 
@@ -338,19 +311,10 @@ export default function Home() {
           </div>
         )}
 
-        {/* 6. NEW ARRIVALS */}
-        <ProductSection 
-          title="🆕 নতুন আগমন (New Arrivals)" 
-          subtitle="নতুন কালেকশন ও লেটেস্ট মডেল সবার আগে আপনার জন্য"
-          products={newArrivals}
-          viewAllLink="/new-arrivals"
-          bgWhite={true}
-          icon="clock"
-          badge="নতুন"
-        />
-
-        {/* 7. ALL VENDOR PRODUCTS FEED (সকল ভেন্ডরের সকল পণ্য ও স্ক্রলিং মার্কেটপ্লেস ফিড) */}
-        <AllProductsFeed products={homepageProducts} />
+        {/* 5. ALL VENDOR PRODUCTS SINGLE UNIFIED LIST (প্রতিটি প্রোডাক্ট একবারই দেখানো হয়েছে) */}
+        <div id="top-products" className="scroll-mt-20">
+          <AllProductsFeed products={singleFeedProducts} />
+        </div>
 
       </main>
 

@@ -1,6 +1,4 @@
 import { rtdbGet } from '../lib/rtdb';
-import { db } from '../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
 
 export const PRIMARY_DOMAIN = 'rjworldbd.com';
 
@@ -341,13 +339,6 @@ export async function isVendorSlugAvailable(
         ...(vendorsSnap || {}),
         ...(profilesSnap || {})
       };
-
-      try {
-        const fsSnap = await getDocs(collection(db, 'vendors'));
-        fsSnap.forEach(d => {
-          allProfiles[d.id] = { ...(allProfiles[d.id] || {}), ...d.data(), id: d.id, vendorId: d.id };
-        });
-      } catch (_) {}
     } catch {
       allProfiles = {};
     }
@@ -401,14 +392,6 @@ export async function generateUniqueVendorSlug(
         ...(vendorsSnap || {}),
         ...(profilesSnap || {})
       };
-
-      // Also query Firestore vendors
-      try {
-        const fsSnap = await getDocs(collection(db, 'vendors'));
-        fsSnap.forEach(d => {
-          allProfiles[d.id] = { ...(allProfiles[d.id] || {}), ...d.data(), id: d.id, vendorId: d.id };
-        });
-      } catch (_) {}
     } catch {
       allProfiles = {};
     }

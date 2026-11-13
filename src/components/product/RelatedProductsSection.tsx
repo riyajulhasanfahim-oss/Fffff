@@ -5,7 +5,7 @@ import { Product } from '../ui/ProductCard';
 import { useCart } from '../../contexts/CartContext';
 import toast from 'react-hot-toast';
 import { getProductPath } from '../../utils/seo';
-import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts } from '../../services/productService';
+import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts, isDemoOrSampleProduct } from '../../services/productService';
 import { formatDirectImageUrl, handleProductImageError, PLACEHOLDER_PRODUCT_IMAGE } from '../../utils/imageUrl';
 import { getDemoProductsByStore } from '../../data/demoProducts';
 
@@ -134,7 +134,13 @@ export default function RelatedProductsSection({
         return { prod, score };
       });
 
-      scoredProducts.sort((a, b) => b.score - a.score);
+      scoredProducts.sort((a, b) => {
+        const isDemoA = isDemoOrSampleProduct(a.prod);
+        const isDemoB = isDemoOrSampleProduct(b.prod);
+        if (!isDemoA && isDemoB) return -1;
+        if (isDemoA && !isDemoB) return 1;
+        return b.score - a.score;
+      });
       const finalResults = scoredProducts.map(s => s.prod).slice(0, 18);
 
       setRelatedProducts(finalResults);

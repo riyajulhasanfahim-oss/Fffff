@@ -119,7 +119,13 @@ async function startServer() {
         }
       }
 
-      if (!match || (match.product.status && match.product.status !== 'Published')) {
+      const matchStatus = String(match?.product?.status || '').trim().toLowerCase();
+      const isPublishedOrActiveDemo =
+        !matchStatus ||
+        matchStatus === 'published' ||
+        (Boolean((match?.product as any)?.isDemo) && matchStatus === 'active');
+
+      if (!match || !isPublishedOrActiveDemo) {
         // Return HTTP 404 with noindex meta tags for unpublished/deleted products
         const notFoundHtml = inject404Seo(template);
         res.setHeader('Content-Type', 'text/html; charset=UTF-8');

@@ -1,9 +1,7 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useState, useMemo, useEffect, useRef, memo } from 'react';
 import { 
   Sparkles, 
   Store, 
-  SlidersHorizontal, 
   ChevronDown, 
   ArrowUpDown, 
   Check, 
@@ -15,20 +13,23 @@ import {
   TrendingDown
 } from 'lucide-react';
 import ProductCard, { Product } from '../ui/ProductCard';
+import { isDemoOrSampleProduct } from '../../services/productService';
 
 interface AllProductsFeedProps {
   products: Product[];
 }
 
-export default function AllProductsFeed({ products }: AllProductsFeedProps) {
+const INITIAL_VISIBLE_COUNT = 60;
+const LOAD_MORE_STEP = 60;
+
+const AllProductsFeed = memo(function AllProductsFeed({ products }: AllProductsFeedProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedVendor, setSelectedVendor] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<'all' | 'popular' | 'deals' | 'new'>('all');
   const [sortBy, setSortBy] = useState<'default' | 'price-asc' | 'price-desc' | 'rating' | 'discount'>('default');
   
-  // Infinite scroll / pagination
-  const [visibleCount, setVisibleCount] = useState<number>(16);
-  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  // Pre-rendered batching so products are already visible before scrolling down
+  const [visibleCount, setVisibleCount] = useState<number>(INITIAL_VISIBLE_COUNT);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   // Extract unique categories from actual products
@@ -104,6 +105,15 @@ export default function AllProductsFeed({ products }: AllProductsFeedProps) {
       list.sort((a, b) => (b.rating || 0) - (a.rating || 0));
     } else if (sortBy === 'discount') {
       list.sort((a, b) => (b.discount || 0) - (a.discount || 0));
+    } else {
+      // Keep real vendor products strictly ahead of demo products in default/tab views
+      list.sort((a, b) => {
+        const isDemoA = isDemoOrSampleProduct(a);
+        const isDemoB = isDemoOrSampleProduct(b);
+        if (!isDemoA && isDemoB) return -1;
+        if (isDemoA && !isDemoB) return 1;
+        return 0;
+      });
     }
 
     return list;
@@ -111,26 +121,22 @@ export default function AllProductsFeed({ products }: AllProductsFeedProps) {
 
   // Reset visible count when filters change
   useEffect(() => {
-    setVisibleCount(16);
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
   }, [selectedCategory, selectedVendor, activeTab, sortBy]);
 
-  // Handle Load More
+  // Synchronous batch reveal without artificial setTimeout delay
   const handleLoadMore = () => {
-    setIsLoadingMore(true);
-    setTimeout(() => {
-      setVisibleCount(prev => Math.min(prev + 16, filteredProducts.length));
-      setIsLoadingMore(false);
-    }, 200);
+    setVisibleCount(prev => Math.min(prev + LOAD_MORE_STEP, filteredProducts.length));
   };
 
-  // Auto-scroll infinite load via IntersectionObserver
+  // Pre-render next batch well ahead (1200px) of user scroll position
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       const first = entries[0];
-      if (first.isIntersecting && visibleCount < filteredProducts.length && !isLoadingMore) {
-        handleLoadMore();
+      if (first.isIntersecting && visibleCount < filteredProducts.length) {
+        setVisibleCount(prev => Math.min(prev + LOAD_MORE_STEP, filteredProducts.length));
       }
-    }, { threshold: 0.1, rootMargin: '200px' });
+    }, { threshold: 0, rootMargin: '1200px' });
 
     const currentRef = loadMoreRef.current;
     if (currentRef) {
@@ -140,7 +146,7 @@ export default function AllProductsFeed({ products }: AllProductsFeedProps) {
     return () => {
       if (currentRef) observer.unobserve(currentRef);
     };
-  }, [visibleCount, filteredProducts.length, isLoadingMore]);
+  }, [visibleCount, filteredProducts.length]);
 
   const displayedProducts = useMemo(() => {
     return filteredProducts.slice(0, visibleCount);
@@ -352,15 +358,10 @@ export default function AllProductsFeed({ products }: AllProductsFeedProps) {
         {/* Product Grid */}
         {displayedProducts.length > 0 ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 gap-2.5 sm:gap-4 lg:gap-5">
-            {displayedProducts.map((product, index) => (
-              <motion.div
-                key={product.id}
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.25, delay: Math.min(index * 0.02, 0.2) }}
-              >
+            {displayedProducts.map((product) => (
+              <div key={product.id}>
                 <ProductCard product={product} />
-              </motion.div>
+              </div>
             ))}
           </div>
         ) : (
@@ -389,20 +390,10 @@ export default function AllProductsFeed({ products }: AllProductsFeedProps) {
             <button
               type="button"
               onClick={handleLoadMore}
-              disabled={isLoadingMore}
-              className="inline-flex items-center justify-center gap-2 px-6 sm:px-8 py-3 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs sm:text-sm rounded-full border border-slate-300 shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-60"
+              className="inline-flex items-center justify-center gap-2 px-6 sm:px-8 py-3 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs sm:text-sm rounded-full border border-slate-300 shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer"
             >
-              {isLoadingMore ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-sky-600 border-t-transparent rounded-full animate-spin" />
-                  <span>পণ্য লোড হচ্ছে...</span>
-                </>
-              ) : (
-                <>
-                  <span>আরও পণ্য লোড করুন</span>
-                  <ChevronDown className="w-4 h-4 text-slate-500" />
-                </>
-              )}
+              <span>আরও পণ্য দেখুন</span>
+              <ChevronDown className="w-4 h-4 text-slate-500" />
             </button>
           ) : (
             displayedProducts.length > 0 && (
@@ -417,4 +408,6 @@ export default function AllProductsFeed({ products }: AllProductsFeedProps) {
       </div>
     </section>
   );
-}
+});
+
+export default AllProductsFeed;

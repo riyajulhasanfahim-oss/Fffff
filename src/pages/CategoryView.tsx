@@ -39,7 +39,8 @@ import { useWishlist } from '../contexts/WishlistContext';
 import { useAuth } from '../context/AuthContext';
 import { INITIAL_CATEGORIES } from '../lib/firebaseSeed';
 import { MAIN_CATEGORIES, isCategoryMatching } from '../constants/categories';
-import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts } from '../services/productService';
+import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts, isDemoOrSampleProduct, sortRealProductsFirst, isFoodOrEdibleProduct, deduplicateProducts } from '../services/productService';
+import { ALL_DEMO_PRODUCTS } from '../data/demoProducts';
 import { matchProductsDarazStyle } from '../utils/searchEngine';
 import toast from 'react-hot-toast';
 
@@ -198,10 +199,16 @@ export default function CategoryView() {
 
     const handleProductsList = (all: Product[]) => {
       if (!isMounted) return;
-      setAllMarketplaceProducts(all);
-      const filtered = filterProductsForCategory(all, categoryId, initialQuery);
+      const merged = sortRealProductsFirst(
+        deduplicateProducts([
+          ...(all || []).filter(p => !isFoodOrEdibleProduct(p)),
+          ...(ALL_DEMO_PRODUCTS as unknown as Product[]).filter(p => !isFoodOrEdibleProduct(p)),
+        ])
+      );
+      setAllMarketplaceProducts(merged);
+      const filtered = filterProductsForCategory(merged, categoryId, initialQuery);
       setProducts(filtered);
-      setRecommendedProducts(all.slice(0, 8));
+      setRecommendedProducts(sortRealProductsFirst(merged).slice(0, 8));
       setLoading(false);
     };
 
@@ -339,11 +346,23 @@ export default function CategoryView() {
         result.sort((a, b) => (b.discount || 0) - (a.discount || 0));
         break;
       case 'newest':
-        result.sort((a, b) => (a.isNew === b.isNew ? 0 : a.isNew ? -1 : 1));
+        result.sort((a, b) => {
+          const isDemoA = isDemoOrSampleProduct(a);
+          const isDemoB = isDemoOrSampleProduct(b);
+          if (!isDemoA && isDemoB) return -1;
+          if (isDemoA && !isDemoB) return 1;
+          if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
+          return (b.createdAt || 0) - (a.createdAt || 0);
+        });
         break;
       default:
-        // recommended: Boosted products rank on top, followed by default order
+        // recommended: Real products first, then Boosted products, followed by default order
         result.sort((a, b) => {
+          const isDemoA = isDemoOrSampleProduct(a);
+          const isDemoB = isDemoOrSampleProduct(b);
+          if (!isDemoA && isDemoB) return -1;
+          if (isDemoA && !isDemoB) return 1;
+
           const isBoostedA = (a as any).boosted && (!(a as any).boostExpiresAt || (a as any).boostExpiresAt > Date.now());
           const isBoostedB = (b as any).boosted && (!(b as any).boostExpiresAt || (b as any).boostExpiresAt > Date.now());
           if (isBoostedA && !isBoostedB) return -1;

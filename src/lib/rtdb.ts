@@ -163,10 +163,23 @@ async function fetchFilteredCollectionDocs(colName: string): Promise<Record<stri
   return null;
 }
 
+let firestoreQuotaBlockedUntil = 0;
+
+function markIfFirestoreQuotaError(err: any): void {
+  const code = String(err?.code || '').toLowerCase();
+  const msg = String(err?.message || err || '').toLowerCase();
+  if (code.includes('resource-exhausted') || msg.includes('quota') || msg.includes('429') || msg.includes('resource_exhausted')) {
+    firestoreQuotaBlockedUntil = Date.now() + 60 * 1000;
+  }
+}
+
 /**
  * Helper to read a 1-segment collection or 2/3-segment document path from Cloud Firestore
  */
 async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000): Promise<FetchResult<T>> {
+  if (Date.now() < firestoreQuotaBlockedUntil) {
+    return { ok: false, data: null };
+  }
   try {
     const parts = cleanPath.split('/').filter(Boolean);
     const timeoutPromise = new Promise<FetchResult<T>>((resolve) =>
@@ -185,13 +198,13 @@ async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000
             chatSnap.forEach((docSnap) => {
               mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
             });
-          } catch (_) {}
+          } catch (err) { markIfFirestoreQuotaError(err); }
           try {
             const topSnap = await getDocs(collection(db, colName));
             topSnap.forEach((docSnap) => {
               mapObj[docSnap.id] = { id: docSnap.id, ...docSnap.data() };
             });
-          } catch (_) {}
+          } catch (err) { markIfFirestoreQuotaError(err); }
           return { ok: true, data: (Object.keys(mapObj).length > 0 ? mapObj : {}) as unknown as T };
         }
 
@@ -227,7 +240,8 @@ async function fetchFirestoreNode<T>(cleanPath: string, timeoutMs: number = 4000
             }
           }
           return { ok: true, data: null };
-        } catch (_) {
+        } catch (fsErr) {
+          markIfFirestoreQuotaError(fsErr);
           const filteredMap = await fetchFilteredCollectionDocs(colName);
           if (filteredMap !== null) {
             return { ok: true, data: (Object.keys(filteredMap).length > 0 ? filteredMap : null) as unknown as T };
@@ -534,7 +548,7 @@ interface CacheEntry<T> {
   timestamp: number;
 }
 const memoryCache = new Map<string, CacheEntry<any>>();
-const CACHE_TTL_MS = 30000; // 30s high-speed memory cache (invalidated on any mutation)
+const CACHE_TTL_MS = 120000; // 2-minute high-speed memory cache (invalidated on any mutation)
 
 /**
  * Invalidates cache for a specific path or prefix
@@ -561,9 +575,9 @@ interface FetchResult<T> {
  * Executes a fast REST fetch to Firebase RTDB with timeout protection
  */
 async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<FetchResult<T>> {
+  const token = await getAuthToken();
+  const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
   try {
-    const token = await getAuthToken();
-    const authQuery = token ? `?auth=${encodeURIComponent(token)}` : '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(`${RTDB_BASE_URL}/${cleanPath}.json${authQuery}`, {
@@ -586,7 +600,7 @@ async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<F
   // If requesting vendors node and it failed, fallback to stores node (stores node in RTDB holds vendor stores)
   if (cleanPath === 'vendors') {
     try {
-      const storesRes = await fetch(`${RTDB_BASE_URL}/stores.json`, {
+      const storesRes = await fetch(`${RTDB_BASE_URL}/stores.json${authQuery}`, {
         headers: { 'Accept': 'application/json' }
       });
       if (storesRes.ok) {
@@ -605,7 +619,10 @@ async function fetchRtdbRest<T>(cleanPath: string, timeoutMs: number): Promise<F
       const proxyTimer = setTimeout(() => proxyController.abort(), Math.min(timeoutMs, 2500));
       const fallbackRes = await fetch(`/api/${cleanPath}`, {
         signal: proxyController.signal,
-        headers: { 'Accept': 'application/json' }
+        headers: {
+          'Accept': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
       });
       clearTimeout(proxyTimer);
       if (fallbackRes.ok) {

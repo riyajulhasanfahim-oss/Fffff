@@ -255,7 +255,14 @@ export function mergeStoreObjects(existing: any, incoming: any): CachedStore {
  */
 export function getKnownSeedStore(id: string): CachedStore | null {
   if (!id) return null;
-  const lower = String(id).trim().toLowerCase();
+  const demoMatch = getDemoStoreByIdOrSlug(id);
+  if (demoMatch) return demoMatch;
+
+  let decoded = String(id).trim();
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch (_) {}
+  const lower = decoded.replace(/^\/+|\/+$/g, '').trim().toLowerCase();
   const found = SEED_OFFICIAL_STORES.find(s =>
     s.id === id ||
     s.vendorId === id ||
@@ -1144,7 +1151,8 @@ export function saveOfficialStoresToCache(stores: CachedStore[]): void {
 
   if (typeof window !== 'undefined') {
     try {
-      localStorage.setItem('rj_official_stores_list', JSON.stringify(sorted));
+      const nonDemoStores = sorted.filter(s => s && !s.isDemo && !DEMO_STORE_IDS.has(s.id));
+      localStorage.setItem('rj_official_stores_list', JSON.stringify(nonDemoStores));
     } catch (_) {}
   }
 }
@@ -1180,8 +1188,8 @@ let inflightOfficialStoresFetch: Promise<CachedStore[]> | null = null;
  */
 export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise<CachedStore[]> {
   const now = Date.now();
-  // Return cached stores if fetched recently (within 15s) to avoid unnecessary re-queries
-  if (!forceRefresh && inMemoryStoreCache.size > 0 && (now - lastFetchOfficialStoresTime < 15000)) {
+  // Return cached stores if fetched recently (within 60s) to avoid unnecessary re-queries
+  if (!forceRefresh && inMemoryStoreCache.size > 0 && lastFetchOfficialStoresTime > 0 && (now - lastFetchOfficialStoresTime < 60000)) {
     return getOfficialStoresFromCache();
   }
 
@@ -1192,57 +1200,17 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
 
   inflightOfficialStoresFetch = (async () => {
     try {
-      const [storesSnap, vendorsSnap, profilesSnap, deletedSnap, fsVendorsSnap, fsStoresSnap] = await Promise.all([
+      const [storesSnap, vendorsSnap, profilesSnap, deletedSnap] = await Promise.all([
         rtdbGet<Record<string, any>>('stores', 4000).catch(() => null),
         rtdbGet<Record<string, any>>('vendors', 4000).catch(() => null),
         rtdbGet<Record<string, any>>('vendor_profiles', 3000).catch(() => null),
-        rtdbGet<Record<string, any>>('deleted_vendors', 3000).catch(() => null),
-        getDocs(collection(db, 'vendors')).catch(() => null),
-        getDocs(collection(db, 'stores')).catch(() => null)
+        rtdbGet<Record<string, any>>('deleted_vendors', 3000).catch(() => null)
       ]);
 
       const safeStores: Record<string, any> = storesSnap && typeof storesSnap === 'object' && !('error' in storesSnap) ? { ...storesSnap } : {};
       const safeVendors: Record<string, any> = vendorsSnap && typeof vendorsSnap === 'object' && !('error' in vendorsSnap) ? { ...vendorsSnap } : {};
       const safeProfiles: Record<string, any> = profilesSnap && typeof profilesSnap === 'object' && !('error' in profilesSnap) ? { ...profilesSnap } : {};
       const safeDeleted: Record<string, any> = deletedSnap && typeof deletedSnap === 'object' && !('error' in deletedSnap) ? { ...deletedSnap } : {};
-
-      // Merge Cloud Firestore registered vendors
-      if (fsVendorsSnap && !fsVendorsSnap.empty) {
-        fsVendorsSnap.forEach(docSnap => {
-          const vData = docSnap.data();
-          if (vData && docSnap.id) {
-            const rawStatus = (vData.status || 'active').toLowerCase();
-            if (rawStatus !== 'deleted' && rawStatus !== 'rejected') {
-              safeVendors[docSnap.id] = {
-                id: docSnap.id,
-                vendorId: docSnap.id,
-                status: rawStatus,
-                ...vData,
-                ...(safeVendors[docSnap.id] || {})
-              };
-            }
-          }
-        });
-      }
-
-      // Merge Cloud Firestore registered stores
-      if (fsStoresSnap && !fsStoresSnap.empty) {
-        fsStoresSnap.forEach(docSnap => {
-          const sData = docSnap.data();
-          if (sData && docSnap.id) {
-            const rawStatus = (sData.status || 'active').toLowerCase();
-            if (rawStatus !== 'deleted' && rawStatus !== 'rejected') {
-              safeStores[docSnap.id] = {
-                id: docSnap.id,
-                storeId: docSnap.id,
-                status: rawStatus,
-                ...sData,
-                ...(safeStores[docSnap.id] || {})
-              };
-            }
-          }
-        });
-      }
 
       const deletedIds = new Set<string>(
         Object.keys(safeDeleted).filter(k => k && k !== 'error' && !PROTECTED_ACTIVE_STORE_IDS.has(String(k).trim().toLowerCase()))
@@ -1340,8 +1308,22 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
           continue;
         }
 
-        const isActive = !status || status === 'active' || status === 'approved';
-        const hasName = vendorData.shopName || vendorData.storeName || storeData.shopName || storeData.storeName || profileData.shopName || profileData.storeName;
+        const isActive = !status || !['deleted', 'rejected', 'inactive', 'disabled', 'suspended'].includes(status);
+        const hasName =
+          vendorData.shopName ||
+          vendorData.storeName ||
+          vendorData.businessName ||
+          vendorData.vendorName ||
+          vendorData.name ||
+          storeData.shopName ||
+          storeData.storeName ||
+          storeData.businessName ||
+          storeData.vendorName ||
+          storeData.name ||
+          profileData.shopName ||
+          profileData.storeName ||
+          profileData.businessName ||
+          profileData.name;
 
         if (isActive && hasName && !vendorData.isDisabled && !storeData.isDisabled && !profileData.isDisabled) {
           const existing = storeMap.get(id);
@@ -1370,6 +1352,32 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
             storeMap.set(cachedStore.id, cachedStore);
           }
         });
+
+        // Also scan individual localStorage store cache entries as fallback
+        if (typeof window !== 'undefined') {
+          try {
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && key.startsWith('rj_store_cache_')) {
+                const raw = localStorage.getItem(key);
+                if (!raw) continue;
+                const parsed = JSON.parse(raw);
+                const sId = String(parsed?.id || parsed?.vendorId || parsed?.storeId || '').trim();
+                if (
+                  sId &&
+                  !parsed.isDemo &&
+                  !DEMO_STORE_IDS.has(sId) &&
+                  !isLegacyDemoStore(sId, parsed) &&
+                  !deletedIds.has(sId) &&
+                  !storeMap.has(sId) &&
+                  (parsed.shopName || parsed.storeName || parsed.name)
+                ) {
+                  storeMap.set(sId, parsed);
+                }
+              }
+            }
+          } catch (_) {}
+        }
       }
 
       const finalList = sortStoresByVerifiedFirst(

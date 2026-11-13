@@ -330,17 +330,17 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
         setProducts(prods);
         setProductsLoading(false);
       } else {
+        setProducts([]);
         setProductsLoading(true);
       }
+      setReviews([]);
       setReviewsLoading(true);
 
       let th = (location.state as any)?.initialTheme;
       if (!th) {
         th = getStoreThemeFromCache(vendorId) || store?.theme || null;
       }
-      if (th && (th.primaryColor || th.layout)) {
-        setTheme(th);
-      }
+      setTheme(th && (th.primaryColor || th.layout) ? th : null);
 
       const fol = (location.state as any)?.initialFollowing ?? getStoreFollowStatusFromCache(vendorId, currentUid);
       setIsFollowing(fol);
@@ -362,12 +362,16 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
 
     let isMounted = true;
     const fetchStoreData = async () => {
-      // 1. Maintain accurate loading states
-      if (products.length === 0) {
+      // 1. Maintain accurate loading states from current store cache
+      const currentCachedProds = getStoreProductsFromCache(vendorId);
+      if (currentCachedProds.length === 0) {
         setProductsLoading(true);
+      } else {
+        setProducts(currentCachedProds);
+        setProductsLoading(false);
       }
       setReviewsLoading(true);
-      if (!initialCached && products.length === 0) {
+      if (!initialCached && currentCachedProds.length === 0) {
         setLoading(true);
       }
 
@@ -375,8 +379,10 @@ export default function VendorStore({ propVendorId }: { propVendorId?: string })
       const loadStoreProducts = async (targetVendorId: string) => {
         try {
           const freshProds = await fetchStoreProductsFromRTDB(targetVendorId);
-          if (isMounted && Array.isArray(freshProds) && freshProds.length > 0) {
-            setProducts(freshProds);
+          if (isMounted && Array.isArray(freshProds)) {
+            if (freshProds.length > 0 || currentCachedProds.length === 0) {
+              setProducts(freshProds);
+            }
             setProductsLoading(false);
             return freshProds;
           }
