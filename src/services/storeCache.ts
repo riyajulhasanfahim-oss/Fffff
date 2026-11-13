@@ -5,6 +5,12 @@ import { db } from '../lib/firebase';
 import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { getVendorRealFollowersCount } from './vendorFollowerService';
 import { slugifyVendorName } from '../utils/subdomain';
+import {
+  DEMO_STORES,
+  DEMO_STORE_IDS,
+  LEGACY_DEMO_STORE_IDS,
+  isLegacyDemoStore
+} from '../data/demoStores';
 
 export interface CachedStore {
   id: string;
@@ -38,31 +44,28 @@ export interface CachedStore {
   [key: string]: any;
 }
 
-// Built-in official stores fallback catalog (Demo stores removed)
-const SEED_OFFICIAL_STORES: CachedStore[] = [];
+// Built-in official demo stores catalog (strictly 100 unique demo stores)
+const SEED_OFFICIAL_STORES: CachedStore[] = DEMO_STORES;
 
-// Clean legacy demo stores and verified badges from localStorage on init
+// Clean all legacy/old demo stores from localStorage on init while keeping real stores untouched
 if (typeof window !== "undefined") {
   try {
-    const demoStoreIds = new Set([
-      "vendor-tech-pro",
-      "vendor-apple-zone",
-      "vendor-nike-hub",
-      "vendor-leather-lux",
-      "vendor-home-comfort",
-      "vendor-grocery-fresh"
-    ]);
     const storedList = localStorage.getItem("rj_official_stores_list");
     if (storedList) {
       const parsed = JSON.parse(storedList);
       if (Array.isArray(parsed)) {
-        const cleaned = parsed.filter((s: any) => !demoStoreIds.has(s?.id) && !demoStoreIds.has(s?.vendorId));
+        const cleaned = parsed.filter((s: any) => {
+          const sId = String(s?.id || s?.vendorId || s?.storeId || '').trim();
+          return !isLegacyDemoStore(sId, s);
+        });
         localStorage.setItem("rj_official_stores_list", JSON.stringify(cleaned));
       }
     }
-    demoStoreIds.forEach(id => {
+    LEGACY_DEMO_STORE_IDS.forEach(id => {
       localStorage.removeItem("rj_store_cache_" + id);
       localStorage.removeItem("rj_store_prods_" + id);
+      localStorage.removeItem("rj_store_products_" + id);
+      localStorage.removeItem("rj_store_theme_" + id);
     });
   } catch (_) {}
 }
@@ -80,16 +83,8 @@ export function isStorePlanVerified(store: any): boolean {
 
   const storeId = String(store.id || store.vendorId || store.storeId || store.userId || '').trim();
 
-  // Known demo stores
-  const demoStoreIds = [
-    'vendor-tech-pro',
-    'vendor-apple-zone',
-    'vendor-nike-hub',
-    'vendor-leather-lux',
-    'vendor-home-comfort',
-    'vendor-grocery-fresh'
-  ];
-  const isDemo = demoStoreIds.includes(storeId);
+  // Known demo stores (legacy or current 100 demo stores)
+  const isDemo = Boolean(store.isDemo) || DEMO_STORE_IDS.has(storeId) || isLegacyDemoStore(storeId, store);
 
   // Check verification status across multiple field variations
   const vStatus = String(store.verificationStatus || store.vendorData?.verificationStatus || store.status || '').toLowerCase().trim();
@@ -176,6 +171,9 @@ const inMemoryStoreCache = new Map<string, CachedStore>();
 // Seed cache on module load
 SEED_OFFICIAL_STORES.forEach(store => {
   inMemoryStoreCache.set(store.id, store);
+  if (store.shopSlug) {
+    inMemoryStoreCache.set(String(store.shopSlug).toLowerCase(), store);
+  }
 });
 
 /**
@@ -230,7 +228,17 @@ export function mergeStoreObjects(existing: any, incoming: any): CachedStore {
  */
 export function getKnownSeedStore(id: string): CachedStore | null {
   if (!id) return null;
-  const found = SEED_OFFICIAL_STORES.find(s => s.id === id || s.vendorId === id);
+  const lower = String(id).trim().toLowerCase();
+  const found = SEED_OFFICIAL_STORES.find(s =>
+    s.id === id ||
+    s.vendorId === id ||
+    s.id.toLowerCase() === lower ||
+    String(s.vendorId || '').toLowerCase() === lower ||
+    String(s.storeId || '').toLowerCase() === lower ||
+    String(s.shopSlug || '').toLowerCase() === lower ||
+    String(s.storeSlug || '').toLowerCase() === lower ||
+    slugifyVendorName(s.shopName || s.storeName || s.name || '') === lower
+  );
   if (found) return found;
 
   const seedVendor = INITIAL_VENDORS.find(v => v.id === id);
@@ -455,8 +463,8 @@ export function getStoreFromCache(storeId: string): CachedStore | null {
   const cleanId = String(storeId).trim();
   const lowerId = cleanId.toLowerCase();
 
-  // If store was deleted, refuse to return cached data
-  if (isStoreDeletedFromCache(cleanId)) {
+  // If store is a deleted or legacy demo store, refuse to return cached data
+  if (isStoreDeletedFromCache(cleanId) || isLegacyDemoStore(cleanId)) {
     return null;
   }
 
@@ -1021,32 +1029,48 @@ export function saveStoreFollowStatusToCache(storeId: string, userId: string | u
  * Returns either cached official stores or initial seed stores with complete logos & names
  */
 export function getOfficialStoresFromCache(): CachedStore[] {
-  // Check in-memory cache
+  const storeMap = new Map<string, CachedStore>();
+
+  // Always seed the exact 100 demo stores (unless explicitly deleted)
+  SEED_OFFICIAL_STORES.forEach(store => {
+    if (!isStoreDeletedFromCache(store.id)) {
+      storeMap.set(store.id, store);
+      inMemoryStoreCache.set(store.id, store);
+    }
+  });
+
+  // Merge all real/actual cached stores from localStorage (excluding legacy demo stores)
   if (typeof window !== 'undefined') {
     try {
       const stored = localStorage.getItem('rj_official_stores_list');
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const validStores = parsed.filter((s: any) =>
-            s &&
-            !isStoreDeletedFromCache(s.id) &&
-            !isStoreDeletedFromCache(s.vendorId) &&
-            !isStoreDeletedFromCache(s.storeId) &&
-            !isStoreDeletedFromCache(s.userId) &&
-            s.status !== 'deleted' &&
-            s.status !== 'rejected'
-          );
-          validStores.forEach((s: any) => {
-            if (s.id) inMemoryStoreCache.set(s.id, s);
+          parsed.forEach((s: any) => {
+            if (!s) return;
+            const sId = String(s.id || s.vendorId || s.storeId || '').trim();
+            if (!sId || isLegacyDemoStore(sId, s)) return;
+            if (
+              isStoreDeletedFromCache(s.id) ||
+              isStoreDeletedFromCache(s.vendorId) ||
+              isStoreDeletedFromCache(s.storeId) ||
+              isStoreDeletedFromCache(s.userId) ||
+              s.status === 'deleted' ||
+              s.status === 'rejected'
+            ) {
+              return;
+            }
+            if (!DEMO_STORE_IDS.has(sId)) {
+              inMemoryStoreCache.set(sId, s);
+              storeMap.set(sId, s);
+            }
           });
-          return sortStoresByVerifiedFirst(validStores);
         }
       }
     } catch (_) {}
   }
 
-  return sortStoresByVerifiedFirst(SEED_OFFICIAL_STORES.filter(s => !isStoreDeletedFromCache(s.id)));
+  return sortStoresByVerifiedFirst(Array.from(storeMap.values()));
 }
 
 /**
@@ -1057,13 +1081,13 @@ export function saveOfficialStoresToCache(stores: CachedStore[]): void {
 
   const sorted = sortStoresByVerifiedFirst(stores);
 
-  // Directly update in-memory cache and individual items without triggering recursion
+  // Directly update in-memory cache and persist individual non-demo stores without duplicating static demo entries
   sorted.forEach(s => {
     if (s.id) {
       inMemoryStoreCache.set(s.id, s);
       if (s.vendorId) inMemoryStoreCache.set(s.vendorId, s);
       if (s.storeId) inMemoryStoreCache.set(s.storeId, s);
-      if (typeof window !== 'undefined') {
+      if (typeof window !== 'undefined' && !s.isDemo && !DEMO_STORE_IDS.has(s.id)) {
         try {
           localStorage.setItem(`rj_store_cache_${s.id}`, JSON.stringify(s));
         } catch (_) {}
@@ -1224,6 +1248,16 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
         const storeData = safeStores[id] || {};
         const profileData = safeProfiles[id] || {};
 
+        // Exclude any legacy or external demo stores from Firebase/RTDB
+        if (
+          isLegacyDemoStore(id, vendorData) ||
+          isLegacyDemoStore(id, storeData) ||
+          isLegacyDemoStore(id, profileData)
+        ) {
+          removeStoreFromCache(id);
+          continue;
+        }
+
         const linkedIds = [
           id,
           vendorData.userId,
@@ -1275,9 +1309,26 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
         }
       }
 
+      // Preserve cached real stores if remote endpoints returned nothing (e.g. offline/quota error)
+      if (allIds.size === 0) {
+        getOfficialStoresFromCache().forEach(cachedStore => {
+          if (
+            cachedStore?.id &&
+            !cachedStore.isDemo &&
+            !DEMO_STORE_IDS.has(cachedStore.id) &&
+            !isLegacyDemoStore(cachedStore.id, cachedStore) &&
+            !deletedIds.has(cachedStore.id) &&
+            !storeMap.has(cachedStore.id)
+          ) {
+            storeMap.set(cachedStore.id, cachedStore);
+          }
+        });
+      }
+
       const finalList = sortStoresByVerifiedFirst(
         Array.from(storeMap.values()).filter(s => 
           s &&
+          !isLegacyDemoStore(s.id, s) &&
           !deletedIds.has(s.id) && 
           !deletedIds.has(s.vendorId || '') &&
           !deletedIds.has(s.storeId || '') &&
@@ -1311,9 +1362,15 @@ export async function fetchOfficialStoresFromRTDB(forceRefresh = false): Promise
 export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedStore> {
   const cleanTarget = String(storeId).trim().toLowerCase();
 
-  // If already flagged deleted in cache, return deleted immediately
-  if (isStoreDeletedFromCache(storeId)) {
+  // If already flagged deleted or legacy demo store, return deleted immediately
+  if (isStoreDeletedFromCache(storeId) || isLegacyDemoStore(cleanTarget)) {
     return { id: storeId, isDeleted: true, status: 'deleted', shopName: 'Deleted Store' };
+  }
+
+  // Fast-path for the 100 built-in demo stores so navigation to /store/{slug} is instant
+  const immediateSeed = getKnownSeedStore(cleanTarget);
+  if (immediateSeed && immediateSeed.isDemo && !isStoreDeletedFromCache(immediateSeed.id)) {
+    return immediateSeed;
   }
 
   try {
@@ -1524,6 +1581,10 @@ export async function fetchStoreDetailFromRTDB(storeId: string): Promise<CachedS
         ...(resolvedVendor || {}),
         ...(resolvedProfile || {})
       });
+      if (isLegacyDemoStore(actualVendorId, merged)) {
+        removeStoreFromCache(storeId);
+        return { id: storeId, isDeleted: true, status: 'deleted', shopName: 'Deleted Store' };
+      }
       merged.id = actualVendorId;
       merged.vendorId = actualVendorId;
 

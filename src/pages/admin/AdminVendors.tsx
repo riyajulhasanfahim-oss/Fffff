@@ -6,6 +6,7 @@ import { Search, Filter, Eye, CheckCircle, XCircle, Store, Box, DollarSign, Acti
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import { isStorePlanVerified, saveStoreToCache, removeStoreFromCache, fetchOfficialStoresFromRTDB } from '../../services/storeCache';
+import { isLegacyDemoStore } from '../../data/demoStores';
 import { 
   getVerifiedBadgeSettings, 
   calculateBadgeExpiry, 
@@ -83,6 +84,7 @@ export default function AdminVendors() {
           const id = docSnap.id;
           const data = docSnap.data();
           if (!id || !data) return;
+          if (isLegacyDemoStore(id, data)) return;
           const rawStatus = (data.status || 'active').toLowerCase();
           const isDisabled = Boolean(data.isDisabled || rawStatus === 'disabled');
           vendorMap.set(id, {
@@ -117,6 +119,12 @@ export default function AdminVendors() {
       const allStoresAndVendors = [...rtdbStores, ...rtdbVendors];
       allStoresAndVendors.forEach(({ id, data }) => {
         if (!id || !data) return;
+        if (isLegacyDemoStore(id, data)) {
+          rtdbRemove(`stores/${id}`).catch(() => {});
+          rtdbRemove(`vendors/${id}`).catch(() => {});
+          rtdbRemove(`vendor_profiles/${id}`).catch(() => {});
+          return;
+        }
         const existing = vendorMap.get(id);
         const mergedData = { ...(existing?.vendorData || {}), ...data };
         const rawStatus = (mergedData.status || data.status || existing?.status || 'pending').toLowerCase();
