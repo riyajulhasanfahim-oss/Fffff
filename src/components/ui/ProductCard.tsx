@@ -48,6 +48,8 @@ export interface Product {
   updatedAt?: number;
   slug?: string;
   regularPrice?: number;
+  isDemo?: boolean;
+  isSampleData?: boolean;
   boosted?: boolean;
   boostExpiresAt?: number | null;
   flashSale?: {
@@ -355,7 +357,7 @@ export default function ProductCard({ product, showAddToCart = false, badgeText 
               <span className="opacity-0 select-none">0 {language === 'bn' ? 'বিক্রি' : 'sold'}</span>
             ) : (
               soldCount > 0 
-                ? `${soldCount} ${language === 'bn' ? 'বিক্রি' : 'sold'}` 
+                ? `${soldCount} ${language === 'bn' ? (product.isDemo || product.isSampleData ? 'বিক্রি (ডেমো)' : 'বিক্রি') : (product.isDemo || product.isSampleData ? 'sold (Demo)' : 'sold')}` 
                 : `0 ${language === 'bn' ? 'বিক্রি' : 'sold'}`
             )}
           </span>

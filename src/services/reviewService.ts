@@ -20,6 +20,7 @@ import {
   setDoc
 } from 'firebase/firestore';
 import { submitResellerProfitReview } from './resellerProfitReviewService';
+import { getDemoProductByIdOrSlug, getDemoSampleReviews } from '../data/demoProducts';
 
 export interface ProductReview {
   id?: string;
@@ -1329,6 +1330,15 @@ function resolveProductKeys(productId: string): Set<string> {
     }
   }
 
+  // Also resolve demo product ID/slug aliases
+  const demoProd = getDemoProductByIdOrSlug(raw);
+  if (demoProd) {
+    keys.add(demoProd.id);
+    keys.add(demoProd.id.toLowerCase());
+    keys.add(demoProd.slug);
+    keys.add(demoProd.slug.toLowerCase());
+  }
+
   return keys;
 }
 
@@ -1337,6 +1347,13 @@ function resolveProductKeys(productId: string): Set<string> {
  */
 export function getCachedProductReviews(productId: string): ProductReview[] {
   if (!productId) return [];
+
+  // Return sample reviews for Gadget Pulse demo products
+  const demoSample = getDemoSampleReviews(productId);
+  if (demoSample.length > 0) {
+    return [...demoSample];
+  }
+
   ensureGlobalReviewsListener();
 
   const validKeys = resolveProductKeys(productId);
@@ -1406,6 +1423,12 @@ export function subscribeToProductReviews(
  */
 export async function fetchProductReviews(productId: string): Promise<ProductReview[]> {
   if (!productId) return [];
+
+  const demoSample = getDemoSampleReviews(productId);
+  if (demoSample.length > 0) {
+    return [...demoSample];
+  }
+
   ensureGlobalReviewsListener();
 
   const validKeys = resolveProductKeys(productId);

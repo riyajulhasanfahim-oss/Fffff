@@ -4,6 +4,7 @@ import { enrichProductsWithRealMetrics, getCachedProductMetrics } from './produc
 import { isStoreDeletedFromCache } from './storeCache';
 import { formatDirectImageUrl } from '../utils/imageUrl';
 import { generateProductSlug } from '../utils/seo';
+import { GADGET_PULSE_DEMO_PRODUCTS, getDemoProductByIdOrSlug } from '../data/demoProducts';
 
 /**
  * Normalizes any raw product from RTDB into standard Product interface
@@ -98,6 +99,8 @@ export function normalizeProduct(raw: any, id?: string): Product {
     resellerProfit: raw.resellerProfit ? Number(raw.resellerProfit) : undefined,
     status: raw.status || 'Published',
     slug: raw.slug || prodId,
+    isDemo: !!raw.isDemo,
+    isSampleData: !!raw.isSampleData,
     createdAt: Number(raw.createdAt) || 0,
     updatedAt: Number(raw.updatedAt) || 0
   } as Product;
@@ -568,6 +571,19 @@ export function subscribeToMarketplaceProducts(
 export async function fetchProductById(identifier: string): Promise<Product | null> {
   if (!identifier) return null;
   const cleanId = String(identifier).trim().toLowerCase();
+
+  // 0. Resolve built-in Gadget Pulse demo store product by ID, slug, or generated slug
+  const directDemo =
+    getDemoProductByIdOrSlug(cleanId) ||
+    GADGET_PULSE_DEMO_PRODUCTS.find((p) => {
+      const pId = String(p.id).toLowerCase();
+      const pSlug = String(p.slug || '').toLowerCase();
+      const genSlug = generateProductSlug(p.name, p.id).toLowerCase();
+      return pId === cleanId || pSlug === cleanId || genSlug === cleanId;
+    });
+  if (directDemo) {
+    return directDemo as unknown as Product;
+  }
 
   // 1. Check in-memory marketplace cache
   if (globalMarketplaceProducts && globalMarketplaceProducts.length > 0) {

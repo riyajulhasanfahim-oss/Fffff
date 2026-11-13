@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { getProductPath } from '../../utils/seo';
 import { fetchAllMarketplaceProducts, subscribeToMarketplaceProducts, getCachedMarketplaceProducts } from '../../services/productService';
 import { formatDirectImageUrl, handleProductImageError, PLACEHOLDER_PRODUCT_IMAGE } from '../../utils/imageUrl';
+import { getDemoProductsByStore } from '../../data/demoProducts';
 
 export interface RelatedProductsSectionProps {
   currentProduct?: any;
@@ -36,6 +37,11 @@ export default function RelatedProductsSection({
     if (initialProducts && initialProducts.length > 0) {
       return initialProducts.filter(p => p.id !== activeId).slice(0, 18);
     }
+    const demoVendorKey = currentProduct?.vendorId || currentProduct?.storeId || '';
+    const demoStoreProds = demoVendorKey ? getDemoProductsByStore(demoVendorKey) : [];
+    if (demoStoreProds.length > 0) {
+      return (demoStoreProds as unknown as Product[]).filter(p => p.id !== activeId).slice(0, 18);
+    }
     const cached = getCachedMarketplaceProducts();
     return cached.filter(p => p.id !== activeId).slice(0, 18);
   });
@@ -45,10 +51,13 @@ export default function RelatedProductsSection({
     let isMounted = true;
 
     const processAndSetProducts = (allCatalog: Product[]) => {
-      if (!isMounted || !allCatalog || allCatalog.length === 0) return;
+      const demoVendorKey = currentProduct?.vendorId || currentProduct?.storeId || '';
+      const demoStoreProds = demoVendorKey ? (getDemoProductsByStore(demoVendorKey) as unknown as Product[]) : [];
+      const mergedCatalog = demoStoreProds.length > 0 ? demoStoreProds : allCatalog;
+      if (!isMounted || !mergedCatalog || mergedCatalog.length === 0) return;
 
       // Filter out current active product
-      const filteredCatalog = allCatalog.filter(p => {
+      const filteredCatalog = mergedCatalog.filter(p => {
         if (!p) return false;
         const pId = String(p.id || '').trim();
         if (activeId && (pId === String(activeId).trim() || pId === String(currentProduct?.id || '').trim())) {

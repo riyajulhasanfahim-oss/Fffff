@@ -1,6 +1,7 @@
 import { collection, getDocs, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { rtdbGet, rtdbSubscribe } from '../lib/rtdb';
+import { getDemoSampleMetrics } from '../data/demoProducts';
 
 export interface ProductMetrics {
   soldCount: number;
@@ -109,6 +110,8 @@ function persistMetricsToLocalStorage(): void {
  */
 export function getCachedProductMetrics(productId: string): ProductMetrics | null {
   if (!productId) return null;
+  const demoMetrics = getDemoSampleMetrics(productId);
+  if (demoMetrics) return demoMetrics;
   return inMemoryMetricsCache.get(productId) || null;
 }
 
@@ -423,6 +426,9 @@ export async function fetchProductMetricsFromRTDB(productId: string): Promise<Pr
     return { soldCount: 0, rating: 0, reviewsCount: 0 };
   }
 
+  const demoMetrics = getDemoSampleMetrics(productId);
+  if (demoMetrics) return demoMetrics;
+
   const cached = inMemoryMetricsCache.get(productId);
   if (cached) return cached;
 
@@ -441,6 +447,19 @@ export async function enrichProductsWithRealMetrics(products: any[]): Promise<an
 
     return products.map(product => {
       if (!product || typeof product !== 'object') return product;
+      const demoMetrics = getDemoSampleMetrics(product.id);
+      if (demoMetrics) {
+        return {
+          ...product,
+          soldCount: demoMetrics.soldCount,
+          salesCount: demoMetrics.soldCount,
+          totalSold: demoMetrics.soldCount,
+          reviews: demoMetrics.reviewsCount,
+          reviewsCount: demoMetrics.reviewsCount,
+          rating: demoMetrics.rating
+        };
+      }
+
       const pId = product.id;
       const rtdbMetric = metricsMap.get(pId) || (product.originalProductId ? metricsMap.get(product.originalProductId) : undefined);
 

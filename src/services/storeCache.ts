@@ -13,6 +13,7 @@ import {
   getDemoStoreByIdOrSlug,
   isLegacyDemoStore
 } from '../data/demoStores';
+import { getDemoProductsByStore } from '../data/demoProducts';
 
 export interface CachedStore {
   id: string;
@@ -640,7 +641,11 @@ export function saveStoreToCache(storeId: string, data: any): CachedStore {
  * Returns seed catalog products tailored to a store or vendor ID
  */
 export function getSeedProductsForStore(storeId: string): any[] {
-  return [];
+  const demoStore = getDemoStoreByIdOrSlug(storeId);
+  if (demoStore) {
+    return getDemoProductsByStore(demoStore.id);
+  }
+  return getDemoProductsByStore(storeId);
 }
 
 /**
@@ -651,6 +656,12 @@ export function getStoreProductsFromCache(storeId: string): any[] {
   if (!storeId) return [];
   const cleanId = String(storeId).trim();
   const lowerId = cleanId.toLowerCase();
+
+  // For demo stores with built-in demo products, always return authoritative demo seed list
+  const demoSeedProds = getSeedProductsForStore(cleanId);
+  if (demoSeedProds.length > 0) {
+    return demoSeedProds;
+  }
 
   // 1. Check in-memory products map
   if (inMemoryStoreProductsCache.has(cleanId)) {
@@ -737,6 +748,16 @@ export async function fetchStoreProductsFromRTDB(storeId: string): Promise<any[]
   const cached = getStoreProductsFromCache(storeId);
   const cleanId = String(storeId).trim().toLowerCase();
   if (!cleanId) return [];
+
+  // Built-in demo store fast-path (prevents empty RTDB scans from overwriting seed products)
+  const demoSeed = getSeedProductsForStore(storeId);
+  if (demoSeed.length > 0) {
+    return demoSeed;
+  }
+  const matchedDemoStore = getDemoStoreByIdOrSlug(storeId);
+  if (matchedDemoStore?.isDemo) {
+    return [];
+  }
 
   try {
     // 1. Fetch products, vendors, stores, and vendor_products concurrently with timeout protection

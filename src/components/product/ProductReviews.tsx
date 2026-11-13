@@ -345,6 +345,13 @@ export default function ProductReviews({ productId }: { productId: string }) {
         )}
       </div>
 
+      {/* Demo / Sample Review Transparency Banner */}
+      {reviews.some((r) => r.isDemoSample) && (
+        <div className="px-2.5 py-1.5 rounded-lg bg-amber-50/90 border border-amber-200 text-[11px] text-amber-800 font-medium">
+          নমুনা / ডেমো রিভিউ তথ্য (Sample Demo Data — প্রকৃত ক্রেতার রিভিউ নয়)
+        </div>
+      )}
+
       {/* Daraz Style Filter Pill (e.g. With images/videos) */}
       {reviewsWithMediaCount > 0 && (
         <div className="flex items-center gap-2 pt-0.5">
@@ -422,12 +429,16 @@ export default function ProductReviews({ productId }: { productId: string }) {
                       </span>
 
                       {/* Verified Order Badge (Requirement 4) */}
-                      {isVerified && (
+                      {isVerified ? (
                         <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 shrink-0">
                           <CheckCircle className="w-2.5 h-2.5 text-emerald-600" />
                           Verified • অর্ডার পেয়েছে
                         </span>
-                      )}
+                      ) : review.isDemoSample ? (
+                        <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 shrink-0">
+                          Demo / Sample Review
+                        </span>
+                      ) : null}
 
                       {review.createdAt && (
                         <span className="text-[10px] text-slate-400 shrink-0">
@@ -593,12 +604,16 @@ export default function ProductReviews({ productId }: { productId: string }) {
                       selectedReviewForDetails.verifiedPurchase ||
                       selectedReviewForDetails.isDelivered ||
                       selectedReviewForDetails.orderId
-                    ) && (
+                    ) ? (
                       <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
                         <CheckCircle className="w-2.5 h-2.5 text-emerald-600" />
                         Verified • অর্ডার পেয়েছে
                       </span>
-                    )}
+                    ) : selectedReviewForDetails.isDemoSample ? (
+                      <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                        Demo / Sample Review
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="flex items-center gap-2 mt-0.5">

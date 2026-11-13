@@ -899,6 +899,11 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
                 >
                   {actualRating.toFixed(1)} ({actualReviewsCount} {actualReviewsCount === 1 ? 'Review' : 'Reviews'})
                 </button>
+                {((product as any).isDemo || (product as any).isSampleData) && (
+                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+                    Sample Demo
+                  </span>
+                )}
               </>
             ) : (
               <div className="flex items-center gap-1 text-slate-400">
@@ -913,7 +918,11 @@ export default function ProductInfo({ product, onVariantImageChange }: ProductIn
           {/* Sold Count based on RTDB actual order/sales data */}
           <div className="flex items-center gap-1 text-slate-700">
             <span className="font-bold text-slate-900">{actualSoldCount}</span>
-            <span>বিক্রি হয়েছে</span>
+            <span>
+              {(product as any).isDemo || (product as any).isSampleData
+                ? 'বিক্রি হয়েছে (ডেমো নমুনা)'
+                : 'বিক্রি হয়েছে'}
+            </span>
           </div>
 
           {/* Product Weight - ONLY if Vendor gave weight */}

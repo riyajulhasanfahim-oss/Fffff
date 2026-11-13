@@ -383,10 +383,17 @@ export default function ProductReviewsPage() {
                   </div>
                   <p className="text-xs font-semibold text-slate-500">
                     Based on {reviews.length} {reviews.length === 1 ? 'review' : 'reviews'}
+                    {reviews.some((r) => r.isDemoSample) ? ' (Sample / Demo Data)' : ''}
                   </p>
                 </div>
               </div>
             </div>
+
+            {reviews.some((r) => r.isDemoSample) && (
+              <div className="mt-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 font-medium">
+                ডেমো প্রোডাক্টের নমুনা রিভিউ তথ্য (Sample / Demo Reviews — প্রকৃত ক্রেতার রিভিউ নয়)
+              </div>
+            )}
 
             {/* Filter Pills */}
             {reviews.length > 0 && (
@@ -450,11 +457,15 @@ export default function ProductReviewsPage() {
                           <h5 className="font-bold text-slate-800 text-xs sm:text-sm truncate">
                             {review.reviewerName || 'Customer'}
                           </h5>
-                          {review.verifiedPurchase && (
+                          {review.verifiedPurchase ? (
                             <span className="inline-flex items-center gap-1 text-[10px] bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide border border-green-200">
                               <CheckCircle className="w-3 h-3 text-emerald-600" /> Verified • অর্ডার পেয়েছে
                             </span>
-                          )}
+                          ) : review.isDemoSample ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-800 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide border border-amber-200">
+                              Demo / Sample Review
+                            </span>
+                          ) : null}
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
                           <div className="flex text-yellow-400">

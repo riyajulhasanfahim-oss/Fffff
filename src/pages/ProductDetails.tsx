@@ -278,6 +278,8 @@ export default function ProductDetails() {
           ageGroup: rawProd.ageGroup || undefined,
           babyAge: rawProd.babyAge || undefined,
           targetAge: rawProd.targetAge || undefined,
+          isDemo: !!rawProd.isDemo,
+          isSampleData: !!rawProd.isSampleData,
         };
 
         if (isMounted) {
