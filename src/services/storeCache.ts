@@ -8,7 +8,9 @@ import { slugifyVendorName } from '../utils/subdomain';
 import {
   DEMO_STORES,
   DEMO_STORE_IDS,
+  DEMO_VERIFIED_STORE_IDS,
   LEGACY_DEMO_STORE_IDS,
+  getDemoStoreByIdOrSlug,
   isLegacyDemoStore
 } from '../data/demoStores';
 
@@ -83,6 +85,17 @@ export function isStorePlanVerified(store: any): boolean {
 
   const storeId = String(store.id || store.vendorId || store.storeId || store.userId || '').trim();
 
+  // Check if this is one of the 100 built-in demo stores (90 verified, 10 unverified)
+  const demoMatch =
+    getDemoStoreByIdOrSlug(storeId) ||
+    (store.vendorId ? getDemoStoreByIdOrSlug(String(store.vendorId)) : null) ||
+    (store.shopSlug ? getDemoStoreByIdOrSlug(String(store.shopSlug)) : null) ||
+    (store.storeSlug ? getDemoStoreByIdOrSlug(String(store.storeSlug)) : null);
+
+  if (demoMatch) {
+    return DEMO_VERIFIED_STORE_IDS.has(demoMatch.id);
+  }
+
   // Known demo stores (legacy or current 100 demo stores)
   const isDemo = Boolean(store.isDemo) || DEMO_STORE_IDS.has(storeId) || isLegacyDemoStore(storeId, store);
 
@@ -132,10 +145,15 @@ export function isStorePlanVerified(store: any): boolean {
   return true;
 }
 
+function isDemoStoreEntry(store: any): boolean {
+  if (!store || typeof store !== 'object') return false;
+  const sId = String(store.id || store.vendorId || store.storeId || '').trim();
+  return Boolean(store.isDemo) || DEMO_STORE_IDS.has(sId) || Boolean(getDemoStoreByIdOrSlug(sId));
+}
+
 /**
- * Sorts any list of stores so that stores with active verified badges
- * ALWAYS appear at the very front everywhere (ahead of all unverified/normal stores).
- * Normal stores remain strictly behind them.
+ * Sorts any list of stores so that ALL verified stores ALWAYS appear before non-verified stores,
+ * regardless of whether they are real stores or demo stores (with real stores kept ahead of demo stores within each group).
  */
 export function sortStoresByVerifiedFirst<T extends any>(stores: T[]): T[] {
   if (!Array.isArray(stores) || stores.length <= 1) return Array.isArray(stores) ? [...stores] : [];
@@ -144,8 +162,16 @@ export function sortStoresByVerifiedFirst<T extends any>(stores: T[]): T[] {
     const aVerified = isStorePlanVerified(a);
     const bVerified = isStorePlanVerified(b);
 
+    // Strictly keep all Verified stores ahead of all Non-Verified stores (real or demo)
     if (aVerified && !bVerified) return -1;
     if (!aVerified && bVerified) return 1;
+
+    const aDemo = isDemoStoreEntry(a);
+    const bDemo = isDemoStoreEntry(b);
+
+    // Within the same verification status, keep real stores ahead of demo stores
+    if (!aDemo && bDemo) return -1;
+    if (aDemo && !bDemo) return 1;
 
     // Secondary priority: follower count
     const aFollowers = Number((a as any)?.followersCount || (a as any)?.followers || 0);

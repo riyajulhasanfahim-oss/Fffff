@@ -18,9 +18,9 @@ export interface DemoStoreDefinition {
     primaryColor: string;
   };
   status: 'active';
-  verified: false;
-  isVerified: false;
-  verificationStatus: 'unverified';
+  verified: boolean;
+  isVerified: boolean;
+  verificationStatus: 'verified' | 'unverified';
   followersCount: number;
   followers: number;
   rating: number;
@@ -311,12 +311,30 @@ function buildLogoSvgDataUri(
 
 const BASE_CREATED_AT = 1735689600000;
 
+// 100 varied, distinct follower counts strictly between 1,000 and 50,000
+const DEMO_FOLLOWER_COUNTS: readonly number[] = [
+  12000, 8000, 5000, 2000, 18400, 31200, 6450, 42900, 15300, 27600,
+  9750, 38100, 4200, 21900, 14600, 47200, 3300, 25400, 11200, 35800,
+  7100, 44500, 16800, 29100, 1950, 49200, 13400, 23700, 5600, 39600,
+  10500, 28300, 4850, 46100, 17900, 33400, 2650, 41200, 14100, 24800,
+  8900, 36900, 1600, 48300, 19600, 30500, 6100, 43700, 12700, 26900,
+  7450, 34100, 3850, 45600, 15900, 22400, 9150, 37500, 1350, 49600,
+  11800, 29800, 5250, 40400, 16200, 32600, 2300, 44100, 13900, 25100,
+  8350, 35200, 4550, 46800, 18900, 31800, 6800, 42300, 14900, 27100,
+  9400, 38800, 3050, 47700, 17200, 28600, 7800, 41700, 10900, 21300,
+  1150, 3450, 7600, 11400, 16500, 20800, 26100, 32900, 39100, 45200
+];
+
+export const DEMO_VERIFIED_COUNT = 90;
+
 export const DEMO_STORES: DemoStoreDefinition[] = RAW_DEMO_STORES.map((seed, index) => {
   const num = String(index + 1).padStart(3, '0');
   const id = `demo-store-${num}`;
   const slug = slugifyVendorName(seed.shopName) || id;
   const palette = buildUniquePalette(index);
   const logoUri = buildLogoSvgDataUri(index, seed.shopName, seed.monogram, palette);
+  const isVerified = index < DEMO_VERIFIED_COUNT;
+  const followerCount = DEMO_FOLLOWER_COUNTS[index];
 
   return {
     id,
@@ -336,11 +354,11 @@ export const DEMO_STORES: DemoStoreDefinition[] = RAW_DEMO_STORES.map((seed, ind
       primaryColor: palette.bg1
     },
     status: 'active',
-    verified: false,
-    isVerified: false,
-    verificationStatus: 'unverified',
-    followersCount: 0,
-    followers: 0,
+    verified: isVerified,
+    isVerified,
+    verificationStatus: isVerified ? 'verified' : 'unverified',
+    followersCount: followerCount,
+    followers: followerCount,
     rating: 0,
     reviewsCount: 0,
     isDemo: true,
@@ -349,6 +367,21 @@ export const DEMO_STORES: DemoStoreDefinition[] = RAW_DEMO_STORES.map((seed, ind
 });
 
 export const DEMO_STORE_IDS = new Set<string>(DEMO_STORES.map((s) => s.id));
+export const DEMO_VERIFIED_STORE_IDS = new Set<string>(
+  DEMO_STORES.filter((s) => s.isVerified).map((s) => s.id)
+);
+
+const DEMO_STORE_BY_KEY = new Map<string, DemoStoreDefinition>();
+DEMO_STORES.forEach((store) => {
+  DEMO_STORE_BY_KEY.set(store.id.toLowerCase(), store);
+  DEMO_STORE_BY_KEY.set(store.shopSlug.toLowerCase(), store);
+  DEMO_STORE_BY_KEY.set(store.shopName.toLowerCase(), store);
+});
+
+export function getDemoStoreByIdOrSlug(key?: string | null): DemoStoreDefinition | null {
+  if (!key) return null;
+  return DEMO_STORE_BY_KEY.get(String(key).trim().toLowerCase()) || null;
+}
 
 export const LEGACY_DEMO_STORE_IDS = new Set<string>([
   'vendor-tech-pro',

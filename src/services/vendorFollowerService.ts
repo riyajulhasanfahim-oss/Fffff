@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { rtdbGet, rtdbSet, rtdbRemove, rtdbUpdate } from '../lib/rtdb';
+import { getDemoStoreByIdOrSlug } from '../data/demoStores';
 
 // In-memory follower count cache keyed by vendorId
 const followersCountCache = new Map<string, number>();
@@ -94,6 +95,17 @@ export async function getVendorRealFollowersCount(vendorIdInput: string): Promis
   const vendorId = cleanVendorId(vendorIdInput);
   if (!vendorId) return 0;
 
+  const demoStore = getDemoStoreByIdOrSlug(vendorId);
+  if (demoStore) {
+    const demoCount =
+      followersCountCache.get(demoStore.id) ??
+      followersCountCache.get(vendorId) ??
+      demoStore.followersCount;
+    followersCountCache.set(demoStore.id, demoCount);
+    followersCountCache.set(vendorId, demoCount);
+    return demoCount;
+  }
+
   // 1. If recently mutated locally, return optimistic cached count to prevent stale overwrite
   const lastMutation = lastFollowMutationTime.get(vendorId) || 0;
   if (Date.now() - lastMutation < 4000 && followersCountCache.has(vendorId)) {
@@ -151,7 +163,14 @@ export async function getVendorRealFollowersCount(vendorIdInput: string): Promis
 export function getCachedVendorFollowersCount(vendorIdInput: string): number {
   const vendorId = cleanVendorId(vendorIdInput);
   if (!vendorId) return 0;
-  return followersCountCache.get(vendorId) ?? 0;
+  if (followersCountCache.has(vendorId)) {
+    return followersCountCache.get(vendorId)!;
+  }
+  const demoStore = getDemoStoreByIdOrSlug(vendorId);
+  if (demoStore) {
+    return followersCountCache.get(demoStore.id) ?? demoStore.followersCount;
+  }
+  return 0;
 }
 
 /**
@@ -228,6 +247,39 @@ export function subscribeVendorFollowersCount(
   if (!vendorId) {
     onCountChange(0);
     return () => {};
+  }
+
+  const demoStore = getDemoStoreByIdOrSlug(vendorId);
+  if (demoStore) {
+    const demoCount =
+      followersCountCache.get(demoStore.id) ??
+      followersCountCache.get(vendorId) ??
+      demoStore.followersCount;
+    followersCountCache.set(demoStore.id, demoCount);
+    followersCountCache.set(vendorId, demoCount);
+    onCountChange(demoCount);
+
+    const handleDemoEvent = (e: any) => {
+      const eventVendorId = cleanVendorId(e.detail?.vendorId);
+      if (
+        (eventVendorId === demoStore.id ||
+          eventVendorId === demoStore.shopSlug ||
+          eventVendorId === vendorId) &&
+        typeof e.detail?.count === 'number'
+      ) {
+        followersCountCache.set(demoStore.id, e.detail.count);
+        followersCountCache.set(vendorId, e.detail.count);
+        onCountChange(e.detail.count);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('vendor_followers_updated', handleDemoEvent);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('vendor_followers_updated', handleDemoEvent);
+      }
+    };
   }
 
   // 1. Initial cached value for instant render
@@ -464,15 +516,21 @@ export async function toggleFollowVendor(
   try { localStorage.setItem(`rj_follow_${docId}`, String(willFollow)); } catch (_) {}
 
   // Calculate new count
+  const demoStore = getDemoStoreByIdOrSlug(vendorId);
   let newCount: number;
   if (typeof storeMetadata?.currentCount === 'number') {
     newCount = storeMetadata.currentCount;
   } else {
-    const current = followersCountCache.get(vendorId) ?? 0;
+    const current =
+      followersCountCache.get(vendorId) ??
+      (demoStore ? (followersCountCache.get(demoStore.id) ?? demoStore.followersCount) : 0);
     newCount = willFollow ? current + 1 : Math.max(0, current - 1);
   }
 
   followersCountCache.set(vendorId, newCount);
+  if (demoStore) {
+    followersCountCache.set(demoStore.id, newCount);
+  }
 
   // Dispatch intra-window events for 0ms instantaneous UI synchronization
   if (typeof window !== 'undefined') {
@@ -482,6 +540,10 @@ export async function toggleFollowVendor(
     window.dispatchEvent(new CustomEvent('user_follow_updated', {
       detail: { docId, isFollowing: willFollow }
     }));
+  }
+
+  if (demoStore) {
+    return { isFollowing: willFollow, followersCount: newCount };
   }
 
   // Mutex lock to prevent duplicate concurrent writes
